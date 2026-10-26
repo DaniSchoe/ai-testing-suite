@@ -51,6 +51,42 @@ async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc }
   }
 }
 
+// Endpoints und Modelle mit Teams, Maintainer und Sichtbarkeit für den anfragenden User.
+export async function catalog(user) {
+  const [endpoints, models, endpointTeams, modelTeams, users] = await Promise.all([
+    many(`${ENDPOINT_SELECT} order by e.kind, e.name`),
+    many('select * from endpoint_models order by coalesce(alias, name)'),
+    many('select * from endpoint_teams'),
+    many('select * from model_teams'),
+    many('select id, coalesce(display_name, username) as name from users'),
+  ]);
+  const userName = new Map(users.map((u) => [u.id, u.name]));
+  const manager = user.is_admin || hasPermission(user, 'endpoints.manage');
+  const out = [];
+  for (const e of endpoints) {
+    const teamIds = endpointTeams.filter((t) => t.endpoint_id === e.id).map((t) => t.team_id);
+    if (!canSeePublished(user, { ...e, teamIds })) continue;
+    const { api_key_enc, headers, ...rest } = e;
+    const own = models
+      .filter((m) => m.endpoint_id === e.id)
+      .map((m) => {
+        const mTeamIds = modelTeams.filter((t) => t.endpoint_id === e.id && t.model_name === m.name).map((t) => t.team_id);
+        return { ...m, teamIds: mTeamIds, maintainer_name: userName.get(m.maintainer_id) ?? null, can_edit: manager || m.maintainer_id === user.id };
+      })
+      .filter((m) => canSeePublished(user, m) || manager);
+    out.push({
+      ...rest,
+      ...(manager ? { headers } : {}),
+      has_api_key: Boolean(api_key_enc),
+      teamIds,
+      maintainer_name: userName.get(e.maintainer_id) ?? null,
+      models: own,
+    });
+  }
+  return out;
+}
+
+
 export default async function adminRoutes(app) {
   const viewer = { preHandler: requirePermission('suite.view') };
   const endpointAdmin = { preHandler: requirePermission('endpoints.manage') };
@@ -84,41 +120,6 @@ export default async function adminRoutes(app) {
 
   async function loadEndpoint(id) {
     return one(`${ENDPOINT_SELECT} where e.id = $1`, [id]);
-  }
-
-  // Endpoints und Modelle mit Teams, Maintainer und Sichtbarkeit für den anfragenden User.
-  async function catalog(user) {
-    const [endpoints, models, endpointTeams, modelTeams, users] = await Promise.all([
-      many(`${ENDPOINT_SELECT} order by e.kind, e.name`),
-      many('select * from endpoint_models order by coalesce(alias, name)'),
-      many('select * from endpoint_teams'),
-      many('select * from model_teams'),
-      many('select id, coalesce(display_name, username) as name from users'),
-    ]);
-    const userName = new Map(users.map((u) => [u.id, u.name]));
-    const manager = user.is_admin || canManage(user);
-    const out = [];
-    for (const e of endpoints) {
-      const teamIds = endpointTeams.filter((t) => t.endpoint_id === e.id).map((t) => t.team_id);
-      if (!canSeePublished(user, { ...e, teamIds })) continue;
-      const { api_key_enc, headers, ...rest } = e;
-      const own = models
-        .filter((m) => m.endpoint_id === e.id)
-        .map((m) => {
-          const mTeamIds = modelTeams.filter((t) => t.endpoint_id === e.id && t.model_name === m.name).map((t) => t.team_id);
-          return { ...m, teamIds: mTeamIds, maintainer_name: userName.get(m.maintainer_id) ?? null, can_edit: manager || m.maintainer_id === user.id };
-        })
-        .filter((m) => canSeePublished(user, m) || manager);
-      out.push({
-        ...rest,
-        ...(manager ? { headers } : {}),
-        has_api_key: Boolean(api_key_enc),
-        teamIds,
-        maintainer_name: userName.get(e.maintainer_id) ?? null,
-        models: own,
-      });
-    }
-    return out;
   }
 
   // --- Endpoints ---

@@ -1,15 +1,20 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Activity, AlertTriangle, Gauge, Percent, Play } from 'lucide-react';
-import { DailyBars, ProgressList, TrendLines } from '../components/Charts.jsx';
-import { api, can, Card, fmt, initials, ScopePicker, scopeLabel, scopeParams, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
+import { Activity, AlertTriangle, Gauge as GaugeIcon, ListFilter, Percent } from 'lucide-react';
+import { DailyBars, Gauge, LoadScatter, ProgressList, RadarProfile, TrendLines } from '../components/Charts.jsx';
+import { can, Card, EnvBadge, fmt, initials, KindBadge, Modal, ScopePicker, scopeLabel, scopeParams, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
 
 export default function Dashboard() {
   const user = useUser();
   const navigate = useNavigate();
   const [scope, setScope] = useState(() => (can(user, 'results.view_all') ? 'all' : 'me'));
   const [days, setDays] = useState(30);
+  const [selection, setSelection] = useState({ models: [], endpoints: [] });
+  const [filtering, setFiltering] = useState(false);
   const query = new URLSearchParams({ ...scopeParams(scope), days: String(days) });
+  if (selection.models.length) query.set('models', selection.models.join(','));
+  if (selection.endpoints.length) query.set('endpoints', selection.endpoints.join(','));
+  const filters = useApi('/api/dashboard/filters');
   const { data, error } = useApi(`/api/dashboard?${query}`, { interval: 15000 });
   const teams = useApi(scope.startsWith('team:') && can(user, 'results.view_all') ? '/api/teams' : null);
   const today = new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -26,10 +31,8 @@ export default function Dashboard() {
     return { rows: [...byDay.values()], models: [...models] };
   }, [data]);
 
-  async function runAll() {
-    const run = await api('/api/runs', { method: 'POST', body: { kind: 'all' } });
-    navigate(`/runs/${run.id}`);
-  }
+  const axes = useMemo(() => radarAxes(data?.radar), [data]);
+  const selectedCount = selection.models.length + selection.endpoints.length;
 
   if (error) return <div className="error-box">{error}</div>;
   const k = data?.kpis ?? {};
@@ -50,14 +53,12 @@ export default function Dashboard() {
             <option value={30}>Letzte 30 Tage</option>
             <option value={90}>Letzte 90 Tage</option>
           </select>
+          <button className={`btn${selectedCount ? ' primary' : ''}`} onClick={() => setFiltering(true)}>
+            <ListFilter size={15} /> {selectedCount ? `${selection.endpoints.length} Endpoints, ${selection.models.length} Modelle` : 'Modelle und Endpoints'}
+          </button>
           <Link className="btn" to="/history">
             Alle Ergebnisse
           </Link>
-          {can(user, 'runs.start') && (
-            <button className="btn primary" onClick={runAll}>
-              <Play size={15} /> Alle Tests ausführen
-            </button>
-          )}
         </div>
       </div>
 
@@ -71,7 +72,7 @@ export default function Dashboard() {
         />
         <Kpi
           title="TTFT p95 (Ø)"
-          icon={<Gauge size={16} />}
+          icon={<GaugeIcon size={16} />}
           value={fmt.ms(k.ttft_ms_p95)}
           sub={`${fmt.num(k.tokens_per_s, 0)} Tokens/s · Security-Score ${fmt.pct(k.security_score)}`}
         />
@@ -83,6 +84,24 @@ export default function Dashboard() {
           sub={`${k.regressions ?? 0} Regressionen im Zeitraum`}
           subTone={k.regressions ? 'bad' : undefined}
         />
+      </div>
+
+      <div className="two-col">
+        <Card title="Genauigkeit / Qualität" sub={`Ø Score aus Qualitäts- und Tool-Calling-Tests${data?.quality?.results ? ` (${data.quality.results} Ergebnisse)` : ''}`}>
+          <Gauge value={data?.quality?.score ?? null} label="Genauigkeit und Qualität" sub={data?.quality?.results ? 'Grün ab 80 %, gelb ab 60 %' : 'Noch keine Qualitätsdaten im Zeitraum'} />
+        </Card>
+        <Card title="Modellprofil" sub="Alle Achsen von 0 bis 100, höher ist besser (Thinking-Anteil: Anteil der Reasoning-Tokens)">
+          <RadarProfile axes={axes} />
+        </Card>
+      </div>
+
+      <div className="two-col">
+        <Card title="Last: Antwortzeit und parallele Anfragen" sub="p95 je Laststufe aus den Lasttests im Zeitraum">
+          {data?.loadPoints?.length ? <LoadScatter points={data.loadPoints} /> : <div className="empty">Noch keine Lasttests im Zeitraum</div>}
+        </Card>
+        <Card title="Time-to-first-Token p95 je Modell" sub="Aus Performance-Tests, Tagesmittel">
+          {perf.rows.length ? <TrendLines data={perf.rows} keys={perf.models} valueFormatter={fmt.ms} /> : <div className="empty">Noch keine Performance-Daten</div>}
+        </Card>
       </div>
 
       <div className="grid cols-2">
@@ -112,10 +131,7 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <div className="grid cols-2-even">
-        <Card title="Time-to-first-Token p95 je Modell" sub="Aus Performance-Tests, Tagesmittel">
-          {perf.rows.length ? <TrendLines data={perf.rows} keys={perf.models} valueFormatter={fmt.ms} /> : <div className="empty">Noch keine Performance-Daten</div>}
-        </Card>
+      <div style={{ marginBottom: 24 }}>
         <Card title="Letzte Fehlschläge" sub="Die neuesten zuerst" action={<Link to="/history?status=failed">Alle</Link>} flush>
           {data?.recentFailures?.length ? (
             <table>
@@ -143,7 +159,7 @@ export default function Dashboard() {
       </div>
 
       <div style={{ marginBottom: 24 }}>
-        <Card title="Modelle im Vergleich" sub="Qualität, Sicherheit und Geschwindigkeit je Modell im Zeitraum" flush>
+        <Card title="Modelle im Vergleich" sub="Qualität, Sicherheit und Geschwindigkeit je Modell im Zeitraum. Ein Klick öffnet die Detailseite (Beta)." flush>
           <div className="table-wrap">
             <table>
               <thead>
@@ -159,7 +175,7 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {(data?.models ?? []).map((m) => (
-                  <tr key={m.model}>
+                  <tr key={m.model} className="clickable" onClick={() => navigate(`/models/${encodeURIComponent(m.model)}`)} title="Modelldetails (Beta)">
                     <td>
                       <div style={{ fontWeight: 600 }}>{m.model}</div>
                       {m.endpoints > 1 && <div className="sub">über {m.endpoints} Endpoints</div>}
@@ -260,7 +276,96 @@ export default function Dashboard() {
           </div>
         </Card>
       )}
+      {filtering && (
+        <FilterDialog
+          filters={filters.data ?? []}
+          selection={selection}
+          canDev={user.is_admin}
+          onClose={() => setFiltering(false)}
+          onApply={(next) => {
+            setSelection(next);
+            setFiltering(false);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+// Netzdiagramm: Rohwerte auf 0 bis 100 abbilden (höher ist besser).
+const decay = (v, ref) => (v == null ? null : 100 / (1 + Number(v) / ref));
+function radarAxes(r = {}) {
+  const defs = [
+    ['Antwortzeit', decay(r.latency_ms, 2000), fmt.ms(r.latency_ms)],
+    ['Thinking-Anteil', r.thinking_share == null ? null : Number(r.thinking_share) * 100, fmt.pct(r.thinking_share == null ? null : Number(r.thinking_share))],
+    ['TTFT', decay(r.ttft_ms, 500), fmt.ms(r.ttft_ms)],
+    ['Qualität', r.quality == null ? null : Number(r.quality) * 100, fmt.pct(r.quality == null ? null : Number(r.quality))],
+    ['Last-Performance', r.load_score == null ? null : Number(r.load_score) * 100, fmt.pct(r.load_score)],
+    ['Tokens/s', r.tokens_per_s == null ? null : (100 * Number(r.tokens_per_s)) / (Number(r.tokens_per_s) + 30), `${fmt.num(r.tokens_per_s, 0)} Tokens/s`],
+  ];
+  return defs.map(([label, value, display]) => ({ label, value: value ?? 0, display: value == null ? '–' : display, missing: value == null }));
+}
+
+// Auswahl von Modellen und ganzen Endpoints; mehrere Einträge werden im Dashboard summiert.
+function FilterDialog({ filters, selection, canDev, onClose, onApply }) {
+  const [models, setModels] = useState(new Set(selection.models));
+  const [endpoints, setEndpoints] = useState(new Set(selection.endpoints));
+  const [text, setText] = useState('');
+  const toggle = (set, setter, key) => {
+    const next = new Set(set);
+    next.has(key) ? next.delete(key) : next.add(key);
+    setter(next);
+  };
+  const match = (v) => v.toLowerCase().includes(text.toLowerCase());
+  const list = filters.filter((f) => match(f.name) || f.models.some((m) => match(m.alias)));
+  return (
+    <Modal
+      title="Modelle und Endpoints"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={() => onApply({ models: [], endpoints: [] })}>
+            Zurücksetzen
+          </button>
+          <span style={{ flex: 1 }} />
+          <button className="btn" onClick={onClose}>
+            Abbrechen
+          </button>
+          <button className="btn primary" onClick={() => onApply({ models: [...models], endpoints: [...endpoints] })}>
+            Übernehmen
+          </button>
+        </>
+      }
+    >
+      <div className="hint" style={{ marginBottom: 10 }}>
+        Ohne Auswahl zeigt das Dashboard alle produktiven Modelle und Endpoints{canDev ? ' (Dev lässt sich hier gezielt dazuwählen)' : ''}. Mit Auswahl werden die
+        gewählten Modelle und Endpoints zusammengefasst.
+      </div>
+      <input type="search" placeholder="Filtern…" value={text} onChange={(e) => setText(e.target.value)} style={{ marginBottom: 10 }} />
+      <div className="pick-list" style={{ maxHeight: 380 }}>
+        {list.map((f) => (
+          <div key={f.id}>
+            <label>
+              <input type="checkbox" checked={endpoints.has(f.id)} onChange={() => toggle(endpoints, setEndpoints, f.id)} />
+              <span style={{ fontWeight: 600 }}>
+                {f.name} <KindBadge kind={f.kind} flavor={f.llm_flavor} /> <EnvBadge env={f.environment} />
+              </span>
+            </label>
+            {f.models
+              .filter((m) => !text || match(m.alias) || match(f.name))
+              .map((m) => (
+                <label key={m.name} style={{ paddingLeft: 34 }}>
+                  <input type="checkbox" checked={models.has(m.alias)} onChange={() => toggle(models, setModels, m.alias)} />
+                  <span>
+                    {m.alias} {m.environment === 'dev' && <EnvBadge env="dev" />}
+                  </span>
+                </label>
+              ))}
+          </div>
+        ))}
+        {list.length === 0 && <div className="empty">Nichts gefunden</div>}
+      </div>
+    </Modal>
   );
 }
 
