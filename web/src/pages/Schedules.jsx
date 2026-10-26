@@ -35,7 +35,7 @@ export default function Schedules() {
           <h1>Zeitpläne</h1>
           <p>Tests, Suiten oder alle Tests per Cron-Ausdruck automatisch ausführen.</p>
         </div>
-        {can(user, 'tester') && (
+        {can(user, 'schedules.manage') && (
           <button className="btn primary" onClick={() => setEditing({})}>
             <Plus size={15} /> Neuer Zeitplan
           </button>
@@ -71,7 +71,7 @@ export default function Schedules() {
                 </td>
                 <td className="num sub">{fmt.ago(s.last_run_at)}</td>
                 <td className="num">
-                  {can(user, 'tester') && (
+                  {can(user, 'schedules.manage') && (s.owner_id === user.id || can(user, 'runs.manage_all')) && (
                     <span className="btn-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
                       <button className="btn sm ghost" onClick={() => setEditing(s)} aria-label="Bearbeiten">
                         <Pencil size={14} />

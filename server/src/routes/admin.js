@@ -1,5 +1,5 @@
-// Admin-Panel: Endpoints (LiteLLM, vLLM, MCP), Test-Personas und Benutzerübersicht.
-import { requireRole } from '../auth.js';
+// Admin-Panel: Endpoints (LiteLLM, vLLM, MCP), Modellkatalog und Test-Personas.
+import { requirePermission } from '../auth.js';
 import { encrypt, mask } from '../crypto.js';
 import { many, one, query } from '../db.js';
 import { endpointHeaders, syncEndpointModels } from '../models.js';
@@ -33,8 +33,9 @@ function validateEndpoint(body) {
 }
 
 export default async function adminRoutes(app) {
-  const viewer = { preHandler: requireRole('viewer') };
-  const admin = { preHandler: requireRole('admin') };
+  const viewer = { preHandler: requirePermission('suite.view') };
+  const endpointAdmin = { preHandler: requirePermission('endpoints.manage') };
+  const personaAdmin = { preHandler: requirePermission('personas.manage') };
 
   // Manuell eingetragene Modelle (für Endpoints ohne /v1/models) abgleichen.
   async function saveManualModels(endpointId, names) {
@@ -61,7 +62,7 @@ export default async function adminRoutes(app) {
     return endpoints.map((e) => ({ ...publicEndpoint(e), models: models.filter((m) => m.endpoint_id === e.id) }));
   });
 
-  app.post('/api/endpoints', admin, async (request) => {
+  app.post('/api/endpoints', endpointAdmin, async (request) => {
     const b = request.body ?? {};
     validateEndpoint(b);
     const row = await one(
@@ -85,7 +86,7 @@ export default async function adminRoutes(app) {
     return publicEndpoint(row);
   });
 
-  app.put('/api/endpoints/:id', admin, async (request, reply) => {
+  app.put('/api/endpoints/:id', endpointAdmin, async (request, reply) => {
     const b = request.body ?? {};
     validateEndpoint(b);
     // api_key: undefined = unverändert, '' = löschen, sonst neu setzen
@@ -114,13 +115,13 @@ export default async function adminRoutes(app) {
     return publicEndpoint(row);
   });
 
-  app.delete('/api/endpoints/:id', admin, async (request) => {
+  app.delete('/api/endpoints/:id', endpointAdmin, async (request) => {
     await query('delete from endpoints where id = $1', [request.params.id]);
     return { ok: true };
   });
 
   // Verbindungstest aus dem Admin-Panel: Modelle (bzw. MCP-Tools) abrufen und Latenz messen.
-  app.post('/api/endpoints/:id/check', admin, async (request, reply) => {
+  app.post('/api/endpoints/:id/check', endpointAdmin, async (request, reply) => {
     const e = await one('select * from endpoints where id = $1', [request.params.id]);
     if (!e) return reply.code(404).send({ error: 'Endpoint nicht gefunden' });
     const headers = endpointHeaders(e);
@@ -149,7 +150,7 @@ export default async function adminRoutes(app) {
     ),
   );
 
-  app.post('/api/endpoints/:id/sync-models', admin, async (request, reply) => {
+  app.post('/api/endpoints/:id/sync-models', endpointAdmin, async (request, reply) => {
     const e = await one('select * from endpoints where id = $1', [request.params.id]);
     if (!e) return reply.code(404).send({ error: 'Endpoint nicht gefunden' });
     try {
@@ -160,7 +161,7 @@ export default async function adminRoutes(app) {
   });
 
   // Alias setzen (Body statt Pfad, weil Modellnamen wie "Qwen/Qwen3-32B" Schrägstriche enthalten).
-  app.put('/api/endpoint-models', admin, async (request, reply) => {
+  app.put('/api/endpoint-models', endpointAdmin, async (request, reply) => {
     const b = request.body ?? {};
     const row = await one('update endpoint_models set alias = $3 where endpoint_id = $1 and name = $2 returning *', [
       b.endpoint_id,
@@ -174,7 +175,7 @@ export default async function adminRoutes(app) {
   // --- Test-Personas ---
   app.get('/api/personas', viewer, async () => (await many('select * from personas order by name')).map(publicPersona));
 
-  app.post('/api/personas', admin, async (request) => {
+  app.post('/api/personas', personaAdmin, async (request) => {
     const b = request.body ?? {};
     if (!b.name?.trim()) throw badRequest('Name fehlt');
     if (!AUTH_TYPES.includes(b.auth_type)) throw badRequest('Ungültige Authentifizierungsart');
@@ -186,7 +187,7 @@ export default async function adminRoutes(app) {
     return publicPersona(row);
   });
 
-  app.put('/api/personas/:id', admin, async (request, reply) => {
+  app.put('/api/personas/:id', personaAdmin, async (request, reply) => {
     const b = request.body ?? {};
     if (!b.name?.trim()) throw badRequest('Name fehlt');
     if (!AUTH_TYPES.includes(b.auth_type)) throw badRequest('Ungültige Authentifizierungsart');
@@ -209,18 +210,8 @@ export default async function adminRoutes(app) {
     return publicPersona(row);
   });
 
-  app.delete('/api/personas/:id', admin, async (request) => {
+  app.delete('/api/personas/:id', personaAdmin, async (request) => {
     await query('delete from personas where id = $1', [request.params.id]);
     return { ok: true };
   });
-
-  // --- Benutzer (kommen aus Keycloak, hier nur Übersicht) ---
-  app.get('/api/users', admin, async () =>
-    many(
-      `select u.id, u.username, u.email, u.display_name, u.roles, u.last_login_at,
-         count(r.id)::int as runs, max(r.created_at) as last_run_at
-       from users u left join runs r on r.user_id = u.id
-       group by u.id order by u.last_login_at desc nulls last`,
-    ),
-  );
 }

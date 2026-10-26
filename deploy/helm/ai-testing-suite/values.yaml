@@ -28,11 +28,11 @@ oidc:
   issuerUrl: https://keycloak.example.com/realms/ai-testing
   clientId: ai-testing-suite
   personaClientId: ai-testing-personas
-  roles:
-    admin: suite-admin
-    tester: suite-tester
-    viewer: suite-viewer
-  defaultRole: viewer   # leer = ohne Rolle kein Zugriff
+
+# Rollen, Berechtigungen und Teams werden in der Anwendung vergeben (Admin > Rollen/Benutzer/Teams).
+# Diese Keycloak-E-Mails haben immer Admin-Zugriff (nur mit in Keycloak bestätigter E-Mail).
+adminEmails: []
+#  - admin@example.com
 
 # Secrets: entweder hier setzen (Chart legt ein Secret an) oder existingSecret mit den Keys
 # DATABASE_URL, APP_SECRET, OIDC_CLIENT_SECRET, OIDC_PERSONA_CLIENT_SECRET (und bei

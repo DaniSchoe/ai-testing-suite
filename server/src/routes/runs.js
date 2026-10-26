@@ -1,7 +1,8 @@
 // Testläufe starten und einsehen, Ergebnistabelle ("Meine Tests") und Dashboard-Auswertungen.
-import { hasRole, requireRole } from '../auth.js';
+import { hasPermission, requirePermission } from '../auth.js';
 import { many, one, query } from '../db.js';
 import { createRun } from '../runs.js';
+import { canSeeRunOf, resolveScope, scopeParams, scopeSql } from '../scope.js';
 
 const RESULT_SORT = {
   started_at: 'res.started_at',
@@ -14,22 +15,22 @@ const RESULT_SORT = {
 };
 
 export default async function runRoutes(app) {
-  const viewer = { preHandler: requireRole('viewer') };
-  const tester = { preHandler: requireRole('tester') };
+  const viewer = { preHandler: requirePermission('suite.view') };
+  const starter = { preHandler: requirePermission('runs.start') };
 
   // body: { kind: 'single'|'selection'|'suite'|'all', testIds?, suiteId? }
-  app.post('/api/runs', tester, async (request) => {
+  app.post('/api/runs', starter, async (request) => {
     const b = request.body ?? {};
     return createRun({ kind: b.kind, testIds: b.testIds, suiteId: b.suiteId, userId: request.user.id, label: b.label });
   });
 
   app.get('/api/runs', viewer, async (request) => {
-    const scope = request.query.scope === 'all' ? 'all' : 'me';
+    const s = resolveScope(request.user, request.query);
     const limit = Math.min(Number(request.query.limit ?? 50), 200);
     return many(
       `select r.*, u.display_name as user_name from runs r left join users u on u.id = r.user_id
-       where ($1 = 'all' or r.user_id = $2) order by r.created_at desc limit $3`,
-      [scope, request.user.id, limit],
+       where ${scopeSql(1)} order by r.created_at desc limit $4`,
+      [...scopeParams(request.user, s), limit],
     );
   });
 
@@ -38,23 +39,25 @@ export default async function runRoutes(app) {
       `select r.*, u.display_name as user_name from runs r left join users u on u.id = r.user_id where r.id = $1`,
       [request.params.id],
     );
-    if (!run) return reply.code(404).send({ error: 'Lauf nicht gefunden' });
+    if (!run || !(await canSeeRunOf(request.user, run.user_id))) return reply.code(404).send({ error: 'Lauf nicht gefunden' });
     const results = await many('select * from results where run_id = $1 order by started_at', [run.id]);
     return { ...run, results };
   });
 
   // Logs inkrementell abrufen (?after=<letzte id>), das Frontend pollt während der Lauf aktiv ist.
-  app.get('/api/runs/:id/logs', viewer, async (request) =>
-    many('select * from run_logs where run_id = $1 and id > $2 order by id limit 1000', [
+  app.get('/api/runs/:id/logs', viewer, async (request, reply) => {
+    const run = await one('select user_id from runs where id = $1', [request.params.id]);
+    if (!run || !(await canSeeRunOf(request.user, run.user_id))) return reply.code(404).send({ error: 'Lauf nicht gefunden' });
+    return many('select * from run_logs where run_id = $1 and id > $2 order by id limit 1000', [
       request.params.id,
       Number(request.query.after ?? 0),
-    ]),
-  );
+    ]);
+  });
 
-  app.post('/api/runs/:id/cancel', tester, async (request, reply) => {
+  app.post('/api/runs/:id/cancel', starter, async (request, reply) => {
     const run = await one('select user_id, status from runs where id = $1', [request.params.id]);
     if (!run) return reply.code(404).send({ error: 'Lauf nicht gefunden' });
-    if (run.user_id !== request.user.id && !hasRole(request.user, 'admin')) {
+    if (run.user_id !== request.user.id && !hasPermission(request.user, 'runs.manage_all')) {
       return reply.code(403).send({ error: 'Nur eigene Läufe können abgebrochen werden' });
     }
     await query(
@@ -67,16 +70,16 @@ export default async function runRoutes(app) {
   // Tabelle aller durchgeführten Tests (ein Eintrag pro Testausführung) mit Filter, Sortierung, Paging.
   app.get('/api/results', viewer, async (request) => {
     const q = request.query;
-    const scope = q.scope === 'all' && hasRole(request.user, 'viewer') ? 'all' : 'me';
+    const s = resolveScope(request.user, q);
     const page = Math.max(1, Number(q.page ?? 1));
     const pageSize = Math.min(Number(q.pageSize ?? 25), 200);
     const sort = RESULT_SORT[q.sort] ?? RESULT_SORT.started_at;
     const dir = q.dir === 'asc' ? 'asc' : 'desc';
-    const params = [scope, request.user.id, q.type || null, q.status || null, q.search ? `%${q.search}%` : null];
-    const where = `($1 = 'all' or r.user_id = $2)
-      and ($3::text is null or res.type = $3)
-      and ($4::text is null or res.status = $4)
-      and ($5::text is null or res.test_name ilike $5 or res.model ilike $5 or res.endpoint_name ilike $5)`;
+    const params = [...scopeParams(request.user, s), q.type || null, q.status || null, q.search ? `%${q.search}%` : null];
+    const where = `${scopeSql(1)}
+      and ($4::text is null or res.type = $4)
+      and ($5::text is null or res.status = $5)
+      and ($6::text is null or res.test_name ilike $6 or res.model ilike $6 or res.endpoint_name ilike $6)`;
     const [{ total }] = await many(
       `select count(*)::int as total from results res join runs r on r.id = res.run_id where ${where}`,
       params,
@@ -92,24 +95,26 @@ export default async function runRoutes(app) {
        limit ${pageSize} offset ${(page - 1) * pageSize}`,
       params,
     );
-    return { total, page, pageSize, rows };
+    return { total, page, pageSize, rows, scope: s.scope, teamId: s.teamId };
   });
 
   app.get('/api/results/:id', viewer, async (request, reply) => {
-    const row = await one('select * from results where id = $1', [request.params.id]);
-    if (!row) return reply.code(404).send({ error: 'Ergebnis nicht gefunden' });
+    const row = await one('select res.*, r.user_id from results res join runs r on r.id = res.run_id where res.id = $1', [
+      request.params.id,
+    ]);
+    if (!row || !(await canSeeRunOf(request.user, row.user_id))) return reply.code(404).send({ error: 'Ergebnis nicht gefunden' });
     return row;
   });
 
-  // Dashboard: global (alle User) oder nur eigene Läufe, über einen Zeitraum in Tagen.
+  // Dashboard: global (alle User), ein Team oder nur eigene Läufe, über einen Zeitraum in Tagen.
   app.get('/api/dashboard', viewer, async (request) => {
-    const scope = request.query.scope === 'me' ? 'me' : 'global';
+    const s = resolveScope(request.user, request.query, 'all');
     const days = Math.min(Math.max(Number(request.query.days ?? 30), 1), 365);
-    const p = [scope, request.user.id, days];
+    const p = [...scopeParams(request.user, s), days];
     const base = `from results res join runs r on r.id = res.run_id
       where res.finished_at is not null
-        and res.finished_at > now() - make_interval(days => $3::int)
-        and ($1 = 'global' or r.user_id = $2)`;
+        and res.finished_at > now() - make_interval(days => $4::int)
+        and ${scopeSql(1)}`;
 
     const [kpis, trend, byType, perfByModel, models, recentFailures, regressions, runsCount, byUser, thinking] = await Promise.all([
       one(
@@ -173,18 +178,18 @@ export default async function runRoutes(app) {
       one(
         `select count(*)::int as runs,
            count(*) filter (where r.status in ('queued', 'running'))::int as active
-         from runs r where r.created_at > now() - make_interval(days => $3::int) and ($1 = 'global' or r.user_id = $2)`,
+         from runs r where r.created_at > now() - make_interval(days => $4::int) and ${scopeSql(1)}`,
         p,
       ),
-      scope === 'global'
+      s.scope !== 'me'
         ? many(
             `select u.id, u.display_name, u.username, count(distinct r.id)::int as runs, count(res.id)::int as results,
                count(res.id) filter (where res.status = 'passed')::float / nullif(count(res.id), 0) as pass_rate,
                max(r.created_at) as last_run_at
              from runs r join users u on u.id = r.user_id left join results res on res.run_id = r.id
-             where r.created_at > now() - make_interval(days => $1::int)
+             where r.created_at > now() - make_interval(days => $4::int) and ${scopeSql(1)}
              group by u.id order by runs desc limit 20`,
-            [days],
+            p,
           )
         : Promise.resolve([]),
       // Thinking vs. Non-Thinking: Mittelwerte je Modell über die Thinking-Tests im Zeitraum.
@@ -200,7 +205,8 @@ export default async function runRoutes(app) {
     ]);
 
     return {
-      scope,
+      scope: s.scope === 'all' ? 'global' : s.scope,
+      teamId: s.teamId,
       days,
       kpis: {
         ...kpis,

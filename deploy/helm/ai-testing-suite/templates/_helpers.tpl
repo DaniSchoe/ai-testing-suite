@@ -37,14 +37,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ .Values.oidc.clientId | quote }}
 - name: OIDC_PERSONA_CLIENT_ID
   value: {{ .Values.oidc.personaClientId | quote }}
-- name: ROLE_ADMIN
-  value: {{ .Values.oidc.roles.admin | quote }}
-- name: ROLE_TESTER
-  value: {{ .Values.oidc.roles.tester | quote }}
-- name: ROLE_VIEWER
-  value: {{ .Values.oidc.roles.viewer | quote }}
-- name: DEFAULT_ROLE
-  value: {{ .Values.oidc.defaultRole | quote }}
+- name: ADMIN_EMAILS
+  value: {{ join "," .Values.adminEmails | quote }}
 - name: WORKER_CONCURRENCY
   value: {{ .Values.worker.concurrency | quote }}
 {{- range $key := list "DATABASE_URL" "APP_SECRET" "OIDC_CLIENT_SECRET" "OIDC_PERSONA_CLIENT_SECRET" }}

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { authPlugin } from './auth.js';
 import { config } from './config.js';
 import { pool } from './db.js';
+import accessRoutes from './routes/access.js';
 import adminRoutes from './routes/admin.js';
 import runRoutes from './routes/runs.js';
 import testRoutes from './routes/tests.js';
@@ -22,6 +23,8 @@ export async function buildApp() {
   });
 
   app.setErrorHandler((err, request, reply) => {
+    // Eindeutigkeitsverletzung (z. B. doppelter Name) als Konflikt statt als Serverfehler melden.
+    if (err.code === '23505') return reply.code(409).send({ error: 'Name oder E-Mail ist bereits vergeben' });
     const status = err.statusCode ?? 500;
     if (status >= 500) request.log.error(err);
     reply.code(status).send({ error: status >= 500 ? 'Interner Fehler' : err.message });
@@ -42,11 +45,12 @@ export async function buildApp() {
 
   app.get('/api/me', async (request, reply) => {
     if (!request.user) return reply.code(401).send({ error: 'Nicht angemeldet', loginUrl: '/auth/login' });
-    const { id, username, email, display_name, roles } = request.user;
-    return { id, username, email, display_name, roles, authMode: config.auth.mode };
+    const { id, username, email, display_name, roles, teams, permissions, is_admin, env_admin, disabled } = request.user;
+    return { id, username, email, display_name, roles, teams, permissions, is_admin, env_admin, disabled, authMode: config.auth.mode };
   });
 
   await app.register(adminRoutes);
+  await app.register(accessRoutes);
   await app.register(testRoutes);
   await app.register(runRoutes);
 

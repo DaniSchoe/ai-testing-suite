@@ -2,14 +2,16 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Activity, AlertTriangle, Gauge, Percent, Play } from 'lucide-react';
 import { DailyBars, ProgressList, TrendLines } from '../components/Charts.jsx';
-import { api, can, Card, fmt, initials, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
+import { api, can, Card, fmt, initials, ScopePicker, scopeLabel, scopeParams, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
 
 export default function Dashboard() {
   const user = useUser();
   const navigate = useNavigate();
-  const [scope, setScope] = useState('global');
+  const [scope, setScope] = useState(() => (can(user, 'results.view_all') ? 'all' : 'me'));
   const [days, setDays] = useState(30);
-  const { data, error } = useApi(`/api/dashboard?scope=${scope}&days=${days}`, { interval: 15000 });
+  const query = new URLSearchParams({ ...scopeParams(scope), days: String(days) });
+  const { data, error } = useApi(`/api/dashboard?${query}`, { interval: 15000 });
+  const teams = useApi(scope.startsWith('team:') && can(user, 'results.view_all') ? '/api/teams' : null);
   const today = new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
 
   const perf = useMemo(() => {
@@ -38,24 +40,17 @@ export default function Dashboard() {
         <div>
           <h1>Hallo {(user.display_name ?? user.username).split(' ')[0]}</h1>
           <p>
-            {scope === 'global' ? 'Auswertung über alle Nutzer' : 'Deine eigenen Testläufe'} am {today}.
+            {scopeLabel(scope, user, teams.data ?? [])} am {today}.
           </p>
         </div>
         <div className="btn-row">
-          <div className="segmented" role="tablist" aria-label="Umfang">
-            <button className={scope === 'global' ? 'active' : ''} onClick={() => setScope('global')}>
-              Alle Nutzer
-            </button>
-            <button className={scope === 'me' ? 'active' : ''} onClick={() => setScope('me')}>
-              Nur ich
-            </button>
-          </div>
+          <ScopePicker value={scope} onChange={setScope} />
           <select className="inline" value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Zeitraum">
             <option value={7}>Letzte 7 Tage</option>
             <option value={30}>Letzte 30 Tage</option>
             <option value={90}>Letzte 90 Tage</option>
           </select>
-          {can(user, 'tester') && (
+          {can(user, 'runs.start') && (
             <button className="btn primary" onClick={runAll}>
               <Play size={15} /> Alle Tests ausführen
             </button>
@@ -222,8 +217,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      {scope === 'global' && (
-        <Card title="Alle Nutzer" sub="Testaktivität je Nutzer im Zeitraum" flush>
+      {scope !== 'me' && (
+        <Card title={scope === 'all' ? 'Alle Nutzer' : 'Teammitglieder'} sub="Testaktivität je Nutzer im Zeitraum" flush>
           <div className="table-wrap">
             <table>
               <thead>

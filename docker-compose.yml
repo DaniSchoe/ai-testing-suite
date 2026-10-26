@@ -46,6 +46,7 @@ services:
       OIDC_PERSONA_CLIENT_ID: ai-testing-personas
       OIDC_PERSONA_CLIENT_SECRET: dev-persona-secret
       OIDC_ALLOW_INSECURE: 'true'
+      ADMIN_EMAILS: admin@example.com
       RUN_WORKER: 'false'
     ports: ['8080:8080']
 

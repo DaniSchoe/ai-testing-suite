@@ -11,7 +11,8 @@ export default function Tests() {
   const [selected, setSelected] = useState(new Set());
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState(null);
-  const isTester = can(user, 'tester');
+  const canRun = can(user, 'runs.start');
+  const canEdit = can(user, 'tests.manage');
 
   const grouped = useMemo(() => {
     const map = new Map();
@@ -53,17 +54,23 @@ export default function Tests() {
           <h1>Tests</h1>
           <p>Einzeln starten, mehrere auswählen und gebündelt ausführen oder alle Tests auf einmal laufen lassen.</p>
         </div>
-        {isTester && (
+        {(canRun || canEdit) && (
           <div className="btn-row">
-            <button className="btn" disabled={!selected.size} onClick={() => run({ kind: 'selection', testIds: [...selected] })}>
-              <Play size={15} /> Auswahl ausführen ({selected.size})
-            </button>
-            <button className="btn" onClick={() => run({ kind: 'all' })}>
-              <Play size={15} /> Alle ausführen
-            </button>
-            <button className="btn primary" onClick={() => setEditing({})}>
-              <Plus size={15} /> Neuer Test
-            </button>
+            {canRun && (
+              <>
+                <button className="btn" disabled={!selected.size} onClick={() => run({ kind: 'selection', testIds: [...selected] })}>
+                  <Play size={15} /> Auswahl ausführen ({selected.size})
+                </button>
+                <button className="btn" onClick={() => run({ kind: 'all' })}>
+                  <Play size={15} /> Alle ausführen
+                </button>
+              </>
+            )}
+            {canEdit && (
+              <button className="btn primary" onClick={() => setEditing({})}>
+                <Plus size={15} /> Neuer Test
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -85,7 +92,7 @@ export default function Tests() {
               <table>
                 <thead>
                   <tr>
-                    {isTester && <th style={{ width: 36 }} />}
+                    {canRun && <th style={{ width: 36 }} />}
                     <th>Name</th>
                     <th>Endpoint</th>
                     <th>Persona</th>
@@ -98,7 +105,7 @@ export default function Tests() {
                 <tbody>
                   {list.map((t) => (
                     <tr key={t.id}>
-                      {isTester && (
+                      {canRun && (
                         <td>
                           <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggle(t.id)} aria-label={`${t.name} auswählen`} />
                         </td>
@@ -118,19 +125,23 @@ export default function Tests() {
                       <td className="num">{fmt.pct(t.last_score)}</td>
                       <td className="num sub">{fmt.ago(t.last_run_at)}</td>
                       <td className="num">
-                        {isTester && (
-                          <span className="btn-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                        <span className="btn-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                          {canRun && (
                             <button className="btn sm" disabled={!t.enabled} onClick={() => run({ kind: 'single', testIds: [t.id] })}>
                               <Play size={13} /> Starten
                             </button>
-                            <button className="btn sm ghost" onClick={() => setEditing(t)} aria-label="Bearbeiten">
-                              <Pencil size={14} />
-                            </button>
-                            <button className="btn sm ghost danger" onClick={() => remove(t)} aria-label="Löschen">
-                              <Trash2 size={14} />
-                            </button>
-                          </span>
-                        )}
+                          )}
+                          {canEdit && (
+                            <>
+                              <button className="btn sm ghost" onClick={() => setEditing(t)} aria-label="Bearbeiten">
+                                <Pencil size={14} />
+                              </button>
+                              <button className="btn sm ghost danger" onClick={() => remove(t)} aria-label="Löschen">
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          )}
+                        </span>
                       </td>
                     </tr>
                   ))}

@@ -6,7 +6,14 @@ Keycloak-Checkliste (Realm aus {{ .Values.oidc.issuerUrl }}):
   1. Client "{{ .Values.oidc.clientId }}" (confidential, Standard Flow, PKCE S256),
      Redirect-URI {{ .Values.publicUrl }}/auth/callback
   2. Client "{{ .Values.oidc.personaClientId }}" mit Direct Access Grants für Test-Personas
-  3. Rollen {{ .Values.oidc.roles.admin }}, {{ .Values.oidc.roles.tester }}, {{ .Values.oidc.roles.viewer }} anlegen und zuweisen
+
+Rollen und Teams vergibst du in der Anwendung unter Administrator > Benutzer.
+{{- if .Values.adminEmails }}
+Admin-Zugriff per E-Mail: {{ join ", " .Values.adminEmails }}
+{{- else }}
+ACHTUNG: adminEmails ist leer. Setze mindestens eine Admin-E-Mail, sonst kann niemand Rollen vergeben:
+  --set 'adminEmails={admin@example.com}'
+{{- end }}
 
 {{ if .Values.worker.embedded -}}
 Worker: läuft in den {{ .Values.web.replicas }} Web-Pod(s) mit je {{ .Values.worker.concurrency }} parallelen Läufen.

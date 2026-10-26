@@ -40,7 +40,7 @@ export default function RunDetail() {
             {r.total} bestanden
           </p>
         </div>
-        {isActive && can(user, 'tester') && (
+        {isActive && (r.user_id === user.id ? can(user, 'runs.start') : can(user, 'runs.manage_all')) && (
           <button className="btn danger" onClick={cancel}>
             <Square size={14} /> Abbrechen
           </button>
