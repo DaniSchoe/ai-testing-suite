@@ -1,9 +1,8 @@
 // Führt einen Testlauf aus: Tests nacheinander, Ergebnisse und Logs in Postgres, Regressionsvergleich.
 import { many, one, query } from '../db.js';
 import { decrypt } from '../crypto.js';
-import { getPersonaToken } from '../auth.js';
 import { testTypes } from '../testtypes/index.js';
-import { aliasOf, endpointHeaders, resolveModel } from '../models.js';
+import { aliasOf, authHeaders, ENDPOINT_SELECT, endpointHeaders, llmClientFor, resolveModel } from '../models.js';
 import { LlmClient, McpClient } from './clients.js';
 
 // Kennzahlen, bei denen "höher" schlechter ist bzw. "niedriger" schlechter ist.
@@ -20,56 +19,44 @@ export async function log(runId, resultId, level, message, data) {
   ]);
 }
 
-// Alle Persona-Namen einsammeln, die irgendwo in der Testkonfiguration referenziert werden.
-function referencedPersonas(value, out = new Set()) {
-  if (Array.isArray(value)) value.forEach((v) => referencedPersonas(v, out));
+// Alle API-Key-Namen einsammeln, die in der Testkonfiguration referenziert werden ("apiKey", früher "persona").
+const KEY_FIELDS = ['apiKey', 'persona'];
+function referencedKeys(value, out = new Set()) {
+  if (Array.isArray(value)) value.forEach((v) => referencedKeys(v, out));
   else if (value && typeof value === 'object') {
     for (const [k, v] of Object.entries(value)) {
-      if (k === 'persona' && typeof v === 'string' && v) out.add(v);
-      else referencedPersonas(v, out);
+      if (KEY_FIELDS.includes(k) && typeof v === 'string' && v) out.add(v);
+      else referencedKeys(v, out);
     }
   }
   return out;
 }
 
-async function authHeaderFor(persona) {
-  if (!persona || persona.auth_type === 'none') return {};
-  const secret = decrypt(persona.secret_enc);
-  if (persona.auth_type === 'api_key') return { authorization: `Bearer ${secret}` };
-  if (persona.auth_type === 'keycloak_password') {
-    return { authorization: `Bearer ${await getPersonaToken(persona.username, secret)}` };
-  }
-  return {};
-}
-
-async function buildContext({ runId, resultId, test, endpoint, endpointsByName, personasByName, signal }) {
+async function buildContext({ runId, resultId, test, endpoint, endpointsByName, keysByName, keysById, runKeyId, signal }) {
   const type = testTypes[test.type];
   const cfg = { ...structuredClone(type.defaults), ...test.config };
-  const defaultPersona = test.persona_id ? [...personasByName.values()].find((p) => p.id === test.persona_id) : null;
+  const flavor = endpoint.llm_flavor;
 
-  const authByPersona = new Map();
-  for (const name of referencedPersonas(cfg)) {
-    const p = personasByName.get(name);
-    if (!p) throw new Error(`Persona "${name}" existiert nicht`);
-    authByPersona.set(name, await authHeaderFor(p));
+  const authByKey = new Map();
+  for (const name of referencedKeys(cfg)) {
+    const k = keysByName.get(name);
+    if (!k) throw new Error(`API-Key "${name}" existiert nicht`);
+    authByKey.set(name, authHeaders(flavor, decrypt(k.secret_enc)));
   }
-  const endpointKey = decrypt(endpoint.api_key_enc);
-  const defaultAuth = defaultPersona
-    ? await authHeaderFor(defaultPersona)
-    : endpointKey
-      ? { authorization: `Bearer ${endpointKey}` }
-      : {};
+  // Standard-Key: der des Laufs (z. B. eigener Key aus dem Marketplace), sonst der des Tests, sonst der des Endpoints.
+  const defaultKey = keysById.get(runKeyId) ?? keysById.get(test.api_key_id);
+  const defaultAuth = defaultKey ? authHeaders(flavor, decrypt(defaultKey.secret_enc)) : authHeaders(flavor, decrypt(endpoint.api_key_enc));
 
-  const headersFor = ({ persona, anonymous } = {}) => ({
-    ...endpoint.headers,
-    ...(anonymous ? {} : persona ? authByPersona.get(persona) : defaultAuth),
-  });
+  const headersFor = ({ apiKey, persona, anonymous } = {}) => {
+    const name = apiKey ?? persona;
+    return { ...endpoint.headers, ...(anonymous ? {} : name ? authByKey.get(name) : defaultAuth) };
+  };
 
   return {
     test,
     config: cfg,
     endpoint: { ...endpoint, api_key_enc: undefined },
-    persona: defaultPersona ? { id: defaultPersona.id, name: defaultPersona.name } : null,
+    apiKey: defaultKey ? { id: defaultKey.id, name: defaultKey.name } : endpoint.api_key_name ? { name: endpoint.api_key_name } : null,
     signal,
     // Modellnamen dürfen echte Namen oder Aliase sein; zurück kommt der Name am Endpoint.
     model() {
@@ -85,12 +72,12 @@ async function buildContext({ runId, resultId, test, endpoint, endpointsByName, 
       if (!other) throw new Error(`Endpoint "${name}" existiert nicht`);
       return {
         endpoint: other,
-        llm: () => new LlmClient({ baseUrl: other.base_url, headers: endpointHeaders(other), timeoutMs: (cfg.requestTimeoutS ?? 120) * 1000 }),
+        llm: () => llmClientFor(other, { timeoutMs: (cfg.requestTimeoutS ?? 120) * 1000 }),
         resolveModel: (m) => resolveModel(other.modelRows, m ?? other.default_model ?? other.models[0]),
       };
     },
     llm(opts) {
-      return new LlmClient({ baseUrl: endpoint.base_url, headers: headersFor(opts), timeoutMs: (cfg.requestTimeoutS ?? 120) * 1000 });
+      return new LlmClient({ baseUrl: endpoint.base_url, headers: headersFor(opts), flavor, timeoutMs: (cfg.requestTimeoutS ?? 120) * 1000 });
     },
     mcp(opts = {}) {
       const url = `${endpoint.base_url.replace(/\/$/, '')}${opts.path ?? ''}`;
@@ -126,9 +113,9 @@ async function regressionCheck(test, metrics, score) {
   return { baselineResultId: baseline.id, baselineRunId: baseline.run_id, tolerance, deltas, regressions };
 }
 
-async function runOne({ run, test, endpoint, endpointsByName, personasByName }) {
+async function runOne({ run, test, endpoint, endpointsByName, keysByName, keysById }) {
   const result = await one(
-    `insert into results (run_id, test_id, test_name, type, endpoint_id, endpoint_name, persona_name, status)
+    `insert into results (run_id, test_id, test_name, type, endpoint_id, endpoint_name, api_key_name, status)
      values ($1, $2, $3, $4, $5, $6, $7, 'running') returning id`,
     [
       run.id,
@@ -137,7 +124,7 @@ async function runOne({ run, test, endpoint, endpointsByName, personasByName }) 
       test.type,
       endpoint?.id,
       endpoint?.name,
-      test.persona_id ? [...personasByName.values()].find((p) => p.id === test.persona_id)?.name : null,
+      (keysById.get(run.api_key_id) ?? keysById.get(test.api_key_id))?.name ?? endpoint?.api_key_name ?? null,
     ],
   );
   const started = Date.now();
@@ -156,7 +143,9 @@ async function runOne({ run, test, endpoint, endpointsByName, personasByName }) 
       test,
       endpoint,
       endpointsByName,
-      personasByName,
+      keysByName,
+      keysById,
+      runKeyId: run.api_key_id,
       signal: controller.signal,
     });
     await ctx.log('info', `Starte ${type.label}: ${test.name}`);
@@ -210,13 +199,15 @@ export async function executeRun(runId) {
   const tests = await many('select * from test_definitions where id = any($1)', [run.test_ids]);
   const byId = new Map(tests.map((t) => [t.id, t]));
   const modelRows = await many('select * from endpoint_models');
-  const endpointList = (await many('select * from endpoints')).map((e) => {
+  const endpointList = (await many(ENDPOINT_SELECT)).map((e) => {
     const rows = modelRows.filter((m) => m.endpoint_id === e.id);
     return { ...e, modelRows: rows, models: rows.filter((m) => m.available).map((m) => m.name) };
   });
   const endpoints = new Map(endpointList.map((e) => [e.id, e]));
   const endpointsByName = new Map(endpointList.map((e) => [e.name, e]));
-  const personasByName = new Map((await many('select * from personas')).map((p) => [p.name, p]));
+  const apiKeys = await many('select id, name, secret_enc from api_keys');
+  const keysByName = new Map(apiKeys.map((k) => [k.name, k]));
+  const keysById = new Map(apiKeys.map((k) => [k.id, k]));
 
   const counts = { passed: 0, failed: 0, error: 0 };
   for (const testId of run.test_ids) {
@@ -227,7 +218,7 @@ export async function executeRun(runId) {
     }
     const test = byId.get(testId);
     if (!test) continue;
-    const status = await runOne({ run, test, endpoint: endpoints.get(test.endpoint_id), endpointsByName, personasByName });
+    const status = await runOne({ run, test, endpoint: endpoints.get(test.endpoint_id), endpointsByName, keysByName, keysById });
     counts[status === 'error' ? 'error' : status] = (counts[status === 'error' ? 'error' : status] ?? 0) + 1;
     await query('update runs set passed = $2, failed = $3, errored = $4 where id = $1', [
       run.id,

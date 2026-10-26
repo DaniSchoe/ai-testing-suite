@@ -43,8 +43,6 @@ services:
       OIDC_ISSUER_URL: http://keycloak:8081/realms/ai-testing
       OIDC_CLIENT_ID: ai-testing-suite
       OIDC_CLIENT_SECRET: dev-client-secret
-      OIDC_PERSONA_CLIENT_ID: ai-testing-personas
-      OIDC_PERSONA_CLIENT_SECRET: dev-persona-secret
       OIDC_ALLOW_INSECURE: 'true'
       ADMIN_EMAILS: admin@example.com
       RUN_WORKER: 'false'

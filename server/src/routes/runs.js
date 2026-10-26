@@ -85,7 +85,7 @@ export default async function runRoutes(app) {
       params,
     );
     const rows = await many(
-      `select res.id, res.run_id, res.test_id, res.test_name, res.type, res.endpoint_name, res.model, res.persona_name,
+      `select res.id, res.run_id, res.test_id, res.test_name, res.type, res.endpoint_name, res.model, res.api_key_name,
          res.status, res.score, res.duration_ms, res.metrics, res.error, res.started_at, res.finished_at,
          (jsonb_array_length(coalesce(res.details->'regression'->'regressions', '[]'::jsonb)) > 0) as regression,
          r.trigger, r.label as run_label, u.display_name as user_name

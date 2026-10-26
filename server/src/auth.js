@@ -204,20 +204,5 @@ export async function authPlugin(app) {
   });
 }
 
-// Token für eine Test-Persona holen (Resource Owner Password Grant gegen den Persona-Client).
-// So kann der Runner Requests "als" ein bestimmter Keycloak-User ausführen.
-const personaTokenCache = new Map();
-export async function getPersonaToken(username, password) {
-  const cached = personaTokenCache.get(username);
-  if (cached && cached.expiresAt > Date.now() + 30e3) return cached.token;
-  const cfg = await discover(
-    config.auth.personaClientId,
-    config.auth.personaClientSecret ? oidc.ClientSecretPost(config.auth.personaClientSecret) : oidc.None(),
-  );
-  const tokens = await oidc.genericGrantRequest(cfg, 'password', { username, password, scope: 'openid' });
-  personaTokenCache.set(username, { token: tokens.access_token, expiresAt: Date.now() + (tokens.expires_in ?? 60) * 1000 });
-  return tokens.access_token;
-}
-
 // Nicht kapseln: Session, request.user und Hook sollen für alle Routen gelten.
 authPlugin[Symbol.for('skip-override')] = true;

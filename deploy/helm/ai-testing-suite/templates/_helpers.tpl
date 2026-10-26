@@ -37,13 +37,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ .Values.oidc.trustDiscoveredIssuer | default false | quote }}
 - name: OIDC_CLIENT_ID
   value: {{ .Values.oidc.clientId | quote }}
-- name: OIDC_PERSONA_CLIENT_ID
-  value: {{ .Values.oidc.personaClientId | quote }}
 - name: ADMIN_EMAILS
   value: {{ join "," .Values.adminEmails | quote }}
 - name: WORKER_CONCURRENCY
   value: {{ .Values.worker.concurrency | quote }}
-{{- range $key := list "DATABASE_URL" "APP_SECRET" "OIDC_CLIENT_SECRET" "OIDC_PERSONA_CLIENT_SECRET" }}
+{{- range $key := list "DATABASE_URL" "APP_SECRET" "OIDC_CLIENT_SECRET" }}
 - name: {{ $key }}
   valueFrom:
     secretKeyRef:

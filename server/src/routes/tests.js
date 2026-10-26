@@ -2,6 +2,8 @@
 import { hasPermission, requirePermission } from '../auth.js';
 import { many, one, query, tx } from '../db.js';
 import { removeSchedule, syncSchedule } from '../queue.js';
+import { canSeeKey } from '../visibility.js';
+import { loadKeys } from './apikeys.js';
 import { describeTypes, testTypes } from '../testtypes/index.js';
 
 function badRequest(message) {
@@ -20,11 +22,11 @@ export default async function testRoutes(app) {
   // --- Testdefinitionen ---
   app.get('/api/tests', viewer, async () =>
     many(
-      `select t.*, e.name as endpoint_name, e.kind as endpoint_kind, p.name as persona_name,
+      `select t.*, e.name as endpoint_name, e.kind as endpoint_kind, k.name as api_key_name,
          lr.status as last_status, lr.score as last_score, lr.finished_at as last_run_at
        from test_definitions t
        left join endpoints e on e.id = t.endpoint_id
-       left join personas p on p.id = t.persona_id
+       left join api_keys k on k.id = t.api_key_id
        left join lateral (
          select status, score, finished_at from results where test_id = t.id and finished_at is not null
          order by finished_at desc limit 1
@@ -56,23 +58,34 @@ export default async function testRoutes(app) {
     if (b.config && typeof b.config !== 'object') throw badRequest('Konfiguration muss ein Objekt sein');
   }
 
+  // Nur Keys verwenden, die der User sehen darf (eigene, Team-Keys, globale; Administratoren alle).
+  async function assertKeyUsable(user, keyId) {
+    if (!keyId || user.is_admin) return;
+    const key = (await loadKeys()).find((k) => k.id === keyId);
+    if (!key || !canSeeKey(user, key)) throw Object.assign(new Error('Dieser API-Key steht dir nicht zur Verfügung'), { statusCode: 403 });
+  }
+
   app.post('/api/tests', editor, async (request) => {
     const b = request.body ?? {};
     validateTest(b);
+    await assertKeyUsable(request.user, b.api_key_id);
     return one(
-      `insert into test_definitions (name, type, endpoint_id, persona_id, config, tags, enabled, created_by)
+      `insert into test_definitions (name, type, endpoint_id, api_key_id, config, tags, enabled, created_by)
        values ($1, $2, $3, $4, $5, $6, $7, $8) returning *`,
-      [b.name.trim(), b.type, b.endpoint_id, b.persona_id || null, b.config ?? {}, b.tags ?? [], b.enabled ?? true, request.user.id],
+      [b.name.trim(), b.type, b.endpoint_id, b.api_key_id || null, b.config ?? {}, b.tags ?? [], b.enabled ?? true, request.user.id],
     );
   });
 
   app.put('/api/tests/:id', editor, async (request, reply) => {
     const b = request.body ?? {};
     validateTest(b);
+    const current = await one('select api_key_id from test_definitions where id = $1', [request.params.id]);
+    // Ein bereits gesetzter Key darf bleiben, auch wenn der Bearbeiter ihn nicht sehen kann.
+    if (b.api_key_id !== current?.api_key_id) await assertKeyUsable(request.user, b.api_key_id);
     const row = await one(
-      `update test_definitions set name = $2, type = $3, endpoint_id = $4, persona_id = $5, config = $6,
+      `update test_definitions set name = $2, type = $3, endpoint_id = $4, api_key_id = $5, config = $6,
          tags = $7, enabled = $8, updated_at = now() where id = $1 returning *`,
-      [request.params.id, b.name.trim(), b.type, b.endpoint_id, b.persona_id || null, b.config ?? {}, b.tags ?? [], b.enabled ?? true],
+      [request.params.id, b.name.trim(), b.type, b.endpoint_id, b.api_key_id || null, b.config ?? {}, b.tags ?? [], b.enabled ?? true],
     );
     if (!row) return reply.code(404).send({ error: 'Test nicht gefunden' });
     return row;

@@ -166,11 +166,37 @@ async function mcp(req, res, who) {
   }
 }
 
+// Minimaler Anthropic-Mock (Claude-Flavor): x-api-key, /v1/models und /v1/messages inkl. Streaming.
+async function claude(req, res, pathname) {
+  if (req.headers['x-api-key'] !== 'sk-claude' || !req.headers['anthropic-version']) {
+    return send(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } });
+  }
+  if (pathname === '/v1/models') return send(res, 200, { data: [{ id: 'claude-mock-1', type: 'model', display_name: 'Claude Mock' }] });
+  if (pathname !== '/v1/messages') return send(res, 404, { error: 'not found' });
+  const body = await readBody(req);
+  const text = answer([...(body.system ? [{ role: 'system', content: body.system }] : []), ...body.messages], body.model);
+  if (!body.stream) {
+    return send(res, 200, {
+      id: 'msg_mock', type: 'message', role: 'assistant', model: body.model, content: [{ type: 'text', text }],
+      stop_reason: 'end_turn', usage: { input_tokens: 12, output_tokens: text.split(/\s+/).length },
+    });
+  }
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  const evt = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+  evt('message_start', { message: { id: 'msg_mock', usage: { input_tokens: 12, output_tokens: 1 } } });
+  evt('content_block_start', { index: 0, content_block: { type: 'text', text: '' } });
+  for (const part of text.match(/\S+\s*/g) ?? [text]) evt('content_block_delta', { index: 0, delta: { type: 'text_delta', text: part } });
+  evt('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: text.split(/\s+/).length } });
+  evt('message_stop', {});
+  res.end();
+}
+
 http
   .createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname === '/health/liveliness') return send(res, 200, { status: 'ok' });
+      if (url.pathname.startsWith('/claude/')) return await claude(req, res, url.pathname.slice('/claude'.length));
       if (url.pathname.startsWith('/vllm-qwen/')) {
         url.pathname = url.pathname.slice('/vllm-qwen'.length);
         if (url.pathname === '/v1/models') return send(res, 200, { data: VLLM.models.map((id) => ({ id, object: 'model', owned_by: 'vllm' })) });

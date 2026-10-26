@@ -23,17 +23,6 @@
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:8080*"
       }
-    },
-    {
-      "clientId": "ai-testing-personas",
-      "name": "Test-Personas (Runner)",
-      "enabled": true,
-      "protocol": "openid-connect",
-      "publicClient": false,
-      "secret": "dev-persona-secret",
-      "standardFlowEnabled": false,
-      "directAccessGrantsEnabled": true,
-      "description": "Nur für den Runner: holt Tokens für Test-Personas per Password Grant"
     }
   ],
   "users": [
@@ -78,24 +67,6 @@
         {
           "type": "password",
           "value": "viewer",
-          "temporary": false
-        }
-      ]
-    },
-    {
-      "username": "persona-team-a",
-      "enabled": true,
-      "email": "persona-team-a@example.com",
-      "emailVerified": true,
-      "firstName": "Persona",
-      "lastName": "Team A",
-      "realmRoles": [
-        "persona-team-a"
-      ],
-      "credentials": [
-        {
-          "type": "password",
-          "value": "persona-team-a",
           "temporary": false
         }
       ]

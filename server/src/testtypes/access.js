@@ -1,23 +1,24 @@
-// Berechtigungstests: Darf Persona X Modell Y bzw. Admin-Route Z nutzen?
+// Berechtigungstests: Darf API-Key X Modell Y bzw. Admin-Route Z nutzen?
 // Typischer Einsatz: LiteLLM mit Keycloak-JWT-Auth oder Virtual Keys pro Team.
 export default {
   type: 'access',
   label: 'Zugriff / Berechtigungen',
   description:
-    'Prüft pro Test-Persona, ob Modelle und API-Routen erlaubt bzw. verweigert werden (RBAC, Teams, Virtual Keys).',
+    'Prüft pro API-Key, ob Modelle und API-Routen erlaubt bzw. verweigert werden (RBAC, Teams, Virtual Keys).',
   defaults: {
     cases: [
-      { persona: '', model: '', expect: 'allow' },
-      { persona: '', model: '', expect: 'deny' },
-      { persona: '', method: 'GET', path: '/key/list', expect: 'deny' },
-      { persona: null, model: '', expect: 'deny', name: 'Ohne Credentials' },
+      { apiKey: '', model: '', expect: 'allow' },
+      { apiKey: '', model: '', expect: 'deny' },
+      { apiKey: '', method: 'GET', path: '/key/list', expect: 'deny' },
+      { apiKey: null, model: '', expect: 'deny', name: 'Ohne Credentials' },
     ],
   },
   async run(ctx) {
     const outcomes = [];
     for (const tc of ctx.config.cases) {
-      // persona: null -> ganz ohne Credentials; persona fehlt/leer -> Persona der Testdefinition.
-      const llm = tc.persona === null ? ctx.llm({ anonymous: true }) : ctx.llm({ persona: tc.persona || undefined });
+      // apiKey: null -> ganz ohne Credentials; fehlt/leer -> Key des Tests. "persona" gilt als alter Name.
+      const key = tc.apiKey !== undefined ? tc.apiKey : tc.persona;
+      const llm = key === null ? ctx.llm({ anonymous: true }) : ctx.llm({ apiKey: key || undefined });
       let status;
       let error;
       try {
@@ -37,9 +38,9 @@ export default {
       const allowed = status >= 200 && status < 300;
       const denied = status === 401 || status === 403 || (status === 400 && tc.denyOn400 !== false);
       const ok = tc.expect === 'allow' ? allowed : denied;
-      const label = tc.name ?? `${tc.persona ?? 'anonym'} → ${tc.path ?? tc.model ?? ctx.model()}`;
+      const label = tc.name ?? `${key ?? 'anonym'} → ${tc.path ?? tc.model ?? ctx.model()}`;
       if (!ok) ctx.log('warn', `Berechtigung falsch: ${label} erwartet ${tc.expect}, erhalten ${status ?? error}`);
-      outcomes.push({ name: label, persona: tc.persona, target: tc.path ?? tc.model, expect: tc.expect, status, ok, error });
+      outcomes.push({ name: label, apiKey: key, target: tc.path ?? tc.model, expect: tc.expect, status, ok, error });
     }
     const passed = outcomes.filter((o) => o.ok).length;
     return {

@@ -1,4 +1,4 @@
-// Demo-Daten für lokale Entwicklung: Mock-Endpoints, Personas, Beispieltests und eine Suite.
+// Demo-Daten für lokale Entwicklung: API-Keys, Mock-Endpoints, Beispieltests und eine Suite.
 // Aufruf: MOCK_URL=http://localhost:4000 node tools/seed.js
 import { encrypt } from '../src/crypto.js';
 import { one, pool, query } from '../src/db.js';
@@ -9,44 +9,48 @@ const MOCK_URL = process.env.MOCK_URL ?? 'http://localhost:4000';
 
 await migrate();
 
-async function upsertEndpoint(e) {
-  const row = await one(
-    `insert into endpoints (name, kind, base_url, api_key_enc, default_model)
-     values ($1, $2, $3, $4, $5)
-     on conflict (name) do update set base_url = excluded.base_url, api_key_enc = excluded.api_key_enc,
-       default_model = excluded.default_model
-     returning *`,
-    [e.name, e.kind, e.base_url, encrypt(e.api_key), e.default_model],
-  );
-  if (e.kind !== 'mcp') await syncEndpointModels(row);
-  return row;
-}
-
-async function upsertPersona(p) {
+async function upsertKey(k) {
   return one(
-    `insert into personas (name, description, auth_type, secret_enc, attributes)
-     values ($1, $2, 'api_key', $3, $4)
+    `insert into api_keys (name, description, secret_enc, visibility, admin_only)
+     values ($1, $2, $3, 'global', $4)
      on conflict (name) do update set secret_enc = excluded.secret_enc, description = excluded.description
      returning *`,
-    [p.name, p.description, encrypt(p.secret), p.attributes ?? {}],
+    [k.name, k.description, encrypt(k.secret), k.admin_only ?? false],
   );
+}
+
+async function upsertEndpoint(e) {
+  const key = e.api_key ? await upsertKey({ name: `${e.name} Key`, description: 'Demo-Key', secret: e.api_key, admin_only: true }) : null;
+  const row = await one(
+    `insert into endpoints (name, kind, llm_flavor, base_url, api_key_id, default_model)
+     values ($1, $2, 'openai', $3, $4, $5)
+     on conflict (name) do update set base_url = excluded.base_url, api_key_id = excluded.api_key_id,
+       default_model = excluded.default_model
+     returning *`,
+    [e.name, e.kind, e.base_url, key?.id ?? null, e.default_model],
+  );
+  if (e.kind !== 'mcp') {
+    const withKey = await one(`select e.*, k.secret_enc as api_key_enc from endpoints e left join api_keys k on k.id = e.api_key_id where e.id = $1`, [row.id]);
+    await syncEndpointModels(withKey);
+  }
+  return row;
 }
 
 const gateway = await upsertEndpoint({
   name: 'LiteLLM (Mock)',
-  kind: 'litellm',
+  kind: 'ai_proxy',
   base_url: MOCK_URL,
   api_key: 'sk-admin',
   default_model: 'mock-small',
 });
 const mcpServer = await upsertEndpoint({ name: 'MCP Gateway (Mock)', kind: 'mcp', base_url: `${MOCK_URL}/mcp`, api_key: 'sk-admin' });
 // vLLM ohne Auth; das Modell heißt dort anders als im Gateway und bekommt deshalb einen Alias.
-const vllm = await upsertEndpoint({ name: 'vLLM Qwen3 (Mock)', kind: 'vllm', base_url: `${MOCK_URL}/vllm-qwen`, default_model: 'qwen3-32b' });
+const vllm = await upsertEndpoint({ name: 'vLLM Qwen3 (Mock)', kind: 'llm', base_url: `${MOCK_URL}/vllm-qwen`, default_model: 'qwen3-32b' });
 await query(`update endpoint_models set alias = 'qwen3-32b' where endpoint_id = $1 and name = 'Qwen/Qwen3-32B'`, [vllm.id]);
 
-await upsertPersona({ name: 'admin', description: 'Plattform-Admin, alle Modelle und Tools', secret: 'sk-admin' });
-await upsertPersona({ name: 'team-a', description: 'Fachbereich A, nur mock-small und Tool "search"', secret: 'sk-team-a' });
-await upsertPersona({ name: 'limited', description: 'Key mit 10 RPM', secret: 'sk-limited' });
+await upsertKey({ name: 'admin', description: 'Plattform-Admin, alle Modelle und Tools', secret: 'sk-admin', admin_only: true });
+await upsertKey({ name: 'team-a', description: 'Fachbereich A, nur mock-small und Tool "search"', secret: 'sk-team-a', admin_only: true });
+await upsertKey({ name: 'limited', description: 'Key mit 10 RPM', secret: 'sk-limited', admin_only: true });
 
 const tests = [
   { name: 'Smoke: Gateway', type: 'smoke', endpoint: gateway, config: {} },
@@ -76,11 +80,11 @@ const tests = [
     endpoint: gateway,
     config: {
       cases: [
-        { persona: 'admin', model: 'mock-large', expect: 'allow' },
-        { persona: 'team-a', model: 'mock-small', expect: 'allow' },
-        { persona: 'team-a', model: 'mock-large', expect: 'deny' },
-        { persona: 'team-a', method: 'GET', path: '/key/list', expect: 'deny' },
-        { persona: null, model: 'mock-small', expect: 'deny', name: 'Ohne Credentials' },
+        { apiKey: 'admin', model: 'mock-large', expect: 'allow' },
+        { apiKey: 'team-a', model: 'mock-small', expect: 'allow' },
+        { apiKey: 'team-a', model: 'mock-large', expect: 'deny' },
+        { apiKey: 'team-a', method: 'GET', path: '/key/list', expect: 'deny' },
+        { apiKey: null, model: 'mock-small', expect: 'deny', name: 'Ohne Credentials' },
       ],
     },
   },
@@ -89,33 +93,33 @@ const tests = [
     type: 'mcp',
     endpoint: mcpServer,
     config: {
-      personas: [
-        { persona: 'admin', expectTools: ['search', 'delete_records'] },
-        { persona: 'team-a', expectTools: ['search'], forbiddenTools: ['delete_records'] },
+      apiKeys: [
+        { apiKey: 'admin', expectTools: ['search', 'delete_records'] },
+        { apiKey: 'team-a', expectTools: ['search'], forbiddenTools: ['delete_records'] },
       ],
       calls: [
-        { persona: 'team-a', tool: 'search', arguments: { q: 'Vertrag' }, expect: 'allow', assert: [{ type: 'contains', value: 'Treffer' }] },
-        { persona: 'team-a', tool: 'delete_records', arguments: {}, expect: 'deny' },
+        { apiKey: 'team-a', tool: 'search', arguments: { q: 'Vertrag' }, expect: 'allow', assert: [{ type: 'contains', value: 'Treffer' }] },
+        { apiKey: 'team-a', tool: 'delete_records', arguments: {}, expect: 'deny' },
       ],
     },
   },
-  { name: 'Rate-Limit: 10 RPM Key', type: 'ratelimit', endpoint: gateway, persona: 'limited', config: { burst: 15, expectedLimit: 10 } },
+  { name: 'Rate-Limit: 10 RPM Key', type: 'ratelimit', endpoint: gateway, apiKey: 'limited', config: { burst: 15, expectedLimit: 10 } },
 ];
 
 const ids = [];
 for (const t of tests) {
-  const persona = t.persona ? await one('select id from personas where name = $1', [t.persona]) : null;
+  const key = t.apiKey ? await one('select id from api_keys where name = $1', [t.apiKey]) : null;
   const existing = await one('select id from test_definitions where name = $1', [t.name]);
   const row = existing
-    ? await one('update test_definitions set config = $2, endpoint_id = $3, persona_id = $4 where id = $1 returning id', [
+    ? await one('update test_definitions set config = $2, endpoint_id = $3, api_key_id = $4 where id = $1 returning id', [
         existing.id,
         t.config,
         t.endpoint.id,
-        persona?.id ?? null,
+        key?.id ?? null,
       ])
     : await one(
-        'insert into test_definitions (name, type, endpoint_id, persona_id, config) values ($1, $2, $3, $4, $5) returning id',
-        [t.name, t.type, t.endpoint.id, persona?.id ?? null, t.config],
+        'insert into test_definitions (name, type, endpoint_id, api_key_id, config) values ($1, $2, $3, $4, $5) returning id',
+        [t.name, t.type, t.endpoint.id, key?.id ?? null, t.config],
       );
   ids.push(row.id);
 }
@@ -131,5 +135,5 @@ for (const [i, id] of nightly.map(byName).entries()) {
   await query('insert into suite_tests (suite_id, test_id, position) values ($1, $2, $3)', [suite.id, id, i]);
 }
 
-console.log(`Seed fertig: ${tests.length} Tests, 1 Suite, 3 Personas`);
+console.log(`Seed fertig: ${tests.length} Tests, 1 Suite, 3 API-Keys`);
 await pool.end();

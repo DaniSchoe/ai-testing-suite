@@ -1,14 +1,34 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Pencil, PlugZap, Plus, Trash2 } from 'lucide-react';
-import { api, fmt, JsonField, Modal, useApi } from '../../lib.jsx';
+import {
+  api,
+  EnvBadge,
+  fmt,
+  JsonField,
+  KIND_META,
+  KindBadge,
+  Modal,
+  PUBLISH_LABEL,
+  TeamPicker,
+  useApi,
+  useTeams,
+  useUserDirectory,
+  VisibilityBadge,
+} from '../../lib.jsx';
 
-const KIND_LABEL = { litellm: 'LiteLLM', vllm: 'vLLM', openai: 'OpenAI-kompatibel', mcp: 'MCP-Server' };
+const FLAVORS = [
+  ['openai', 'OpenAI-compatible'],
+  ['claude', 'Claude (Anthropic Messages API)'],
+];
 
 export default function Endpoints() {
   const endpoints = useApi('/api/endpoints');
+  const teams = useTeams();
   const [editing, setEditing] = useState(null);
   const [checks, setChecks] = useState({});
+  const [discovered, setDiscovered] = useState(null);
+  const teamName = (id) => teams.data?.find((t) => t.id === id)?.name ?? '…';
 
   async function check(e) {
     setChecks((c) => ({ ...c, [e.id]: { pending: true } }));
@@ -29,9 +49,9 @@ export default function Endpoints() {
         <div>
           <h1>Endpoints</h1>
           <p>
-            LiteLLM-Gateways, vLLM-Server (einer pro Modell) und MCP-Server. Modelle werden automatisch über <code>/v1/models</code> abgefragt; gleiche
-            Modelle mit unterschiedlichen Namen führst du im <Link to="/admin/models">Modellkatalog</Link> zusammen. API-Keys werden verschlüsselt
-            gespeichert, für vLLM ohne Auth einfach leer lassen.
+            AI Proxys (z. B. LiteLLM), LLM-Endpoints (OpenAI-compatible oder Claude, z. B. ein vLLM-Server pro Modell) und MCP-Server. Modelle werden
+            automatisch abgefragt; gleiche Modelle mit unterschiedlichen Namen führst du im <Link to="/admin/models">Modellkatalog</Link> zusammen. Den
+            API-Key wählst du aus den <Link to="/admin/api-keys">API-Keys</Link>.
           </p>
         </div>
         <button className="btn primary" onClick={() => setEditing({})}>
@@ -43,10 +63,10 @@ export default function Endpoints() {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Typ</th>
+              <th>Art</th>
               <th>URL</th>
               <th>Modelle</th>
-              <th>API-Key</th>
+              <th>Veröffentlicht</th>
               <th>Verbindung</th>
               <th />
             </tr>
@@ -54,17 +74,31 @@ export default function Endpoints() {
           <tbody>
             {(endpoints.data ?? []).map((e) => {
               const c = checks[e.id];
+              const meta = KIND_META[e.kind];
               return (
                 <tr key={e.id}>
-                  <td>
-                    <div style={{ fontWeight: 600 }}>{e.name}</div>
-                    {!e.enabled && <span className="badge warn">deaktiviert</span>}
-                    {e.notes && <div className="sub">{e.notes}</div>}
+                  <td style={{ minWidth: 260 }}>
+                    <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+                      <span className="icon-chip" style={{ color: meta?.color }}>
+                        {meta && <meta.Icon size={16} />}
+                      </span>
+                      <span>
+                        <div style={{ fontWeight: 600 }}>
+                          {e.name} <EnvBadge env={e.environment} />
+                        </div>
+                        {!e.enabled && <span className="badge warn">deaktiviert</span>}
+                        <div className="sub">
+                          {e.maintainer_name ? `Maintainer: ${e.maintainer_name}` : 'Kein Maintainer'}
+                          {e.api_key_name ? ` · Key: ${e.api_key_name}` : ''}
+                        </div>
+                        {e.notes && <div className="sub">{e.notes}</div>}
+                      </span>
+                    </span>
                   </td>
                   <td>
-                    <span className="tag">{KIND_LABEL[e.kind]}</span>
+                    <KindBadge kind={e.kind} flavor={e.llm_flavor} />
                   </td>
-                  <td>
+                  <td style={{ wordBreak: 'break-all', maxWidth: 240 }}>
                     <code>{e.base_url}</code>
                   </td>
                   <td className="sub">
@@ -80,15 +114,12 @@ export default function Endpoints() {
                       </>
                     )}
                   </td>
-                  <td className="sub">{e.api_key_masked ?? '–'}</td>
+                  <td>
+                    <VisibilityBadge visibility={e.visibility} teamNames={e.teamIds.map(teamName)} />
+                  </td>
                   <td className="sub">
                     {c?.pending && 'prüfe…'}
-                    {c && !c.pending && (
-                      <>
-                        <span className={`badge ${c.ok ? 'passed' : 'failed'}`}>{c.ok ? `✓ ${c.latencyMs} ms` : '✕ Fehler'}</span>
-                        <div>{c.ok ? (c.models ?? c.tools ?? []).slice(0, 6).join(', ') : c.error?.slice(0, 80)}</div>
-                      </>
-                    )}
+                    {c && !c.pending && <TestResult result={c} />}
                   </td>
                   <td className="num">
                     <span className="btn-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
@@ -119,22 +150,79 @@ export default function Endpoints() {
       {editing && (
         <EndpointEditor
           endpoint={editing}
+          teams={teams.data ?? []}
           onClose={() => setEditing(null)}
-          onSaved={() => {
+          onSaved={(result) => {
             setEditing(null);
             endpoints.reload();
+            if (result.discovered) setDiscovered({ name: result.endpoint.name, kind: result.endpoint.kind, ...result.discovered });
           }}
         />
       )}
+      {discovered && <DiscoveredPopup info={discovered} onClose={() => setDiscovered(null)} />}
     </>
   );
 }
 
-function EndpointEditor({ endpoint, onClose, onSaved }) {
+function TestResult({ result }) {
+  const items = result.models ?? result.tools ?? [];
+  return (
+    <>
+      <span className={`badge ${result.ok ? 'passed' : 'failed'}`}>{result.ok ? `✓ ${result.latencyMs} ms` : '✕ Fehler'}</span>
+      <div>{result.ok ? `${items.length} ${result.tools ? 'Tools' : 'Modelle'}: ${items.slice(0, 6).join(', ')}${items.length > 6 ? ' …' : ''}` : result.error?.slice(0, 120)}</div>
+    </>
+  );
+}
+
+// Kurzes Popup nach dem Anlegen: wie viele und welche Modelle wurden gelesen?
+function DiscoveredPopup({ info, onClose }) {
+  const isMcp = info.kind === 'mcp';
+  return (
+    <Modal
+      title={`Endpoint ${info.name} gespeichert`}
+      onClose={onClose}
+      footer={
+        <button className="btn primary" onClick={onClose}>
+          OK
+        </button>
+      }
+    >
+      {isMcp ? (
+        <p>MCP-Server gespeichert. Die Tools werden beim Verbindungstest abgefragt.</p>
+      ) : info.skipped ? (
+        <p>Die automatische Modellabfrage ist ausgeschaltet. Es wurden keine Modelle gelesen.</p>
+      ) : info.ok ? (
+        <>
+          <p>
+            <strong>{info.models.length}</strong> {info.models.length === 1 ? 'Modell wurde' : 'Modelle wurden'} vom Endpoint gelesen:
+          </p>
+          <div className="tags" style={{ maxHeight: 220, overflow: 'auto' }}>
+            {info.models.map((m) => (
+              <span key={m} className="tag">
+                {m}
+              </span>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="error-box">Die Modelle konnten nicht gelesen werden: {info.error}</div>
+      )}
+    </Modal>
+  );
+}
+
+function EndpointEditor({ endpoint, teams, onClose, onSaved }) {
+  const keys = useApi('/api/api-keys');
+  const users = useUserDirectory();
   const [form, setForm] = useState({
     name: endpoint.name ?? '',
-    kind: endpoint.kind ?? 'litellm',
+    kind: endpoint.kind ?? 'ai_proxy',
+    llm_flavor: endpoint.llm_flavor ?? 'openai',
     base_url: endpoint.base_url ?? '',
+    api_key_id: endpoint.api_key_id ?? '',
+    maintainer_id: endpoint.maintainer_id ?? '',
+    environment: endpoint.environment ?? 'prod',
+    visibility: endpoint.visibility ?? 'global',
     manual_models: (endpoint.models ?? [])
       .filter((m) => m.source === 'manual')
       .map((m) => m.name)
@@ -144,24 +232,35 @@ function EndpointEditor({ endpoint, onClose, onSaved }) {
     enabled: endpoint.enabled ?? true,
     notes: endpoint.notes ?? '',
   });
-  const [apiKey, setApiKey] = useState(undefined); // undefined = unverändert lassen
+  const [teamIds, setTeamIds] = useState(endpoint.teamIds ?? []);
   const [headers, setHeaders] = useState(endpoint.headers ?? {});
   const [error, setError] = useState(null);
+  const [test, setTest] = useState(null);
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
+
+  async function runTest() {
+    setTest({ pending: true });
+    try {
+      setTest(await api('/api/endpoints/test', { method: 'POST', body: { ...form, api_key_id: form.api_key_id || null, headers } }));
+    } catch (e) {
+      setTest({ ok: false, error: e.message });
+    }
+  }
 
   async function save() {
     const body = {
       ...form,
+      api_key_id: form.api_key_id || null,
+      maintainer_id: form.maintainer_id || null,
+      teamIds,
       headers,
       manual_models: form.manual_models
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
-      ...(apiKey !== undefined ? { api_key: apiKey } : {}),
     };
     try {
-      await api(endpoint.id ? `/api/endpoints/${endpoint.id}` : '/api/endpoints', { method: endpoint.id ? 'PUT' : 'POST', body });
-      onSaved();
+      onSaved(await api(endpoint.id ? `/api/endpoints/${endpoint.id}` : '/api/endpoints', { method: endpoint.id ? 'PUT' : 'POST', body }));
     } catch (e) {
       setError(e.message);
     }
@@ -173,6 +272,10 @@ function EndpointEditor({ endpoint, onClose, onSaved }) {
       onClose={onClose}
       footer={
         <>
+          <button className="btn" onClick={runTest} disabled={!form.base_url}>
+            <PlugZap size={14} /> Verbindung testen
+          </button>
+          <span style={{ flex: 1 }} />
           <button className="btn" onClick={onClose}>
             Abbrechen
           </button>
@@ -183,21 +286,53 @@ function EndpointEditor({ endpoint, onClose, onSaved }) {
       }
     >
       {error && <div className="error-box">{error}</div>}
+      {test && (
+        <div className="hint" style={{ marginBottom: 12 }}>
+          {test.pending ? 'Teste Verbindung…' : <TestResult result={test} />}
+        </div>
+      )}
       <div className="form-grid">
         <label className="field">
           <span>Name</span>
           <input value={form.name} onChange={(e) => set({ name: e.target.value })} />
         </label>
         <label className="field">
-          <span>Typ</span>
-          <select value={form.kind} onChange={(e) => set({ kind: e.target.value })}>
-            {Object.entries(KIND_LABEL).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
+          <span>Maintainer</span>
+          <select value={form.maintainer_id} onChange={(e) => set({ maintainer_id: e.target.value })}>
+            <option value="">– keiner –</option>
+            {(users.data ?? []).map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
               </option>
             ))}
           </select>
         </label>
+      </div>
+      <div className="form-grid">
+        <label className="field">
+          <span>Art</span>
+          <select value={form.kind} onChange={(e) => set({ kind: e.target.value })}>
+            {Object.entries(KIND_META).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {form.kind === 'llm' ? (
+          <label className="field">
+            <span>API-Art</span>
+            <select value={form.llm_flavor} onChange={(e) => set({ llm_flavor: e.target.value })}>
+              {FLAVORS.map(([k, v]) => (
+                <option key={k} value={k}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <div />
+        )}
       </div>
       <label className="field">
         <span>Basis-URL</span>
@@ -215,31 +350,50 @@ function EndpointEditor({ endpoint, onClose, onSaved }) {
       </label>
       <label className="field">
         <span>API-Key</span>
-        <input
-          type="password"
-          autoComplete="new-password"
-          placeholder={endpoint.has_api_key ? `${endpoint.api_key_masked} (leer lassen = unverändert)` : 'sk-…'}
-          onChange={(e) => setApiKey(e.target.value)}
-        />
+        <select value={form.api_key_id} onChange={(e) => set({ api_key_id: e.target.value })}>
+          <option value="">– ohne Key (z. B. vLLM) –</option>
+          {(keys.data ?? []).map((k) => (
+            <option key={k.id} value={k.id}>
+              {k.name} ({k.masked})
+            </option>
+          ))}
+        </select>
+        <div className="hint">Keys verwaltest du unter Einstellungen › API-Keys.</div>
       </label>
+      <div className="form-grid">
+        <label className="field">
+          <span>Umgebung</span>
+          <select value={form.environment} onChange={(e) => set({ environment: e.target.value })}>
+            <option value="prod">Prod</option>
+            <option value="dev">Dev</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Veröffentlicht für</span>
+          <select value={form.visibility} onChange={(e) => set({ visibility: e.target.value })}>
+            {Object.entries(PUBLISH_LABEL).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {form.visibility === 'teams' && <TeamPicker teams={teams} value={teamIds} onChange={setTeamIds} />}
       {form.kind !== 'mcp' && (
         <>
-          <label className="checkbox" style={{ marginBottom: 14 }}>
-            <input type="checkbox" checked={form.auto_discover} onChange={(e) => set({ auto_discover: e.target.checked })} /> Modelle automatisch über
-            /v1/models abfragen (beim Speichern, beim Verbindungstest und alle 15 Minuten)
+          <label className="checkbox" style={{ margin: '12px 0' }}>
+            <input type="checkbox" checked={form.auto_discover} onChange={(e) => set({ auto_discover: e.target.checked })} /> Modelle automatisch
+            abfragen (beim Speichern, beim Verbindungstest und alle 15 Minuten)
           </label>
           <div className="form-grid">
             <label className="field">
               <span>Zusätzliche Modelle (manuell, kommagetrennt)</span>
-              <input value={form.manual_models} placeholder="nur nötig ohne /v1/models" onChange={(e) => set({ manual_models: e.target.value })} />
+              <input value={form.manual_models} placeholder="nur nötig ohne Modellliste" onChange={(e) => set({ manual_models: e.target.value })} />
             </label>
             <label className="field">
               <span>Standardmodell (Name oder Alias)</span>
-              <input
-                value={form.default_model}
-                list="endpoint-models"
-                onChange={(e) => set({ default_model: e.target.value })}
-              />
+              <input value={form.default_model} list="endpoint-models" onChange={(e) => set({ default_model: e.target.value })} />
               <datalist id="endpoint-models">
                 {(endpoint.models ?? []).map((m) => (
                   <option key={m.name} value={m.alias ?? m.name} />

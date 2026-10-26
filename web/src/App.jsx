@@ -27,16 +27,17 @@ import Schedules from './pages/Schedules.jsx';
 import History from './pages/History.jsx';
 import RunDetail from './pages/RunDetail.jsx';
 import Endpoints from './pages/admin/Endpoints.jsx';
-import Personas from './pages/admin/Personas.jsx';
+import ApiKeys from './pages/admin/ApiKeys.jsx';
 import UsersPage from './pages/admin/Users.jsx';
 import Models from './pages/admin/Models.jsx';
 import Roles from './pages/admin/Roles.jsx';
 import Teams from './pages/admin/Teams.jsx';
 
+// API-Keys sehen und pflegen alle User (eigene und Team-Keys), der Rest braucht Berechtigungen.
 const ADMIN_NAV = [
+  ['suite.view', '/admin/api-keys', KeyRound, 'API-Keys'],
   ['endpoints.manage', '/admin/endpoints', Network, 'Endpoints'],
   ['endpoints.manage', '/admin/models', Boxes, 'Modellkatalog'],
-  ['personas.manage', '/admin/personas', KeyRound, 'Test-Personas'],
   ['users.manage', '/admin/users', Users, 'Benutzer'],
   ['teams.manage', '/admin/teams', UsersRound, 'Teams'],
   ['roles.manage', '/admin/roles', ShieldCheck, 'Rollen'],
@@ -112,7 +113,7 @@ export default function App() {
           </nav>
           {adminNav.length > 0 && (
             <>
-              <div className="nav-section">Administrator</div>
+              <div className="nav-section">Einstellungen</div>
               <nav className="nav">
                 {adminNav.map(([, to, Icon, label]) => (
                   <NavLink key={to} to={to}>
@@ -174,7 +175,7 @@ export default function App() {
               <Route path="/runs/:id" element={<RunDetail />} />
               <Route path="/admin/endpoints" element={<Endpoints />} />
               <Route path="/admin/models" element={<Models />} />
-              <Route path="/admin/personas" element={<Personas />} />
+              <Route path="/admin/api-keys" element={<ApiKeys />} />
               <Route path="/admin/users" element={<UsersPage />} />
               <Route path="/admin/teams" element={<Teams />} />
               <Route path="/admin/roles" element={<Roles />} />

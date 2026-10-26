@@ -1,34 +1,36 @@
 import { check } from './assertions.js';
 
-// MCP-Tests: Verbindung, Tool-Katalog je Persona, Tool-Aufrufe und Berechtigungen.
+// MCP-Tests: Verbindung, Tool-Katalog je API-Key, Tool-Aufrufe und Berechtigungen.
 export default {
   type: 'mcp',
   label: 'MCP',
   description:
-    'Verbindet sich mit einem MCP-Server (Streamable HTTP), prüft sichtbare Tools je Persona, Tool-Aufrufe und userspezifische Freigaben.',
-  endpointKinds: ['mcp', 'litellm'],
+    'Verbindet sich mit einem MCP-Server (Streamable HTTP), prüft sichtbare Tools je API-Key, Tool-Aufrufe und Freigaben.',
+  endpointKinds: ['mcp', 'ai_proxy'],
   defaults: {
     // Pfad relativ zur Endpoint-URL; bei LiteLLM als MCP-Gateway z. B. "/mcp/".
     path: '',
-    personas: [
+    apiKeys: [
       {
-        persona: '',
+        apiKey: '',
         expectTools: [],
         forbiddenTools: [],
       },
     ],
-    calls: [{ persona: '', tool: '', arguments: {}, expect: 'allow', assert: [] }],
+    calls: [{ apiKey: '', tool: '', arguments: {}, expect: 'allow', assert: [] }],
   },
   async run(ctx) {
     const c = ctx.config;
     const checks = [];
     const toolCatalog = {};
 
-    for (const p of c.personas ?? []) {
-      const label = p.persona || ctx.persona?.name || 'Standard';
+    // "personas"/"persona" sind die alten Namen für "apiKeys"/"apiKey".
+    for (const p of c.apiKeys ?? c.personas ?? []) {
+      const key = p.apiKey ?? p.persona;
+      const label = key || ctx.apiKey?.name || 'Standard';
       const name = `Tools sichtbar für ${label}`;
       try {
-        const mcp = ctx.mcp({ persona: p.persona || undefined, path: c.path });
+        const mcp = ctx.mcp({ apiKey: key || undefined, path: c.path });
         const t0 = performance.now();
         const info = await mcp.initialize();
         const tools = (await mcp.listTools()).map((t) => t.name);
@@ -51,9 +53,10 @@ export default {
 
     for (const call of c.calls ?? []) {
       if (!call.tool) continue;
-      const label = `${call.persona || ctx.persona?.name || 'Standard'} → ${call.tool}`;
+      const callKey = call.apiKey ?? call.persona;
+      const label = `${callKey || ctx.apiKey?.name || 'Standard'} → ${call.tool}`;
       try {
-        const mcp = ctx.mcp({ persona: call.persona || undefined, path: c.path });
+        const mcp = ctx.mcp({ apiKey: callKey || undefined, path: c.path });
         await mcp.initialize();
         const t0 = performance.now();
         let result;

@@ -1,4 +1,4 @@
-// Verschlüsselung von Secrets (API-Keys, Persona-Passwörter) im Ruhezustand.
+// Verschlüsselung von Secrets (API-Keys) im Ruhezustand.
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { config } from './config.js';
 

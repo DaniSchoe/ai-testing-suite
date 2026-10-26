@@ -7,6 +7,7 @@ import { authPlugin } from './auth.js';
 import { config } from './config.js';
 import { pool } from './db.js';
 import accessRoutes from './routes/access.js';
+import apiKeyRoutes from './routes/apikeys.js';
 import adminRoutes from './routes/admin.js';
 import runRoutes from './routes/runs.js';
 import testRoutes from './routes/tests.js';
@@ -51,6 +52,7 @@ export async function buildApp() {
 
   await app.register(adminRoutes);
   await app.register(accessRoutes);
+  await app.register(apiKeyRoutes);
   await app.register(testRoutes);
   await app.register(runRoutes);
 

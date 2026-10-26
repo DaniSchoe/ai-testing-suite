@@ -95,7 +95,7 @@ export default function Tests() {
                     {canRun && <th style={{ width: 36 }} />}
                     <th>Name</th>
                     <th>Endpoint</th>
-                    <th>Persona</th>
+                    <th>API-Key</th>
                     <th>Letztes Ergebnis</th>
                     <th className="num">Score</th>
                     <th className="num">Zuletzt</th>
@@ -120,7 +120,7 @@ export default function Tests() {
                         ))}
                       </td>
                       <td>{t.endpoint_name ?? '–'}</td>
-                      <td>{t.persona_name ?? <span className="sub">Endpoint-Key</span>}</td>
+                      <td>{t.api_key_name ?? <span className="sub">Key des Endpoints</span>}</td>
                       <td>{t.last_status ? <StatusBadge status={t.last_status} /> : <span className="sub">noch nie</span>}</td>
                       <td className="num">{fmt.pct(t.last_score)}</td>
                       <td className="num sub">{fmt.ago(t.last_run_at)}</td>
@@ -169,12 +169,12 @@ export default function Tests() {
 
 function TestEditor({ test, types, onClose, onSaved }) {
   const endpoints = useApi('/api/endpoints');
-  const personas = useApi('/api/personas');
+  const apiKeys = useApi('/api/api-keys');
   const [form, setForm] = useState({
     name: test.name ?? '',
     type: test.type ?? types[0]?.type ?? 'smoke',
     endpoint_id: test.endpoint_id ?? '',
-    persona_id: test.persona_id ?? '',
+    api_key_id: test.api_key_id ?? '',
     tags: (test.tags ?? []).join(', '),
     enabled: test.enabled ?? true,
   });
@@ -256,10 +256,10 @@ function TestEditor({ test, types, onClose, onSaved }) {
           </select>
         </label>
         <label className="field">
-          <span>Ausführen als Persona</span>
-          <select value={form.persona_id ?? ''} onChange={(e) => setForm({ ...form, persona_id: e.target.value })}>
+          <span>API-Key</span>
+          <select value={form.api_key_id ?? ''} onChange={(e) => setForm({ ...form, api_key_id: e.target.value })}>
             <option value="">Key des Endpoints</option>
-            {(personas.data ?? []).map((p) => (
+            {(apiKeys.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
@@ -288,7 +288,7 @@ function TestEditor({ test, types, onClose, onSaved }) {
         label="Konfiguration (JSON)"
         value={config}
         rows={16}
-        hint="Persona-Namen in Fällen (z. B. access, mcp) beziehen sich auf die Test-Personas aus dem Admin-Bereich. Optional: timeoutS, regressionTolerance, failOnRegression."
+        hint="API-Key-Namen in Fällen (z. B. access, mcp) beziehen sich auf die API-Keys aus den Einstellungen. Optional: timeoutS, regressionTolerance, failOnRegression."
         onChange={(value, valid) => {
           setConfigValid(valid);
           if (valid) setConfig(value);

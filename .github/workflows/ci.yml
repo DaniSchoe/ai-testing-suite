@@ -60,6 +60,7 @@ jobs:
             const bad = r.results.filter((x) => x.status !== "passed").map((x) => x.type);
             if (r.results.length < 14 || bad.length !== 1 || bad[0] !== "quality") process.exit(1);'
           node tools/rbac-check.js
+          node tools/keys-check.js
       - name: Helm-Chart prüfen
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash

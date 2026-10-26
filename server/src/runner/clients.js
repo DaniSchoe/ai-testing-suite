@@ -23,12 +23,50 @@ export function avg(values) {
   return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 }
 
+const CLAUDE_STOP = { end_turn: 'stop', stop_sequence: 'stop', max_tokens: 'length', tool_use: 'tool_calls' };
+
+function claudeUsage(u = {}) {
+  const prompt = u?.input_tokens ?? u?.prompt_tokens ?? 0;
+  const completion = u?.output_tokens ?? u?.completion_tokens ?? 0;
+  return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
+}
+
+// OpenAI-Chat-Request in einen Anthropic-Messages-Request übersetzen.
+export function toClaudeRequest(body) {
+  const { model, messages = [], tools, tool_choice, max_tokens, max_completion_tokens, temperature, top_p, stop, thinking } = body;
+  const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+  const out = {
+    model,
+    max_tokens: max_tokens ?? max_completion_tokens ?? 1024,
+    messages: messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+  };
+  if (system) out.system = system;
+  if (temperature !== undefined) out.temperature = temperature;
+  if (top_p !== undefined) out.top_p = top_p;
+  if (stop) out.stop_sequences = [].concat(stop);
+  if (thinking) out.thinking = thinking;
+  if (tools?.length) {
+    out.tools = tools.map((t) => ({
+      name: t.function.name,
+      description: t.function.description,
+      input_schema: t.function.parameters ?? { type: 'object', properties: {} },
+    }));
+    if (tool_choice === 'required') out.tool_choice = { type: 'any' };
+    else if (tool_choice?.function?.name) out.tool_choice = { type: 'tool', name: tool_choice.function.name };
+    else if (tool_choice === 'auto') out.tool_choice = { type: 'auto' };
+  }
+  return out;
+}
+
 export class LlmClient {
   // baseUrl zeigt auf die OpenAI-kompatible Basis, z. B. https://litellm.example.com (ohne /v1).
-  constructor({ baseUrl, headers = {}, timeoutMs = 120_000 }) {
+  // flavor: 'openai' (Standard) oder 'claude' (Anthropic Messages API). Für Claude werden Requests und
+  // Antworten ins OpenAI-Format übersetzt, damit alle Testarten unverändert funktionieren.
+  constructor({ baseUrl, headers = {}, timeoutMs = 120_000, flavor = 'openai' }) {
     this.baseUrl = baseUrl;
     this.headers = headers;
     this.timeoutMs = timeoutMs;
+    this.flavor = flavor;
   }
 
   async request(method, path, body, extraHeaders = {}) {
@@ -49,13 +87,14 @@ export class LlmClient {
   }
 
   async models() {
-    const res = await this.request('GET', '/v1/models');
+    const res = await this.request('GET', this.flavor === 'claude' ? '/v1/models?limit=1000' : '/v1/models');
     if (!res.ok) throw new HttpError(res.status, res.text);
     return (res.json?.data ?? []).map((m) => m.id);
   }
 
   async chat(body, extraHeaders) {
     const started = performance.now();
+    if (this.flavor === 'claude') return this.claudeChat(body, extraHeaders, started);
     const res = await this.request('POST', '/v1/chat/completions', { ...body, stream: false }, extraHeaders);
     const latencyMs = performance.now() - started;
     if (!res.ok) throw new HttpError(res.status, res.text);
@@ -77,13 +116,34 @@ export class LlmClient {
     };
   }
 
+  async claudeChat(body, extraHeaders, started) {
+    const res = await this.request('POST', '/v1/messages', toClaudeRequest(body), extraHeaders);
+    const latencyMs = performance.now() - started;
+    if (!res.ok) throw new HttpError(res.status, res.text);
+    const blocks = res.json?.content ?? [];
+    return {
+      latencyMs,
+      content: blocks.filter((b) => b.type === 'text').map((b) => b.text).join(''),
+      reasoning: blocks.filter((b) => b.type === 'thinking').map((b) => b.thinking).join('\n'),
+      reasoningTokens: null,
+      toolCalls: blocks
+        .filter((b) => b.type === 'tool_use')
+        .map((b) => ({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } })),
+      finishReason: CLAUDE_STOP[res.json?.stop_reason] ?? res.json?.stop_reason,
+      usage: claudeUsage(res.json?.usage),
+      headers: res.headers,
+      raw: res.json,
+    };
+  }
+
   // Streaming-Request mit Messung von Time-to-first-Token und Token-Durchsatz.
   async chatStream(body, extraHeaders = {}) {
     const started = performance.now();
-    const res = await fetch(joinUrl(this.baseUrl, '/v1/chat/completions'), {
+    const claude = this.flavor === 'claude';
+    const res = await fetch(joinUrl(this.baseUrl, claude ? '/v1/messages' : '/v1/chat/completions'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...this.headers, ...extraHeaders },
-      body: JSON.stringify({ ...body, stream: true, stream_options: { include_usage: true } }),
+      body: JSON.stringify(claude ? { ...toClaudeRequest(body), stream: true } : { ...body, stream: true, stream_options: { include_usage: true } }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) throw new HttpError(res.status, await res.text());
@@ -109,8 +169,16 @@ export class LlmClient {
         } catch {
           continue;
         }
-        if (evt.usage) usage = evt.usage;
-        const delta = evt.choices?.[0]?.delta?.content;
+        let delta;
+        if (claude) {
+          // message_start liefert die Eingabe-Tokens, message_delta die Ausgabe-Tokens, Text kommt als text_delta.
+          if (evt.type === 'message_start') usage = claudeUsage(evt.message?.usage);
+          if (evt.type === 'message_delta') usage = claudeUsage({ ...usage, input_tokens: usage?.prompt_tokens, ...evt.usage });
+          if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') delta = evt.delta.text;
+        } else {
+          if (evt.usage) usage = evt.usage;
+          delta = evt.choices?.[0]?.delta?.content;
+        }
         if (delta) {
           if (ttftMs === null) ttftMs = performance.now() - started;
           content += delta;
