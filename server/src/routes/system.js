@@ -13,7 +13,7 @@ export default async function systemRoutes(app) {
     const page = Math.max(1, Number(q.page ?? 1));
     const pageSize = Math.min(Math.max(Number(q.pageSize ?? 50), 1), 200);
     const params = [q.tenant_id || null, q.action ? `${q.action}%` : null, q.q ? `%${q.q}%` : null];
-    const where = `($1::uuid is null or l.tenant_id = $1) and ($2::text is null or l.action like $2) and ($3::text is null or l.user_name ilike $3 or l.object_id ilike $3 or l.details::text ilike $3)`;
+    const where = `($1::uuid is null or l.tenant_id = $1) and ($2::text is null or l.action like $2) and ($3::text is null or l.action ilike $3 or l.user_name ilike $3 or l.object_id ilike $3 or l.details::text ilike $3)`;
     const [{ total }] = await many(`select count(*)::int as total from audit_log l where ${where}`, params);
     const rows = await many(`select l.*, t.name as tenant_name from audit_log l left join tenants t on t.id = l.tenant_id where ${where} order by l.ts desc limit ${pageSize} offset ${(page - 1) * pageSize}`, params);
     return { total, page, pageSize, rows };

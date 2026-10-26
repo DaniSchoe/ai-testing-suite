@@ -115,9 +115,9 @@ export async function recordFindings({ tenantId, run, atom, details, outcome }) 
     if (existing) {
       const reopen = ['fixed', 'closed'].includes(existing.status);
       await query(
-        `update findings set occurrences = occurrences + 1, last_seen_at = now(), last_run_id = $2, evidence = $3, updated_at = now(),
+        `update findings set occurrences = occurrences + 1, last_seen_at = now(), last_run_id = $2, evidence = $3, updated_at = now(), audit_id = coalesce($5, audit_id),
            status = case when $4 then 'open' else status end where id = $1`,
-        [existing.id, run.id, JSON.stringify(evidence), reopen],
+        [existing.id, run.id, JSON.stringify(evidence), reopen, run.audit_id ?? null],
       );
       if (reopen) await query(`insert into finding_events (finding_id, kind, data) values ($1, 'reopened', $2)`, [existing.id, JSON.stringify({ run_id: run.id })]);
     } else {

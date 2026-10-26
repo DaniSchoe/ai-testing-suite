@@ -14,7 +14,7 @@ const tenant = await one(`select id from tenants where key = 'default'`);
 async function upsertKey(k) {
   return one(
     `insert into api_keys (tenant_id, name, description, secret_enc, visibility, admin_only) values ($1, $2, $3, $4, 'global', $5)
-     on conflict (tenant_id, name) do update set secret_enc = excluded.secret_enc, description = excluded.description returning *`,
+     on conflict (tenant_id, name) do update set secret_enc = excluded.secret_enc, description = excluded.description, admin_only = excluded.admin_only returning *`,
     [tenant.id, k.name, k.description, encrypt(k.secret), k.admin_only ?? false],
   );
 }
@@ -41,9 +41,9 @@ async function upsertEndpoint(platform, e) {
   return row;
 }
 
-await upsertKey({ name: 'admin', description: 'Plattform-Admin, alle Modelle und Tools', secret: 'sk-admin', admin_only: true });
-await upsertKey({ name: 'team-a', description: 'Fachbereich A, nur mock-small und Tool "search"', secret: 'sk-team-a', admin_only: true });
-await upsertKey({ name: 'limited', description: 'Key mit 10 RPM', secret: 'sk-limited', admin_only: true });
+await upsertKey({ name: 'admin', description: 'Plattform-Admin, alle Modelle und Tools', secret: 'sk-admin' });
+await upsertKey({ name: 'team-a', description: 'Fachbereich A, nur mock-small und Tool "search"', secret: 'sk-team-a' });
+await upsertKey({ name: 'limited', description: 'Key mit 10 RPM', secret: 'sk-limited' });
 
 const platforms = {};
 for (const env of ['dev', 'prod']) {

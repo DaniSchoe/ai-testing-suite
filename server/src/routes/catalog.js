@@ -531,11 +531,11 @@ export default async function catalogRoutes(app) {
     const tpl = doc.template ?? {};
     if (!tpl.name || !tpl.type) throw bad('Vorlage: name und type sind Pflicht');
     const spec0 = structuredClone(doc.spec ?? {});
-    if (spec0.dataset) {
-      const m = datasetMap.get(`${spec0.dataset.key}@${spec0.dataset.version}`) ?? datasetMap.get(spec0.dataset.key);
-      if (m) spec0.dataset = m;
-    }
+    // Eben importierte Datensätze liegen noch in der Transaktion und sind für die Prüfung außerhalb nicht sichtbar.
+    const mapped = spec0.dataset ? (datasetMap.get(`${spec0.dataset.key}@${spec0.dataset.version}`) ?? datasetMap.get(spec0.dataset.key)) : null;
+    if (mapped) delete spec0.dataset;
     const spec = await validateSpec(user, tpl.type, spec0);
+    if (mapped) spec.dataset = mapped;
     const catRows = [];
     for (const cat of tpl.categories ?? []) {
       let row = (await c.query('select id from categories where framework = $1 and key = $2 and (tenant_id = $3 or tenant_id is null) order by tenant_id nulls last limit 1', [cat.framework, cat.key, user.tenant_id])).rows[0];
