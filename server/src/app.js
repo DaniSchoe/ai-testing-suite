@@ -35,6 +35,7 @@ export async function buildApp() {
 
   // Probes für Kubernetes
   app.get('/healthz', async () => ({ ok: true }));
+  app.get('/api/version', async () => ({ version: config.appVersion }));
   app.get('/readyz', async (request, reply) => {
     try {
       await pool.query('select 1');
@@ -49,7 +50,7 @@ export async function buildApp() {
   app.get('/api/me', async (request, reply) => {
     if (!request.user) return reply.code(401).send({ error: 'Nicht angemeldet', loginUrl: '/auth/login' });
     const { id, username, email, display_name, roles, teams, permissions, is_admin, env_admin, disabled } = request.user;
-    return { id, username, email, display_name, roles, teams, permissions, is_admin, env_admin, disabled, authMode: config.auth.mode };
+    return { id, username, email, display_name, roles, teams, permissions, is_admin, env_admin, disabled, authMode: config.auth.mode, version: config.appVersion };
   });
 
   await app.register(adminRoutes);

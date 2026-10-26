@@ -27,6 +27,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "suite.env" -}}
 - name: PUBLIC_URL
   value: {{ .Values.publicUrl | quote }}
+- name: APP_VERSION
+  value: {{ .Values.appVersion | default .Chart.AppVersion | quote }}
 - name: LOG_LEVEL
   value: {{ .Values.logLevel | quote }}
 - name: AUTH_MODE

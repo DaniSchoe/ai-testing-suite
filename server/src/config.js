@@ -10,6 +10,8 @@ function required(name, fallback) {
 const authMode = env.AUTH_MODE ?? 'oidc'; // 'oidc' oder 'dev' (lokal ohne Keycloak)
 
 export const config = {
+  // Angezeigte Version der Anwendung, gesetzt über APP_VERSION (Helm: appVersion).
+  appVersion: env.APP_VERSION?.trim() || 'dev',
   port: Number(env.PORT ?? 8080),
   host: env.HOST ?? '0.0.0.0',
   publicUrl: (env.PUBLIC_URL ?? 'http://localhost:8080').replace(/\/$/, ''),

@@ -108,6 +108,7 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
 |---|---|
 | `DATABASE_URL` | Postgres-Verbindung |
 | `APP_SECRET` | Schlüssel für Session-Cookies und Secret-Verschlüsselung (mind. 32 Zeichen) |
+| `APP_VERSION` | Version, die oben rechts in der Oberfläche steht (Helm: `appVersion`, Standard aus dem Chart; ohne Wert `dev`) |
 | `PUBLIC_URL` | Öffentliche URL, z. B. `https://ai-testing.example.com` |
 | `AUTH_MODE` | `oidc` (Standard) oder `dev` (lokal ohne Keycloak) |
 | `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Login-Client |

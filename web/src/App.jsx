@@ -174,6 +174,7 @@ export default function App() {
               <input type="search" placeholder="Tests, Modelle und Endpoints durchsuchen…" value={query} onChange={(e) => setQuery(e.target.value)} />
             </form>
             <div className="spacer" />
+            <span className="app-version" title="Version der Anwendung">v{user.version}</span>
           </header>
           <main className="content">
             <Routes>

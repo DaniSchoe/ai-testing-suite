@@ -1049,3 +1049,10 @@ details > summary {
 .kv dt { color: var(--text-2); }
 .kv dd { margin: 0; font-weight: 600; }
 @media (max-width: 900px) { .arch-arrow { transform: rotate(90deg); width: 100%; } }
+
+.app-version {
+  font-size: 11px;
+  color: var(--text-3, var(--text-2));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
