@@ -9,7 +9,7 @@
     "migrate": "node src/migrate.js",
     "dev": "node --watch src/server.js",
     "mock": "node tools/mock-llm.js",
-    "test": "node --test --test-force-exit test/*.test.js"
+    "test": "APP_SECRET=${APP_SECRET:-0123456789abcdef0123456789abcdef0123} DATABASE_URL=${DATABASE_URL:-postgres://suite:suite@localhost:5432/unused} AUTH_MODE=${AUTH_MODE:-dev} node --test --test-force-exit test/*.test.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

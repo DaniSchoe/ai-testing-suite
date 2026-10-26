@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { check, normalizeAnswer, toNumber } from '../src/testtypes/assertions.js';
+import { check, matchTypedField, normalizeAnswer, toIsoDate, toNumber } from '../src/testtypes/assertions.js';
 import { CODING_TASKS, extractCode, runSandboxed } from '../src/testtypes/coding.js';
 import { LOAD_PROMPTS, pickPrompt } from '../src/testtypes/load.js';
-import { OCR_DOCUMENTS } from '../src/testtypes/ocr.js';
+import { buildPrompt, extractJson, scoreFields } from '../src/testtypes/ocr.js';
 import { QUALITY_CASES } from '../src/testtypes/quality.js';
 import { briefResult } from '../src/analysisBrief.js';
 import { toClaudeRequest } from '../src/runner/clients.js';
@@ -30,21 +30,34 @@ test('Qualität: fünf Fragen, Schwierigkeit 1 bis 5', () => {
   assert.ok(QUALITY_CASES.every((c) => c.assert[0].type === 'answer'));
 });
 
-test('JSON-Felder prüfen (Zahl, Wahrheitswert, Stichwörter)', async () => {
-  const doc = OCR_DOCUMENTS[0];
-  const good = '```json\n{"rechnungsbetrag": "270,55 €", "stueckzahl": 45, "summe_7_prozent": 84.45, "teuerste_position": "Druckerpatrone schwarz"}\n```';
-  const r = await check({ type: 'json_match', expect: doc.expect }, good);
-  assert.equal(r.ok, true);
-  const bad = await check({ type: 'json_match', expect: doc.expect }, good.replace('45,', '44,'));
-  assert.deepEqual(bad.fields.filter((f) => !f.ok).map((f) => f.field), ['stueckzahl']);
-  const report = OCR_DOCUMENTS[1];
-  const ok = await check(
-    { type: 'json_match', expect: report.expect },
-    '{"unterschriften_vorhanden": "ja", "anzahl_unterschriften": 2, "handschriftlicher_hinweis": "Bremsleitung vorne links nach 500 km prüfen"}',
-  );
-  assert.equal(ok.ok, true);
-  assert.equal((await check({ type: 'json_match', expect: report.expect }, 'kein json')).ok, false);
+test('OCR: typisierte Felder (Zahl mit Toleranz, Datum, IBAN, Wahrheitswert, Stichwörter)', () => {
+  assert.equal(matchTypedField({ type: 'number', value: 270.55 }, '270,55 €'), true);
+  assert.equal(matchTypedField({ type: 'number', value: 270.55, tolerance: 1 }, 271), true);
+  assert.equal(matchTypedField({ type: 'number', value: 270.55 }, 271), false);
+  assert.equal(matchTypedField({ type: 'date', value: '2026-10-12' }, '12.10.2026'), true);
+  assert.equal(matchTypedField({ type: 'date', value: '2026-10-12' }, '12. Oktober 2026'), true);
+  assert.equal(matchTypedField({ type: 'iban', value: 'DE89 3704 0044 0532 0130 00' }, 'de89370400440532013000'), true);
+  assert.equal(matchTypedField({ type: 'bool', value: true }, 'ja'), true);
+  assert.equal(matchTypedField({ type: 'bool', value: false }, 'ja'), false);
+  assert.equal(matchTypedField({ type: 'keywords', value: 'x', keywords: ['brems', 'links'], min: 2 }, 'Bremsleitung links prüfen'), true);
+  assert.equal(matchTypedField({ type: 'exact', value: 'Müller GmbH' }, ' müller gmbh '), true);
+  assert.equal(matchTypedField({ type: 'exact', value: 'a' }, null), false);
+  assert.equal(toIsoDate('1.2.26'), '2026-02-01');
   assert.equal(toNumber('1.234,50 €'), 1234.5);
+});
+
+test('OCR: Prompt aus der Ground Truth, Score mit Feldgewichten', () => {
+  const doc = { prompt: 'Rechnung.', fields: { betrag: { type: 'number', value: 10 }, ok: { type: 'bool', value: true }, iban: { type: 'iban', value: 'DE89370400440532013000' } } };
+  const prompt = buildPrompt('Extrahiere.', doc);
+  assert.match(prompt, /"betrag": <Zahl>/);
+  assert.match(prompt, /JSON-Objekt/);
+  const parsed = extractJson('Hier:\n```json\n{"betrag": "10,00", "ok": false, "iban": "DE89 3704 0044 0532 0130 00"}\n```');
+  const flat = scoreFields(doc, parsed);
+  assert.deepEqual(flat.fields.filter((f) => !f.ok).map((f) => f.field), ['ok']);
+  assert.ok(Math.abs(flat.score - 2 / 3) < 1e-9);
+  assert.ok(scoreFields(doc, parsed, { ok: 0.5 }).score > flat.score, 'weniger Gewicht auf das falsche Feld erhöht den Score');
+  assert.equal(scoreFields(doc, null).score, 0, 'ungültiges JSON: alle Felder falsch');
+  assert.equal(extractJson('kein json'), null);
 });
 
 test('Lastprompts: Mischung nach Schwierigkeit, alle Stufen vorhanden', () => {
