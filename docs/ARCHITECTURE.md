@@ -94,14 +94,14 @@ Neue Typen werden in `testtypes/index.js` registriert und erscheinen automatisch
 |---|---|---|
 | `smoke` | Erreichbarkeit, `/v1/models`, Mini-Request je Modell | gesunde Modelle |
 | `performance` | Streaming mit fester Parallelität | TTFT p50/p95, Latenz p95, Tokens/s, Fehlerquote |
-| `load` | Stufen mit steigender Parallelität (Ramp-up) | req/s, Tokens/s, Fehlerquote und p95 je Stufe |
-| `quality` | Datensatz mit Regeln: contains, regex, JSON, Länge, PII, LLM-as-a-Judge | Score (Anteil bestandener Fälle) |
-| `comparison` | gleicher Datensatz gegen mehrere Modelle oder Endpoints (`targets`, z. B. LiteLLM vs. vLLM direkt) | Ranking nach Score und Latenz, Gateway-Overhead |
+| `load` | Stufen mit steigender Parallelität (Ramp-up); jede Anfrage zieht einen anderen Prompt aus einem Pool (leicht/mittel/schwer, Mischung `mix`) mit Zufallspräfix gegen Prefix-Caches | req/s, Tokens/s, Fehlerquote, p95 je Stufe und Schwierigkeit, gedrosselte Anfragen (429) |
+| `quality` | fünf Fragen von leicht bis extrem schwer (Logik, Textaufgabe, Code lesen, Wahrscheinlichkeit, Kombinatorik); Schlusszeile „Antwort: …“; Score nach Stufe gewichtet. Eigene Datensätze mit Regeln: contains, regex, JSON, Länge, PII, LLM-as-a-Judge | Score, höchste gelöste Stufe |
+| `coding` | zwei JavaScript-Aufgaben (einfach, komplex); der Code läuft in einem isolierten Kindprozess (`sandbox-runner.mjs`, Node-Berechtigungsmodell ohne Dateisystem/Kindprozesse, leerer vm-Kontext, leere Umgebung) gegen vorbereitete Tests | Score (komplexe Aufgabe zählt doppelt), Tests je Aufgabe |
+| `ocr` | zwei Dokumente als Bild (`server/fixtures/ocr`, erzeugt mit `tools/generate-ocr-docs.py`): Rechnung (Positionen aggregieren) und Prüfbericht mit Handschrift und zwei Unterschriften; Vision-Modell nötig | Score = Anteil richtig gelesener Felder |
 | `thinking` | dieselben Aufgaben mit und ohne Reasoning (Varianten frei konfigurierbar) | Genauigkeit, Ø Tokens und Reasoning-Tokens, Latenz, Tokens je richtige Antwort, Schlüssigkeit per Judge, Genauigkeitsgewinn pro 1.000 Zusatz-Tokens |
 | `security` | Prompt Injection, Jailbreak, schädliche Anfragen, DLP auf Ein- und Ausgabe | Pass-Rate je Kategorie, vom Gateway geblockt |
 | `access` | API-Key X darf Modell/Route Y (nicht) nutzen | falsch erlaubt, falsch verweigert |
 | `mcp` | Tool-Katalog je API-Key, Tool-Aufrufe, verbotene Tools | geleakte Tools, Checks |
-| `ratelimit` | Burst gegen RPM/TPM-Limits (Virtual Keys, Teams) | erfolgreich vs. 429 |
 | `structured` | Function Calling und JSON-Ausgaben | korrekt aufgerufene Tools |
 
 **Regression** ist kein eigener Typ, sondern läuft bei jedem Ergebnis mit: Kennzahlen werden mit der
@@ -138,15 +138,25 @@ letzten bestandenen Ausführung derselben Testdefinition verglichen (Standardtol
 | `runs` | ein Lauf: Art, Auslöser, User, Status, Zähler |
 | `results` | ein Ergebnis pro Test und Lauf: Status, Score, Kennzahlen, Details. Name, Typ, Endpoint und Modell sind denormalisiert, damit die Historie stabil bleibt. |
 | `run_logs` | Logzeilen pro Lauf bzw. Ergebnis |
+| `app_settings` | Einstellungen der Anwendung, z. B. `analysis_model` (Endpoint und Modell für die KI-Analyse) |
+
+## KI-Analyse
+
+Nach jedem Lauf erzeugt das im Modellkatalog festgelegte Modell (`app_settings.analysis_model`, Endpoint-eigener
+Key) eine Analyse: Bewertung, Einordnung der Ergebnisse (Schwellen, Baseline, Schwierigkeitsstufen) und
+Empfehlungen. Der Worker schickt dafür eine verkürzte Fassung der Ergebnisse (`analysisBrief.js`) und speichert
+den Text in `runs.analysis` (`analysis_status`: pending, done, error, skipped). Ein Fehler dabei lässt den Lauf
+nie scheitern; `POST /api/runs/:id/analysis` erzeugt die Analyse neu.
 
 ## Test-Builder
 
 Ein Test (`tests`) bündelt beliebig viele Testarten für einen Endpoint. Beim Speichern erzeugt
 `syncAtoms` je Testart und Modell einen Einzeltest (`test_definitions`), abhängig vom `modelMode` der
 Testart: `each` (ein Test je Modell, z. B. Performance), `list` (Modellliste in der Konfiguration, z. B.
-Smoke, Vergleich), `first` (erstes Modell, z. B. Zugriff) oder `none` (MCP). Ein Lauf vom Typ `build`
+Smoke), `first` (erstes Modell, z. B. Zugriff) oder `none` (MCP). Ein Lauf vom Typ `build`
 führt alle Einzeltests des Tests aus. Zeitpläne eines Tests sind Cron-Ausdrücke oder ein einmaliger
-Zeitpunkt (pg-boss `startAfter`); `/api/calendar` liefert daraus die kommenden Termine und die bisherigen
+Zeitpunkt (pg-boss `startAfter`); die Zusammenfassung im Editor nennt nur Anzahl und geschätzte Laufzeit
+(Median früherer Ausführungen der Testart, sonst Richtwerte; `POST /api/builds/preview`); `/api/calendar` liefert daraus die kommenden Termine und die bisherigen
 Läufe. Sichtbar ist ein Test für Ersteller, Maintainer und Administratoren, nach dem Veröffentlichen
 zusätzlich für die gewählten Teams oder alle. Im Marketplace führen andere User veröffentlichte Tests aus;
 ist `requires_api_key` gesetzt, wählen sie einen eigenen Key (`runs.api_key_id`), der vor dem Key des Tests

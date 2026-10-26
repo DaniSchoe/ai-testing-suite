@@ -3,16 +3,16 @@ import smoke from './smoke.js';
 import performance from './performance.js';
 import load from './load.js';
 import quality from './quality.js';
-import comparison from './comparison.js';
+import coding from './coding.js';
+import ocr from './ocr.js';
 import security from './security.js';
 import access from './access.js';
 import mcp from './mcp.js';
-import ratelimit from './ratelimit.js';
 import structured from './structured.js';
 import thinking from './thinking.js';
 
 export const testTypes = Object.fromEntries(
-  [smoke, performance, load, quality, comparison, security, access, mcp, ratelimit, structured, thinking].map((t) => [t.type, t]),
+  [smoke, performance, load, quality, coding, ocr, security, access, mcp, structured, thinking].map((t) => [t.type, t]),
 );
 
 export function describeTypes() {

@@ -127,10 +127,11 @@ export const TYPE_LABELS = {
   performance: 'Performance',
   load: 'Last',
   quality: 'Qualität',
+  coding: 'Coding',
+  ocr: 'OCR',
   security: 'Security / DLP',
   access: 'Zugriff',
   mcp: 'MCP',
-  ratelimit: 'Rate-Limits',
   structured: 'Tool-Calling / JSON',
   thinking: 'Thinking vs. Non-Thinking',
 };

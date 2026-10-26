@@ -1,8 +1,8 @@
 # AI Testing Suite
 
 Cloud-native Testing Suite für KI-Plattformen auf Kubernetes: LiteLLM-Gateway, vLLM-Server und
-MCP-Server. Prüft Performance, Last, Qualität, Modellvergleiche, Security/DLP, Berechtigungen,
-MCP-Freigaben, Rate-Limits und Tool-Calling, protokolliert jeden Lauf und zeigt die historische
+MCP-Server. Prüft Performance, Last, Qualität, Coding, OCR, Security/DLP, Berechtigungen,
+MCP-Freigaben und Tool-Calling, protokolliert jeden Lauf und zeigt die historische
 Entwicklung im Dashboard.
 
 - **Node.js** (Fastify) und **PostgreSQL**, Job-Queue und Zeitpläne ebenfalls in Postgres (pg-boss)
@@ -15,7 +15,9 @@ Entwicklung im Dashboard.
 - **Test-Builder**: ein Test kombiniert beliebige Testarten mit Endpoint, mehreren Modellen und API-Key und läuft sofort, einmalig geplant oder regelmäßig; Veröffentlichung für dich, Teams oder alle
 - **Marketplace**: Tests entdecken (Filter nach Testart, privat/öffentlich, Sortierung, Namenssuche), Detailseite, Merkliste; Herausgeber können verlangen, dass andere mit ihrem eigenen API-Key ausführen
 - **Zeitpläne** als Kalender mit geplanten und bisherigen Läufen
-- Dashboard **global, pro Team oder nutzerspezifisch** mit Filter für Modelle und Endpoints (Standard nur Prod, Dev gezielt für Administratoren, Mehrfachauswahl wird summiert), Gauge für Genauigkeit/Qualität, Lastdiagramm (Antwortzeit × parallele Anfragen) und Netzdiagramm; Modelldetailseite als Beta-Platzhalter
+- Dashboard **global, pro Team oder nutzerspezifisch** mit Filter für Modelle und Endpoints (Standard nur Prod, Dev gezielt für Administratoren, Mehrfachauswahl wird summiert), Gauge für Genauigkeit/Qualität, Lastdiagramm (Antwortzeit × parallele Anfragen) und Netzdiagramm je Modell, Detailtabelle zum Modellprofil und Kacheln für das jeweils beste Modell; Modelldetailseite als Beta-Platzhalter
+- **Historie**: Testläufe als aufklappbare Bündel mit bestanden/fehlgeschlagen, Filter nach Team, Endpoint und Modell (vom Dashboard übernommen)
+- **KI-Analyse** nach jedem Lauf (Modell im Modellkatalog wählbar), Testarten Qualität (fünf Stufen), Coding und OCR (Rechnung und Prüfbericht als Bild)
 - **Hell-, Dunkel- und System-Modus**
 - **Helm-Chart** für Kubernetes
 
@@ -149,15 +151,9 @@ Thinking-Test für ein Qwen3-Modell auf vLLM; für gpt-oss oder über LiteLLM st
 }
 ```
 
-Vergleich desselben Modells über LiteLLM und direkt am vLLM-Endpunkt (Aliase aus dem Modellkatalog):
-
-```json
-{
-  "targets": [
-    { "endpoint": "LiteLLM", "model": "qwen3-32b" },
-    { "endpoint": "vLLM Qwen3", "model": "qwen3-32b" }
-  ]
-}
-```
+Qualität, Coding und OCR bringen eigene Standardaufgaben mit (`cases`, `tasks`, `documents`); eine leere Konfiguration
+nutzt immer den aktuellen Standard des Servers. Der OCR-Test braucht ein Modell mit Bildverarbeitung, die
+Dokumente liegen in `server/fixtures/ocr` und lassen sich mit `python3 tools/generate-ocr-docs.py` neu erzeugen.
+Der Lasttest zieht pro Anfrage einen Prompt aus `prompts` (Schwierigkeit `leicht`, `mittel`, `schwer`, Mischung über `mix`).
 
 Allgemeine Optionen für jeden Test: `timeoutS`, `regressionTolerance` (Standard 0.2), `failOnRegression`.

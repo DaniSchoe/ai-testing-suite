@@ -51,6 +51,14 @@ function TagInput({ value, onChange }) {
   );
 }
 
+// Laufzeit als "ca. 3 Min." bzw. "ca. 1 Std. 20 Min."
+function formatDuration(ms) {
+  const minutes = Math.max(1, Math.round(ms / 60000));
+  if (minutes < 60) return `ca. ${minutes} Min.`;
+  const h = Math.floor(minutes / 60);
+  return `ca. ${h} Std.${minutes % 60 ? ` ${minutes % 60} Min.` : ''}`;
+}
+
 export default function TestEditor() {
   const { id } = useParams();
   const user = useUser();
@@ -64,7 +72,7 @@ export default function TestEditor() {
   const [form, setForm] = useState(null);
   const [expert, setExpert] = useState(false);
   const [error, setError] = useState(null);
-  const [preview, setPreview] = useState([]);
+  const [preview, setPreview] = useState(null);
   const [saving, setSaving] = useState(false);
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
 
@@ -116,14 +124,16 @@ export default function TestEditor() {
   }, [endpoint, form?.models]);
   const compatible = (t) => !endpoint || t.endpointKinds.includes(endpoint.kind);
   const typeList = types.data ?? [];
+  const defaultsOf = (type) => {
+    const { model, ...rest } = typeList.find((x) => x.type === type)?.defaults ?? {};
+    return rest;
+  };
 
   function toggleType(t) {
     const has = form.types.includes(t.type);
     const configs = { ...form.configs };
-    if (!has && !configs[t.type]) {
-      const { model, ...rest } = t.defaults ?? {};
-      configs[t.type] = rest;
-    }
+    // Leere Konfiguration = Standardwerte des Servers; so greifen spätere Verbesserungen der Standards auch in bestehenden Tests.
+    if (!has && !configs[t.type]) configs[t.type] = {};
     set({ types: has ? form.types.filter((x) => x !== t.type) : [...form.types, t.type], configs });
   }
 
@@ -155,11 +165,11 @@ export default function TestEditor() {
   const previewKey = form && JSON.stringify([form.name, form.endpoint_id, form.types, form.models, form.configs]);
   useEffect(() => {
     if (!form || !form.endpoint_id || form.types.length === 0) {
-      setPreview([]);
+      setPreview(null);
       return undefined;
     }
     const t = setTimeout(() => {
-      api('/api/builds/preview', { method: 'POST', body }).then(setPreview).catch(() => setPreview([]));
+      api('/api/builds/preview', { method: 'POST', body }).then(setPreview).catch(() => setPreview(null));
     }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -314,7 +324,7 @@ export default function TestEditor() {
                 <JsonField
                   key={t}
                   label={`Konfiguration ${TYPE_LABELS[t] ?? t}`}
-                  value={form.configs[t] ?? {}}
+                  value={Object.keys(form.configs[t] ?? {}).length ? form.configs[t] : defaultsOf(t)}
                   rows={12}
                   hint="Das Modell kommt aus der Modellauswahl. Optional: timeoutS, regressionTolerance, failOnRegression."
                   onChange={(v, ok) => ok && set({ configs: { ...form.configs, [t]: v } })}
@@ -366,19 +376,26 @@ export default function TestEditor() {
 
         <div className="builder-side">
           <Card title="Zusammenfassung">
-            {preview.length === 0 ? (
+            {!preview ? (
               <div className="sub">Wähle Endpoint und mindestens eine Testart.</div>
             ) : (
-              <>
-                <div className="sub" style={{ marginBottom: 8 }}>
-                  Beim Ausführen entstehen {preview.length} Einzeltests:
+              <dl className="summary-list">
+                <div>
+                  <dt>Einzeltests</dt>
+                  <dd>{preview.count}</dd>
                 </div>
-                <ul className="steps" style={{ fontSize: 13 }}>
-                  {preview.map((p) => (
-                    <li key={p.name}>{p.name}</li>
-                  ))}
-                </ul>
-              </>
+                <div>
+                  <dt>Geschätzte Laufzeit</dt>
+                  <dd>{formatDuration(preview.estimate_ms)}</dd>
+                </div>
+                <div className="hint">
+                  {{
+                    history: 'Basiert auf der Dauer früherer Ausführungen.',
+                    mixed: 'Teils aus früheren Ausführungen, teils geschätzt (noch keine Historie).',
+                    estimate: 'Grobe Schätzung, solange es noch keine Historie gibt.',
+                  }[preview.basis]}
+                </div>
+              </dl>
             )}
             <div className="btn-row" style={{ marginTop: 16 }}>
               <button className="btn primary" onClick={save} disabled={saving}>

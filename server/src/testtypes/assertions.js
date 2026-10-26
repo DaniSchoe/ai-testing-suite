@@ -1,4 +1,4 @@
-// Prüfregeln für Modellantworten, gemeinsam genutzt von Quality-, Vergleichs- und Security-Tests.
+// Prüfregeln für Modellantworten, gemeinsam genutzt von Quality-, Coding-, OCR- und Security-Tests.
 
 export const PII_PATTERNS = {
   email: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i,
@@ -18,6 +18,46 @@ export function looksLikeRefusal(text) {
   return REFUSAL.test(text ?? '');
 }
 
+// Antwort für den Vergleich vereinfachen: Markdown, Leerzeichen, Tausenderpunkte und Schlusspunkt entfernen.
+export function normalizeAnswer(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[*`_\s]/g, '')
+    .replace(/(?<=\d)[.'](?=\d{3}(?:\D|$))/g, '')
+    .replace(/[.!]$/, '');
+}
+
+// Zahl aus einer Antwort lesen: "270,55 €", "1.234,50" und 45 werden erkannt.
+export function toNumber(value) {
+  if (typeof value === 'number') return value;
+  const s = String(value ?? '').replace(/[^\d,.-]/g, '');
+  const normalized = s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s;
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Felder eines JSON-Objekts prüfen. assertion.expect: { feld: Zahl | true/false | Text | { keywords: [regex…], min } }.
+// Liefert zusätzlich fields: [{ field, ok, got, expected }], damit Tests Teilpunkte vergeben können.
+function jsonMatch(assertion, text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? '');
+  } catch {
+    return { ok: false, message: 'kein gültiges JSON', fields: Object.keys(assertion.expect).map((field) => ({ field, ok: false, got: null })) };
+  }
+  const fields = Object.entries(assertion.expect).map(([field, expected]) => {
+    const got = parsed[field];
+    let ok = false;
+    if (typeof expected === 'number') ok = toNumber(got) !== null && Math.abs(toNumber(got) - expected) < 0.005;
+    else if (typeof expected === 'boolean') ok = got === expected || (typeof got === 'string' && /^(ja|true|yes)$/i.test(got.trim()) === expected);
+    else if (expected?.keywords) ok = expected.keywords.filter((k) => new RegExp(k, 'i').test(String(got ?? ''))).length >= (expected.min ?? expected.keywords.length);
+    else ok = normalizeAnswer(got) === normalizeAnswer(expected) || new RegExp(`^${String(expected)}$`, 'i').test(String(got ?? '').trim());
+    return { field, ok, got: got ?? null };
+  });
+  const bad = fields.filter((f) => !f.ok).map((f) => f.field);
+  return { ok: bad.length === 0, message: bad.length ? `falsch oder fehlend: ${bad.join(', ')}` : 'alle Felder korrekt', fields };
+}
+
 // Einzelne Assertion auswerten. Liefert { ok, message }.
 export async function check(assertion, content, ctx) {
   const text = content ?? '';
@@ -33,6 +73,18 @@ export async function check(assertion, content, ctx) {
       return { ok: text.trim() === String(v).trim(), message: `ist gleich "${v}"` };
     case 'max_length':
       return { ok: text.length <= Number(v), message: `höchstens ${v} Zeichen` };
+    case 'answer': {
+      // Erwartet eine Schlusszeile "Antwort: <Wert>"; bei mehreren Zeilen zählt die letzte.
+      const found = [...text.matchAll(/antwort\s*:\s*([^\n]+)/gi)].at(-1)?.[1];
+      const given = normalizeAnswer(found);
+      const accepted = [].concat(v).map(normalizeAnswer);
+      return {
+        ok: accepted.includes(given),
+        message: found === undefined ? `keine Zeile "Antwort:" gefunden (erwartet ${[].concat(v).join(' oder ')})` : `Antwort "${found.trim()}" (erwartet ${[].concat(v).join(' oder ')})`,
+      };
+    }
+    case 'json_match':
+      return jsonMatch(assertion, text);
     case 'json': {
       try {
         const parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ''));

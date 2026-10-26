@@ -31,6 +31,17 @@ function claudeUsage(u = {}) {
   return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
 }
 
+// OpenAI-Inhaltsteile (text, image_url mit data:-URL) in Anthropic-Blöcke übersetzen.
+function claudeContent(content) {
+  if (!Array.isArray(content)) return content;
+  return content.map((part) => {
+    if (part.type !== 'image_url') return part.type === 'text' ? { type: 'text', text: part.text } : part;
+    const url = part.image_url?.url ?? '';
+    const m = url.match(/^data:([^;]+);base64,(.*)$/);
+    return m ? { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } } : { type: 'image', source: { type: 'url', url } };
+  });
+}
+
 // OpenAI-Chat-Request in einen Anthropic-Messages-Request übersetzen.
 export function toClaudeRequest(body) {
   const { model, messages = [], tools, tool_choice, max_tokens, max_completion_tokens, temperature, top_p, stop, thinking } = body;
@@ -38,7 +49,7 @@ export function toClaudeRequest(body) {
   const out = {
     model,
     max_tokens: max_tokens ?? max_completion_tokens ?? 1024,
-    messages: messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+    messages: messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: claudeContent(m.content) })),
   };
   if (system) out.system = system;
   if (temperature !== undefined) out.temperature = temperature;

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Pencil, RefreshCw } from 'lucide-react';
+import { Pencil, RefreshCw, Sparkles } from 'lucide-react';
 import {
   api,
   can,
@@ -76,6 +76,7 @@ export default function Models() {
           </button>
         )}
       </div>
+      <AnalysisSetting models={models.data ?? []} manager={manager} />
       {message && <div className="error-box" style={{ background: 'var(--primary-soft)', color: 'var(--primary-text)' }}>{message}</div>}
       <div className="card">
         <div className="toolbar">
@@ -165,6 +166,50 @@ export default function Models() {
         />
       )}
     </>
+  );
+}
+
+// Modell, das nach jedem Testlauf die KI-Analyse erstellt (eine Einstellung für die ganze Anwendung).
+function AnalysisSetting({ models, manager }) {
+  const current = useApi('/api/settings/analysis');
+  const [error, setError] = useState(null);
+  const options = models.filter((m) => m.available && m.endpoint_kind !== 'mcp');
+  const value = current.data?.endpoint_id ? `${current.data.endpoint_id}|${current.data.model}` : '';
+
+  async function change(v) {
+    setError(null);
+    const [endpoint_id, ...rest] = v.split('|');
+    try {
+      await api('/api/settings/analysis', { method: 'PUT', body: v ? { endpoint_id, model: rest.join('|') } : {} });
+      current.reload();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card-body" style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span className="icon-chip">
+          <Sparkles size={16} />
+        </span>
+        <div style={{ flex: '1 1 320px' }}>
+          <div style={{ fontWeight: 600 }}>Modell für die KI-Analyse</div>
+          <div className="sub">
+            Dieses Modell bewertet nach jedem Testlauf die Ergebnisse, setzt sie in Kontext und fasst sie zusammen. Ohne Auswahl gibt es keine Analyse.
+          </div>
+        </div>
+        <select className="inline" value={value} disabled={!manager} onChange={(e) => change(e.target.value)} aria-label="Analysemodell" style={{ minWidth: 260 }}>
+          <option value="">– keine Analyse –</option>
+          {options.map((m) => (
+            <option key={`${m.endpoint_id}|${m.name}`} value={`${m.endpoint_id}|${m.name}`}>
+              {m.alias ?? m.name} · {m.endpoint_name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {error && <div className="error-box" style={{ margin: '0 16px 16px' }}>{error}</div>}
+    </div>
   );
 }
 

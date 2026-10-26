@@ -11,9 +11,13 @@ function keyMetric(r) {
     case 'performance':
       return `TTFT p95 ${fmt.ms(m.ttft_ms_p95)} · ${fmt.num(m.tokens_per_s_avg, 0)} tok/s`;
     case 'load':
-      return `${fmt.num(m.peak_requests_per_s)} req/s · Fehler ${fmt.pct(m.error_rate)}`;
-    case 'ratelimit':
-      return `${m.succeeded ?? '–'} ok / ${m.rate_limited ?? '–'} × 429`;
+      return `${fmt.num(m.peak_requests_per_s)} req/s · Fehler ${fmt.pct(m.error_rate)}${m.rate_limited ? ` · ${m.rate_limited}× 429` : ''}`;
+    case 'coding':
+      return `${m.tests_passed}/${m.tests_total} Tests`;
+    case 'ocr':
+      return `${m.fields_correct}/${m.fields_total} Felder`;
+    case 'quality':
+      return `${m.passed}/${m.cases} Fragen · höchste Stufe ${m.highest_level ?? '–'}`;
     case 'access':
       return `${m.passed}/${m.cases} korrekt${m.false_allow ? ` · ${m.false_allow} falsch erlaubt` : ''}`;
     case 'mcp':

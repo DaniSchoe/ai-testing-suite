@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Square } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Sparkles, Square } from 'lucide-react';
 import { TrendLines } from '../components/Charts.jsx';
 import { api, can, Card, fmt, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
 
@@ -14,9 +14,15 @@ export default function RunDetail() {
   const logs = useRunLogs(id, interval);
   const isActive = run.data && ACTIVE.includes(run.data.status);
 
+  // Polling endet, wenn der Lauf fertig ist und auch die KI-Analyse nicht mehr erstellt wird.
   useEffect(() => {
-    if (run.data && !ACTIVE.includes(run.data.status)) setIntervalMs(undefined);
+    if (run.data) setIntervalMs(ACTIVE.includes(run.data.status) || run.data.analysis_status === 'pending' ? 2000 : undefined);
   }, [run.data]);
+
+  async function regenerate() {
+    await api(`/api/runs/${id}/analysis`, { method: 'POST' });
+    run.reload();
+  }
 
   async function cancel() {
     await api(`/api/runs/${id}/cancel`, { method: 'POST' });
@@ -32,7 +38,7 @@ export default function RunDetail() {
       <div className="page-head">
         <div>
           <Link to="/history" className="sub" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-            <ArrowLeft size={14} /> Meine Tests
+            <ArrowLeft size={14} /> Historie
           </Link>
           <h1 style={{ marginTop: 6 }}>{r.label}</h1>
           <p>
@@ -47,6 +53,8 @@ export default function RunDetail() {
         )}
       </div>
 
+      {!isActive && r.results.length > 0 && <AnalysisCard run={r} onRegenerate={can(user, 'runs.start') ? regenerate : null} />}
+
       {r.results.map((res) => (
         <ResultCard key={res.id} result={res} logs={logs.filter((l) => l.result_id === res.id)} />
       ))}
@@ -58,6 +66,89 @@ export default function RunDetail() {
         </Card>
       </div>
     </>
+  );
+}
+
+// KI-Analyse des Laufs: Bewertung, Einordnung und Zusammenfassung durch das im Modellkatalog gewählte Modell.
+function AnalysisCard({ run, onRegenerate }) {
+  const a = run.analysis;
+  const pending = run.analysis_status === 'pending';
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <Card
+        title={
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <Sparkles size={16} /> KI-Analyse
+          </span>
+        }
+        sub={a?.model ? `Erstellt mit ${a.model}${a.endpoint ? ` über ${a.endpoint}` : ''}${a.generated_at ? ` · ${fmt.ago(a.generated_at)}` : ''}` : 'Bewertung, Einordnung und Zusammenfassung des Laufs'}
+        action={
+          onRegenerate && (
+            <button className="btn sm" onClick={onRegenerate} disabled={pending}>
+              <RefreshCw size={13} /> {pending ? 'Wird erstellt…' : 'Neu erstellen'}
+            </button>
+          )
+        }
+      >
+        {pending && <div className="sub">Die Analyse wird erstellt…</div>}
+        {!pending && run.analysis_status === 'error' && <div className="error-box">Die Analyse ist fehlgeschlagen: {a?.error}</div>}
+        {!pending && run.analysis_status === 'skipped' && (
+          <div className="sub">Es ist noch kein Modell für die KI-Analyse festgelegt. Das geht im Modellkatalog; danach lässt sich die Analyse hier neu erstellen.</div>
+        )}
+        {!pending && !run.analysis_status && <div className="sub">Für diesen Lauf gibt es keine Analyse.</div>}
+        {!pending && run.analysis_status === 'done' && a?.text && <Markdown text={a.text} />}
+      </Card>
+    </div>
+  );
+}
+
+// Kleiner Markdown-Renderer für die Analyse: Überschriften, Listen, Fettdruck. Alles wird als Text ausgegeben, nie als HTML.
+function Markdown({ text }) {
+  const inline = (line) =>
+    line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) =>
+      part.startsWith('**') && part.endsWith('**') && part.length > 4 ? (
+        <strong key={i}>{part.slice(2, -2)}</strong>
+      ) : part.startsWith('`') && part.endsWith('`') && part.length > 2 ? (
+        <code key={i}>{part.slice(1, -1)}</code>
+      ) : (
+        part
+      ),
+    );
+  const blocks = [];
+  let list = null;
+  for (const raw of text.split('\n')) {
+    const line = raw.trimEnd();
+    const bullet = line.match(/^\s*[-*•]\s+(.*)$/);
+    if (bullet) {
+      if (!list) blocks.push((list = { type: 'ul', items: [] }));
+      list.items.push(bullet[1]);
+      continue;
+    }
+    list = null;
+    if (!line.trim()) continue;
+    const heading = line.match(/^#{1,4}\s+(.*)$/);
+    blocks.push(heading ? { type: 'h', text: heading[1] } : { type: 'p', text: line });
+  }
+  return (
+    <div className="analysis">
+      {blocks.map((b, i) =>
+        b.type === 'h' ? (
+          <h3 key={i} style={{ fontSize: 14, margin: '14px 0 6px' }}>
+            {inline(b.text)}
+          </h3>
+        ) : b.type === 'ul' ? (
+          <ul key={i} className="steps" style={{ margin: '0 0 6px' }}>
+            {b.items.map((it, j) => (
+              <li key={j}>{inline(it)}</li>
+            ))}
+          </ul>
+        ) : (
+          <p key={i} style={{ margin: '0 0 8px' }}>
+            {inline(b.text)}
+          </p>
+        ),
+      )}
+    </div>
   );
 }
 
@@ -172,41 +263,10 @@ function formatMetric(key, v) {
   return fmt.num(v);
 }
 
-// Einzelfälle (Quality, Security, Access, MCP, Vergleich) als Tabelle.
+// Einzelfälle (Quality, Coding, OCR, Security, Access, MCP) als Tabelle.
 function DetailsTable({ result }) {
   const d = result.details ?? {};
   if (d.variants) return <ThinkingDetails variants={d.variants} />;
-  if (d.ranking) {
-    return (
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Modell</th>
-              <th className="num">Score</th>
-              <th className="num">Ø Latenz</th>
-              <th className="num">Tokens</th>
-            </tr>
-          </thead>
-          <tbody>
-            {d.ranking.map((m, i) => (
-              <tr key={m.label ?? m.model}>
-                <td>{i + 1}</td>
-                <td style={{ fontWeight: 600 }}>
-                  {m.label ?? m.model}
-                  {m.label && m.model !== m.alias && <div className="sub">{m.model}</div>}
-                </td>
-                <td className="num">{fmt.pct(m.score)}</td>
-                <td className="num">{fmt.ms(m.latency_ms_avg)}</td>
-                <td className="num">{m.tokens_total}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
   if (d.stages) {
     return (
       <div className="table-wrap">
@@ -219,6 +279,8 @@ function DetailsTable({ result }) {
               <th className="num">req/s</th>
               <th className="num">Fehlerquote</th>
               <th className="num">p95</th>
+              <th className="num">davon 429</th>
+              <th>p95 nach Schwierigkeit</th>
             </tr>
           </thead>
           <tbody>
@@ -230,6 +292,12 @@ function DetailsTable({ result }) {
                 <td className="num">{fmt.num(s.requests_per_s)}</td>
                 <td className="num">{fmt.pct(s.error_rate)}</td>
                 <td className="num">{fmt.ms(s.latency_ms_p95)}</td>
+                <td className="num">{s.rate_limited ?? 0}</td>
+                <td className="sub">
+                  {Object.entries(s.by_difficulty ?? {})
+                    .map(([level, v]) => `${level} ${fmt.ms(v.latency_ms_p95)}`)
+                    .join(' · ')}
+                </td>
               </tr>
             ))}
           </tbody>

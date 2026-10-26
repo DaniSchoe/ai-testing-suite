@@ -64,3 +64,35 @@ export async function syncAtoms(client, build) {
   await client.query('delete from test_definitions where build_id = $1 and not (id = any($2::uuid[]))', [build.id, [...keep]]);
   return plan.length;
 }
+
+// Richtwerte (Millisekunden), solange es zu einer Testart noch keine Historie gibt.
+const DEFAULT_MS = { smoke: 5_000, performance: 45_000, quality: 90_000, coding: 60_000, ocr: 45_000, security: 40_000, access: 8_000, mcp: 8_000, structured: 15_000, thinking: 150_000 };
+
+// Geschätzte Laufzeit für die Einzeltests eines Tests: Median der letzten bis zu zehn Ausführungen derselben Testart
+// (bevorzugt mit demselben Modell), sonst Richtwert je Testart. Die Einzeltests laufen nacheinander.
+export async function estimateRuntime(plan, query) {
+  let total = 0;
+  let fromHistory = 0;
+  for (const a of plan) {
+    const sql = `select percentile_cont(0.5) within group (order by duration_ms) as ms, count(*)::int as n
+       from (select duration_ms from results where type = $1 and status <> 'error' and duration_ms is not null
+             and ($2::text is null or coalesce(model_alias, model) = $2 or model = $2)
+             order by finished_at desc limit 10) x`;
+    let row = (await query(sql, [a.type, a.model])).rows?.[0];
+    if (!row?.n && a.model) row = (await query(sql, [a.type, null])).rows?.[0];
+    if (row?.n) {
+      total += Number(row.ms);
+      fromHistory += 1;
+    } else if (a.type === 'load') {
+      const stages = a.config?.stages ?? testTypes.load.defaults.stages;
+      total += stages.reduce((n, s) => n + s.durationS * 1000, 0) + 5_000;
+    } else {
+      total += DEFAULT_MS[a.type] ?? 30_000;
+    }
+  }
+  return {
+    count: plan.length,
+    estimate_ms: Math.round(total),
+    basis: fromHistory === plan.length ? 'history' : fromHistory === 0 ? 'estimate' : 'mixed',
+  };
+}

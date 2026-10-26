@@ -53,12 +53,20 @@ jobs:
             [ "$STATUS" != queued ] && [ "$STATUS" != running ] && break
             sleep 2
           done
+          # Die KI-Analyse entsteht nach dem Lauf.
+          for i in $(seq 1 30); do
+            A=$(curl -sf -b /tmp/jar localhost:8080/api/runs/$RUN | node -pe 'JSON.parse(require("fs").readFileSync(0)).analysis_status')
+            case "$A" in done|error|skipped) break ;; esac
+            sleep 1
+          done
           curl -sf -b /tmp/jar localhost:8080/api/runs/$RUN | node -e '
             const r = JSON.parse(require("fs").readFileSync(0));
             for (const x of r.results) console.log(x.status.padEnd(7), x.test_name, x.error ?? "");
-            // Der Mock rechnet bei mock-small absichtlich falsch: genau ein Qualitätstest schlägt fehl.
+            // Der Mock löst bei mock-small nur die leichten Qualitätsfragen: genau ein Qualitätstest schlägt fehl.
             const bad = r.results.filter((x) => x.status !== "passed").map((x) => x.type);
-            if (r.results.length < 14 || bad.length !== 1 || bad[0] !== "quality") process.exit(1);'
+            const types = new Set(r.results.map((x) => x.type));
+            if (r.results.length < 14 || bad.length !== 1 || bad[0] !== "quality" || !["coding", "ocr"].every((t) => types.has(t))) process.exit(1);
+            if (r.analysis_status !== "done" || !r.analysis?.text) { console.log("KI-Analyse fehlt", r.analysis_status); process.exit(1); }'
           node tools/rbac-check.js
           node tools/keys-check.js
           node tools/dashboard-check.js

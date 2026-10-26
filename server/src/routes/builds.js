@@ -2,7 +2,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { hasPermission, requirePermission } from '../auth.js';
 import { many, one, query, tx } from '../db.js';
-import { atomPlan, canEditBuild, canSeeBuild, syncAtoms } from '../builds.js';
+import { atomPlan, canEditBuild, canSeeBuild, estimateRuntime, syncAtoms } from '../builds.js';
 import { removeSchedule, syncSchedule } from '../queue.js';
 import { createRun } from '../runs.js';
 import { resolveScope, scopeParams, scopeSql } from '../scope.js';
@@ -89,11 +89,11 @@ export default async function buildRoutes(app) {
     return { ok: true };
   });
 
-  // Einzeltests, die der Test beim Ausführen erzeugt (Vorschau im Builder).
+  // Zusammenfassung im Builder: Anzahl der Einzeltests und geschätzte Laufzeit (Historie, sonst Richtwerte).
   app.post('/api/builds/preview', editor, async (request) => {
     const b = { ...request.body, name: request.body?.name || 'Test' };
     validate({ ...b, endpoint_id: b.endpoint_id || 'x' });
-    return atomPlan({ name: b.name, types: b.types, models: b.models, configs: b.configs }).map(({ name, type, model }) => ({ name, type, model }));
+    return estimateRuntime(atomPlan({ name: b.name, types: b.types, models: b.models, configs: b.configs }), query);
   });
 
   function validate(b) {

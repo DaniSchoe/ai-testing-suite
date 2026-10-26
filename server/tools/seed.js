@@ -53,24 +53,24 @@ await upsertKey({ name: 'admin', description: 'Plattform-Admin, alle Modelle und
 await upsertKey({ name: 'team-a', description: 'Fachbereich A, nur mock-small und Tool "search"', secret: 'sk-team-a', admin_only: true });
 await upsertKey({ name: 'limited', description: 'Key mit 10 RPM', secret: 'sk-limited', admin_only: true });
 
+// Modell für die KI-Analyse der Läufe (Einstellung im Modellkatalog).
+await query(
+  `insert into app_settings (key, value) values ('analysis_model', $1) on conflict (key) do nothing`,
+  [JSON.stringify({ endpoint_id: gateway.id, model: 'mock-large' })],
+);
+
 const tests = [
   { name: 'Smoke: Gateway', type: 'smoke', endpoint: gateway, config: {} },
   { name: 'Performance: mock-small', type: 'performance', endpoint: gateway, config: { model: 'mock-small', requests: 12, concurrency: 3 } },
   { name: 'Performance: mock-large', type: 'performance', endpoint: gateway, config: { model: 'mock-large', requests: 12, concurrency: 3 } },
   { name: 'Last: Ramp-up kurz', type: 'load', endpoint: gateway, config: { stages: [{ durationS: 3, concurrency: 2 }, { durationS: 3, concurrency: 8 }] } },
-  { name: 'Qualität: Basiswissen', type: 'quality', endpoint: gateway, config: { model: 'mock-small' } },
-  { name: 'Vergleich: small vs. large', type: 'comparison', endpoint: gateway, config: { models: ['mock-small', 'mock-large'] } },
-  {
-    name: 'Vergleich: qwen3 über LiteLLM vs. vLLM direkt',
-    type: 'comparison',
-    endpoint: gateway,
-    config: {
-      targets: [
-        { endpoint: 'LiteLLM (Mock)', model: 'qwen3-32b' },
-        { endpoint: 'vLLM Qwen3 (Mock)', model: 'qwen3-32b' },
-      ],
-    },
-  },
+  { name: 'Qualität: Schwierigkeitsstufen', type: 'quality', endpoint: gateway, config: { model: 'mock-small' } },
+  { name: 'Qualität: mock-large', type: 'quality', endpoint: gateway, config: { model: 'mock-large' } },
+  { name: 'Qualität: qwen3 (vLLM)', type: 'quality', endpoint: vllm, config: { model: 'qwen3-32b' } },
+  { name: 'Coding: mock-small', type: 'coding', endpoint: gateway, config: { model: 'mock-small' } },
+  { name: 'Coding: mock-large', type: 'coding', endpoint: gateway, config: { model: 'mock-large' } },
+  { name: 'OCR: mock-small', type: 'ocr', endpoint: gateway, config: { model: 'mock-small' } },
+  { name: 'OCR: mock-large', type: 'ocr', endpoint: gateway, config: { model: 'mock-large' } },
   { name: 'Smoke: vLLM Qwen3', type: 'smoke', endpoint: vllm, config: {} },
   { name: 'Thinking: Qwen3 mit und ohne Reasoning', type: 'thinking', endpoint: vllm, config: { judgeModel: 'qwen3-32b' } },
   { name: 'Security & DLP: Standardkatalog', type: 'security', endpoint: gateway, config: {} },
@@ -104,11 +104,10 @@ const tests = [
       ],
     },
   },
-  { name: 'Rate-Limit: 10 RPM Key', type: 'ratelimit', endpoint: gateway, apiKey: 'limited', config: { burst: 15, expectedLimit: 10 } },
 ];
 
 // Beispiele für den Test-Builder: ein gebündelter Test (Nightly Gateway) und je ein Test für den Rest.
-const nightly = ['Smoke: Gateway', 'Qualität: Basiswissen', 'Security & DLP: Standardkatalog', 'Zugriff: Modellfreigaben je Team'];
+const nightly = ['Smoke: Gateway', 'Qualität: Schwierigkeitsstufen', 'Security & DLP: Standardkatalog', 'Zugriff: Modellfreigaben je Team'];
 const groups = [
   { name: 'Nightly Gateway', description: 'Smoke, Qualität, Security und Berechtigungen', members: tests.filter((t) => nightly.includes(t.name)) },
   ...tests.filter((t) => !nightly.includes(t.name)).map((t) => ({ name: t.name, members: [t] })),

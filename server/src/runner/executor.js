@@ -1,5 +1,6 @@
 // Führt einen Testlauf aus: Tests nacheinander, Ergebnisse und Logs in Postgres, Regressionsvergleich.
 import { many, one, query } from '../db.js';
+import { analyzeRun } from '../analysis.js';
 import { decrypt } from '../crypto.js';
 import { testTypes } from '../testtypes/index.js';
 import { aliasOf, authHeaders, ENDPOINT_SELECT, endpointHeaders, llmClientFor, resolveModel } from '../models.js';
@@ -230,4 +231,7 @@ export async function executeRun(runId) {
   const final = counts.error ? 'error' : counts.failed ? 'failed' : 'passed';
   await query(`update runs set status = $2, finished_at = now() where id = $1 and status = 'running'`, [run.id, final]);
   await log(run.id, null, 'info', `Lauf beendet: ${counts.passed} bestanden, ${counts.failed} fehlgeschlagen, ${counts.error} Fehler`);
+  // KI-Analyse nach dem Lauf; ein Fehler dort beeinflusst das Laufergebnis nicht.
+  const analysis = await analyzeRun(run.id, console).catch(() => 'error');
+  if (analysis !== 'skipped') await log(run.id, null, analysis === 'done' ? 'info' : 'warn', analysis === 'done' ? 'KI-Analyse erstellt' : 'KI-Analyse fehlgeschlagen');
 }

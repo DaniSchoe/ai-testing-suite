@@ -1,4 +1,5 @@
 // Testläufe starten und einsehen, Ergebnistabelle ("Meine Tests") und Dashboard-Auswertungen.
+import { analyzeRun } from '../analysis.js';
 import { hasPermission, requirePermission } from '../auth.js';
 import { many, one, query } from '../db.js';
 import { dashboardAccess, dashboardFilters, resultFilter } from '../dashboardFilter.js';
@@ -54,6 +55,16 @@ export default async function runRoutes(app) {
       request.params.id,
       Number(request.query.after ?? 0),
     ]);
+  });
+
+  // KI-Analyse neu erzeugen, z. B. nachdem ein Analysemodell festgelegt wurde.
+  app.post('/api/runs/:id/analysis', starter, async (request, reply) => {
+    const run = await one('select user_id, status from runs where id = $1', [request.params.id]);
+    if (!run || !(await canSeeRunOf(request.user, run.user_id))) return reply.code(404).send({ error: 'Lauf nicht gefunden' });
+    if (['queued', 'running'].includes(run.status)) return reply.code(409).send({ error: 'Der Lauf ist noch nicht beendet' });
+    await query(`update runs set analysis_status = 'pending' where id = $1`, [request.params.id]);
+    analyzeRun(request.params.id, request.log).catch(() => {});
+    return { ok: true };
   });
 
   app.post('/api/runs/:id/cancel', starter, async (request, reply) => {
@@ -233,7 +244,7 @@ export default async function runRoutes(app) {
            avg(res.score) filter (where res.type = 'ocr') as ocr,
            avg(least(1, greatest(0, (res.details->'variants'->0->>'reasoning_tokens_avg')::numeric
                / nullif((res.details->'variants'->0->>'completion_tokens_avg')::numeric, 0)))) filter (where res.type = 'thinking') as thinking_share
-         ${base} and res.model is not null and res.type <> 'comparison' group by 1 order by runs desc, results desc limit 12`,
+         ${base} and res.model is not null group by 1 order by runs desc, results desc limit 12`,
         p,
       ),
       many(

@@ -1,6 +1,7 @@
 // Admin-Panel: Endpoints (AI Proxy, LLM-Endpoint, MCP) und Modellkatalog.
 import { requirePermission } from '../auth.js';
 import { many, one, query, tx } from '../db.js';
+import { analyzeRun, getAnalysisSetting, setAnalysisSetting } from '../analysis.js';
 import { ENDPOINT_SELECT, endpointHeaders, llmClientFor, syncEndpointModels } from '../models.js';
 import { hasPermission } from '../permissions.js';
 import { McpClient } from '../runner/clients.js';
@@ -214,6 +215,20 @@ export default async function adminRoutes(app) {
   });
 
   // --- Modellkatalog ---
+  // Modell für die KI-Analyse der Testläufe (eine Einstellung für die ganze Anwendung).
+  app.get('/api/settings/analysis', viewer, async () => (await getAnalysisSetting()) ?? { endpoint_id: null, model: null });
+  app.put('/api/settings/analysis', endpointAdmin, async (request, reply) => {
+    const { endpoint_id, model } = request.body ?? {};
+    if (!endpoint_id && !model) {
+      await setAnalysisSetting(null, request.user.id);
+      return { endpoint_id: null, model: null };
+    }
+    const hit = await one('select 1 from endpoint_models m join endpoints e on e.id = m.endpoint_id where m.endpoint_id = $1 and m.name = $2 and e.kind <> $3', [endpoint_id, model, 'mcp']);
+    if (!hit) return reply.code(400).send({ error: 'Modell am Endpoint nicht gefunden' });
+    await setAnalysisSetting({ endpoint_id, model }, request.user.id);
+    return getAnalysisSetting();
+  });
+
   app.get('/api/models', viewer, async (request) => {
     const endpoints = await catalog(request.user);
     return endpoints.flatMap((e) =>

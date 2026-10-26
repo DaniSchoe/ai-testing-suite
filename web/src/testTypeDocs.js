@@ -1,5 +1,5 @@
 // Beschreibung der Testarten für den Test-Builder und die Info-Seiten: Icon, Zweck, Ablauf, Kennzahlen.
-import { Activity, BadgeCheck, Braces, Brain, Gauge, HeartPulse, Lock, Plug, Scale, ShieldAlert, Timer } from 'lucide-react';
+import { Activity, BadgeCheck, Braces, Brain, Code, Gauge, HeartPulse, Lock, Plug, ScanText, ShieldAlert } from 'lucide-react';
 
 export const TYPE_DOCS = {
   smoke: {
@@ -26,36 +26,47 @@ export const TYPE_DOCS = {
   },
   load: {
     Icon: Activity,
-    summary: 'Lasttest mit stufenweise steigender Parallelität, direkt aus dem Pod der Anwendung.',
+    summary: 'Lasttest mit stufenweise steigender Parallelität und wechselnden Prompts, direkt aus dem Pod der Anwendung.',
     steps: [
-      'Läuft in Stufen (Dauer und Parallelität je Stufe, z. B. 2, 8, 16 gleichzeitige Anfragen).',
-      'Misst je Stufe Durchsatz, Fehlerquote und p95-Latenz.',
-      'Zeigt, ab welcher Parallelität Antwortzeiten steigen oder Fehler auftreten.',
+      'Läuft in Stufen (Dauer und Parallelität je Stufe, z. B. 5, 20, 50 gleichzeitige Anfragen).',
+      'Jede Anfrage zieht einen anderen Prompt aus einem Pool mit leichten, mittleren und schweren Aufgaben (kurze Fakten bis lange Ausgaben). Ein vorangestellter Zufallswert verhindert, dass Prefix-Caches die Last verfälschen.',
+      'Misst je Stufe Durchsatz, Fehlerquote, p95-Latenz (auch je Schwierigkeit) und wie viele Anfragen das Gateway gedrosselt hat (HTTP 429).',
     ],
-    metrics: ['Durchsatz je Stufe', 'p95-Latenz je Stufe', 'Fehlerquote', 'Spitzen-Requests pro Sekunde'],
-    when: 'Vor Releases und zur Kapazitätsplanung. Erzeugt echte Last auf dem Endpoint.',
+    metrics: ['Durchsatz je Stufe', 'p95-Latenz je Stufe und Schwierigkeit', 'Fehlerquote', 'Gedrosselte Anfragen (429)', 'Spitzen-Requests pro Sekunde'],
+    when: 'Vor Releases und zur Kapazitätsplanung. Erzeugt echte Last auf dem Endpoint. Rate-Limits zeigen sich hier als 429.',
   },
   quality: {
     Icon: BadgeCheck,
-    summary: 'Prüft Antworten gegen einen Testdatensatz mit Regeln, Regex, JSON oder LLM-as-a-Judge.',
+    summary: 'Fünf Fragen von leicht bis extrem schwer; die höchste Stufe lösen nur sehr große Modelle.',
     steps: [
-      'Stellt jede Frage des Datensatzes an das Modell.',
-      'Bewertet die Antwort je Fall: enthält/enthält nicht, Regex, gültiges JSON oder Urteil eines Judge-Modells.',
-      'Der Score ist der Anteil bestandener Fälle; er muss den Mindestscore (Standard 80 %) erreichen.',
+      'Stellt fünf Fragen mit eindeutiger Lösung: Logik (Stufe 1), Textaufgabe (2), Code nachvollziehen (3), Wahrscheinlichkeit (4) und Kombinatorik mit Nebenbedingung (5).',
+      'Das Modell schließt jede Antwort mit „Antwort: …“; verglichen wird nur dieser Wert, nicht der Rechenweg.',
+      'Der Score gewichtet die Fälle nach Stufe (1 bis 5) und muss den Mindestscore (Standard 60 %) erreichen. Kleine Modelle bleiben bei den leichten Stufen hängen, große kommen weiter.',
     ],
-    metrics: ['Score (Genauigkeit)', 'Bestandene Fälle', 'Durchschnittliche Latenz'],
-    when: 'Um Qualitätsverluste nach Modellwechseln oder Quantisierung zu erkennen.',
+    metrics: ['Score (Genauigkeit)', 'Höchste gelöste Stufe', 'Bestandene Fälle', 'Durchschnittliche Latenz'],
+    when: 'Um Qualitätsverluste nach Modellwechseln oder Quantisierung zu erkennen und Modelle zu unterscheiden.',
   },
-  comparison: {
-    Icon: Scale,
-    summary: 'Vergleicht mehrere Modelle oder Endpoints auf demselben Datensatz.',
+  coding: {
+    Icon: Code,
+    summary: 'Das Modell löst eine einfache und eine komplexe Programmieraufgabe; der Code wird ausgeführt und geprüft.',
     steps: [
-      'Führt denselben Datensatz gegen jedes gewählte Modell aus, auch gegen unterschiedliche Endpoints (z. B. LiteLLM vs. vLLM direkt).',
-      'Berechnet je Ziel Score, Latenz und Tokens.',
-      'Erstellt eine Rangliste und nennt das beste Ziel.',
+      'Aufgabe 1 (einfach): eine Palindrom-Prüfung. Aufgabe 2 (komplex): ein Parser für Rechenausdrücke mit Klammern, Vorrang und unärem Minus, ohne eval.',
+      'Der Code aus der Antwort läuft in einem isolierten Prozess (ohne Dateizugriff, Netzwerk und Umgebungsvariablen) gegen vorbereitete Testfälle.',
+      'Der Score ist der Anteil bestandener Testfälle; die komplexe Aufgabe zählt doppelt.',
     ],
-    metrics: ['Score je Modell', 'Latenz je Modell', 'Bestes Modell'],
-    when: 'Bei der Modellauswahl und um Unterschiede zwischen Gateway und Direktzugriff zu finden.',
+    metrics: ['Score', 'Bestandene Tests je Aufgabe', 'Durchschnittliche Latenz'],
+    when: 'Wenn ein Modell für Code-Assistenz oder Agenten eingesetzt werden soll.',
+  },
+  ocr: {
+    Icon: ScanText,
+    summary: 'Liest zwei Dokumente als Bild: eine Rechnung und einen Prüfbericht mit Handschrift und Unterschriften.',
+    steps: [
+      'Dokument 1: eine strukturierte Rechnung (PDF). Das Modell liest die Positionen und aggregiert: Rechnungsbetrag, Stückzahl, Summe der Positionen mit 7 % MwSt und teuerste Position.',
+      'Dokument 2: ein Prüfbericht mit zwei handschriftlichen Unterschriften und einem handschriftlichen Hinweis. Das Modell erkennt, ob beide Unterschriften vorhanden sind, und gibt den Hinweis wieder.',
+      'Der Score ist der Anteil richtig gelesener Felder. Das Modell muss Bilder verarbeiten können (Vision).',
+    ],
+    metrics: ['Score', 'Richtige Felder', 'Durchschnittliche Latenz'],
+    when: 'Um Vision-Modelle für Dokumentenverarbeitung zu vergleichen.',
   },
   security: {
     Icon: ShieldAlert,
@@ -89,17 +100,6 @@ export const TYPE_DOCS = {
     ],
     metrics: ['Bestandene Prüfungen', 'Geleakte (verbotene) Tools', 'Tool-Katalog je Key'],
     when: 'Wenn MCP-Server angebunden oder Tool-Freigaben geändert werden.',
-  },
-  ratelimit: {
-    Icon: Timer,
-    summary: 'Prüft, ob Rate-Limits und Budgets greifen (HTTP 429).',
-    steps: [
-      'Sendet einen Burst von Anfragen in kurzer Zeit an das Modell.',
-      'Erwartet ab dem konfigurierten Limit (z. B. 10 pro Minute) HTTP 429.',
-      'Vergleicht erfolgreiche und limitierte Anfragen mit dem erwarteten Limit innerhalb einer Toleranz.',
-    ],
-    metrics: ['Erfolgreiche Anfragen', 'Limitierte Anfragen (429)', 'Sonstige Fehler'],
-    when: 'Nach Änderungen an RPM-/TPM-Limits oder Budgets pro Key und Team.',
   },
   structured: {
     Icon: Braces,

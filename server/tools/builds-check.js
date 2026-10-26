@@ -41,7 +41,9 @@ const spec = {
   configs: { performance: { requests: 4, concurrency: 2 } },
 };
 const preview = (await admin('/api/builds/preview', { method: 'POST', body: spec })).data;
-assert.equal(preview.length, 3, 'smoke (Liste) + performance je Modell');
+assert.equal(preview.count, 3, 'smoke (Liste) + performance je Modell');
+assert.ok(preview.estimate_ms > 0 && ['history', 'estimate', 'mixed'].includes(preview.basis), 'Laufzeitschätzung vorhanden');
+assert.equal(preview.tests, undefined, 'die Zusammenfassung nennt keine einzelnen Tests');
 assert.equal((await admin('/api/builds', { method: 'POST', body: { ...spec, types: [] } })).status, 400);
 assert.equal((await admin('/api/builds', { method: 'POST', body: { ...spec, endpoint_id: llm.id, types: ['mcp'] } })).status, 400, 'MCP passt nicht zu LLM-Endpoint');
 step('Vorschau der Einzeltests, Validierung');
@@ -67,7 +69,7 @@ step('Test speichern und sofort ausführen (Testart × Modell)');
 // Änderung behält die IDs der Einzeltests, entfernte Modelle verschwinden
 const updated = await admin(`/api/builds/${build.id}`, { method: 'PUT', body: { ...spec, models: ['mock-small'], schedule: { mode: 'save' } } });
 assert.equal(updated.status, 200);
-assert.equal((await admin('/api/builds/preview', { method: 'POST', body: { ...spec, models: ['mock-small'] } })).data.length, 2);
+assert.equal((await admin('/api/builds/preview', { method: 'POST', body: { ...spec, models: ['mock-small'] } })).data.count, 2);
 step('Test ändern');
 
 // Zeitpläne und Kalender

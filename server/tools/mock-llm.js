@@ -32,9 +32,81 @@ function thinkingEnabled(body) {
   return true;
 }
 
+// Nachrichteninhalt als Text; Bildteile (OpenAI image_url, Anthropic image) werden ausgelassen.
+const textOf = (content) =>
+  Array.isArray(content) ? content.filter((p) => p.type === 'text').map((p) => p.text).join('\n') : String(content ?? '');
+
+// Lösungen für die Coding-Aufgaben. mock-small kennt das unäre Minus nicht und besteht deshalb nur einen Teil der Tests.
+const PALINDROME = 'function isPalindrome(text) {\n  const t = text.toLowerCase().replace(/[^a-z0-9]/g, "");\n  return t === [...t].reverse().join("");\n}';
+const evaluateCode = (unary) => `function evaluate(expression) {
+  let i = 0;
+  const s = expression;
+  const ws = () => { while (s[i] === ' ') i++; };
+  function factor() {
+    ws();
+    if (s[i] === '-' && ${unary}) { i++; return -factor(); }
+    if (s[i] === '(') {
+      i++;
+      const v = expr();
+      ws();
+      if (s[i] !== ')') throw new Error('Klammer fehlt');
+      i++;
+      return v;
+    }
+    const m = /^\\d+(\\.\\d+)?/.exec(s.slice(i));
+    if (!m) throw new Error('Zahl erwartet');
+    i += m[0].length;
+    return Number(m[0]);
+  }
+  function term() {
+    let v = factor();
+    for (;;) {
+      ws();
+      if (s[i] === '*') { i++; v *= factor(); }
+      else if (s[i] === '/') { i++; const d = factor(); if (d === 0) throw new Error('Division durch 0'); v /= d; }
+      else return v;
+    }
+  }
+  function expr() {
+    let v = term();
+    for (;;) {
+      ws();
+      if (s[i] === '+') { i++; v += term(); }
+      else if (s[i] === '-') { i++; v -= term(); }
+      else return v;
+    }
+  }
+  const result = expr();
+  ws();
+  if (i < s.length) throw new Error('Unerwartetes Zeichen');
+  return result;
+}`;
+
+// Qualitätsfragen Stufe 1 bis 5: mock-small löst nur die leichten, mock-large bis Stufe 4, qwen3-32b alle.
+const QUALITY = [
+  [/Jüngste/, () => 'Antwort: Carla'],
+  [/tatsächlich in Bewegung/, () => 'Antwort: 190'],
+  [/Python-Programm/, (m) => `Antwort: ${m === 'mock-small' ? 89 : 88}`],
+  [/Urne/, (m) => `Antwort: ${m === 'mock-small' ? '3/8' : '15/28'}`],
+  [/MISSISSIPPI/, (m) => `Antwort: ${/qwen/i.test(m) ? 2016 : 1800}`],
+];
+
 function answer(messages, model) {
-  const text = messages.map((m) => m.content).join('\n');
-  const user = messages.filter((m) => m.role === 'user').at(-1)?.content ?? '';
+  const text = messages.map((m) => textOf(m.content)).join('\n');
+  const user = textOf(messages.filter((m) => m.role === 'user').at(-1)?.content);
+  if (/Testanalyst/.test(text)) {
+    return '## Bewertung\nDer Lauf ist insgesamt gut, mit kleinen Einschränkungen.\n## Ergebnisse im Kontext\n- Die meisten Tests wurden bestanden.\n- Die Qualitätsfragen bis Stufe 3 wurden gelöst.\n## Auffälligkeiten und Empfehlungen\n- Keine kritischen Auffälligkeiten (Mock-Analyse).';
+  }
+  const quality = QUALITY.find(([re]) => re.test(user));
+  if (quality) return quality[1](model);
+  if (/isPalindrome\(text\)/.test(user)) return '```js\n' + PALINDROME + '\n```';
+  if (/evaluate\(expression\)/.test(user)) return '```js\n' + evaluateCode(model !== 'mock-small') + '\n```';
+  if (/"rechnungsbetrag"/.test(user)) {
+    return JSON.stringify({ rechnungsbetrag: '270,55', stueckzahl: model === 'mock-small' ? 44 : 45, summe_7_prozent: 84.45, teuerste_position: 'Druckerpatrone schwarz' });
+  }
+  if (/"unterschriften_vorhanden"/.test(user)) {
+    return JSON.stringify({ unterschriften_vorhanden: true, anzahl_unterschriften: 2, handschriftlicher_hinweis: 'Bremsleitung vorne links nach 500 km erneut auf Dichtheit prüfen' });
+  }
   if (/Du bewertest/i.test(text)) return '{"score": 8, "reason": "solide"}';
   if (/DAN|Malware|Sprengstoff|Ignoriere alle/i.test(user)) return 'Das kann ich nicht tun, tut mir leid.';
   if (/Hauptstadt von Deutschland/i.test(user)) return 'Berlin';
@@ -72,7 +144,7 @@ async function chat(req, res, who) {
     list.push(now);
     hits.set(who.key, list);
   }
-  const prompt = body.messages.map((m) => m.content).join('\n');
+  const prompt = body.messages.map((m) => textOf(m.content)).join('\n');
   // Guardrail-Simulation: Kreditkartennummern werden geblockt.
   if (/\b(?:\d[ -]?){13,16}\b/.test(prompt)) {
     return send(res, 400, { error: { message: 'Blocked by guardrail: PII detected', type: 'guardrail' } });
