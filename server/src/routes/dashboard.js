@@ -230,7 +230,7 @@ export default async function dashboardRoutes(app) {
   app.get('/api/sovereignty', viewer, async (request) => {
     const t = request.user.tenant_id;
     const { environment } = params(request);
-    const platforms = await many('select id from platforms where tenant_id = $1 and ($2::text is null or environment = $2) order by name', [t, environment]);
+    const platforms = await many('select id from platforms where tenant_id = $1 and ($2::text is null or environment = $2) and ($3::uuid is null or id = $3) order by name', [t, environment, request.query.platform_id || null]);
     return Promise.all(platforms.map((p) => sovereignty(t, p.id)));
   });
 }

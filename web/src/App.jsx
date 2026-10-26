@@ -1,53 +1,105 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  CalendarClock,
-  History as HistoryIcon,
+  Boxes,
+  ClipboardCheck,
+  Database,
+  FileText,
   FlaskConical,
+  History as HistoryIcon,
   KeyRound,
+  Landmark,
   LayoutGrid,
+  Layers,
   LogOut,
   Menu,
   Monitor,
   Moon,
-  Network,
-  Boxes,
-  Layers,
+  Ruler,
+  ScrollText,
   Search,
+  Settings,
+  ShieldAlert,
   ShieldCheck,
   Store,
   Sun,
   Users,
-  UsersRound,
+  Building2,
 } from 'lucide-react';
-import { api, can, initials, useApi, UserContext, useTheme } from './lib.jsx';
+import { api, can, getEnv, getTenant, initials, setEnv, setTenant, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
-import Platform from './pages/Platform.jsx';
-import ModelDetail from './pages/ModelDetail.jsx';
-import ModelProfiles from './pages/ModelProfiles.jsx';
-import Marketplace from './pages/Marketplace.jsx';
-import MarketplaceDetail from './pages/MarketplaceDetail.jsx';
-import TestBuilder from './pages/TestBuilder.jsx';
-import TestEditor from './pages/TestEditor.jsx';
-import TestTypeInfo from './pages/TestTypeInfo.jsx';
-import Schedules from './pages/Schedules.jsx';
-import History from './pages/History.jsx';
+import Findings from './pages/Findings.jsx';
+import { ReportDetail, Reports } from './pages/Reports.jsx';
+import { AuditEditor, Audits } from './pages/Audits.jsx';
+import { Runs } from './pages/Runs.jsx';
 import RunDetail from './pages/RunDetail.jsx';
-import Endpoints from './pages/admin/Endpoints.jsx';
-import ApiKeys from './pages/admin/ApiKeys.jsx';
-import UsersPage from './pages/admin/Users.jsx';
+import Sovereignty from './pages/Sovereignty.jsx';
+import Approvals from './pages/Approvals.jsx';
+import { Catalog, PackDetail, TemplateDetail } from './pages/Catalog.jsx';
+import { DatasetDetail, Datasets } from './pages/Datasets.jsx';
+import { PlatformDetail, Platforms } from './pages/Platforms.jsx';
 import Models from './pages/admin/Models.jsx';
+import Sizing from './pages/Sizing.jsx';
+import Credentials from './pages/Credentials.jsx';
+import Members from './pages/Members.jsx';
+import Tenants from './pages/admin/Tenants.jsx';
 import Roles from './pages/admin/Roles.jsx';
-import Teams from './pages/admin/Teams.jsx';
+import AuditLog from './pages/admin/AuditLog.jsx';
+import SystemSettings from './pages/admin/SystemSettings.jsx';
+import ModelDetail from './pages/ModelDetail.jsx';
 
-// API-Keys sehen und pflegen alle User (eigene und Team-Keys), der Rest braucht Berechtigungen.
-const ADMIN_NAV = [
-  ['suite.view', '/admin/api-keys', KeyRound, 'API-Keys'],
-  ['endpoints.manage', '/admin/endpoints', Network, 'Endpoints'],
-  ['endpoints.manage', '/admin/models', Boxes, 'Modellkatalog'],
-  ['users.manage', '/admin/users', Users, 'Benutzer'],
-  ['teams.manage', '/admin/teams', UsersRound, 'Teams'],
-  ['roles.manage', '/admin/roles', ShieldCheck, 'Rollen'],
+// Navigation nach Aufgaben. Gruppen ohne sichtbare Einträge werden ausgeblendet.
+const any = (...p) => (user) => p.some((x) => can(user, x));
+const NAV = [
+  {
+    title: null,
+    items: [
+      ['/', LayoutGrid, 'Dashboard', any('suite.view'), { end: true }],
+      ['/findings', ShieldAlert, 'Findings', any('suite.view'), { badge: 'findings' }],
+      ['/reports', FileText, 'Berichte', any('suite.view')],
+    ],
+    label: 'Übersicht',
+  },
+  {
+    label: 'Prüfen',
+    items: [
+      ['/audits', FlaskConical, 'Prüfungen', any('tests.manage', 'runs.start')],
+      ['/runs', HistoryIcon, 'Läufe', any('suite.view'), { badge: 'runs' }],
+      ['/sovereignty', Landmark, 'Souveränität', any('suite.view')],
+      ['/approvals', ClipboardCheck, 'Freigaben', any('runs.start', 'runs.prod'), { badge: 'approvals' }],
+    ],
+  },
+  {
+    label: 'Katalog',
+    items: [
+      ['/catalog', Store, 'Vorlagen & Pakete', any('tests.manage', 'catalog.publish')],
+      ['/datasets', Database, 'Datensätze', any('tests.manage')],
+    ],
+  },
+  {
+    label: 'Ziele',
+    items: [
+      ['/platforms', Layers, 'Plattformen', any('endpoints.manage', 'tests.manage', 'runs.start')],
+      ['/models', Boxes, 'Modellkatalog', any('endpoints.manage')],
+      ['/sizing', Ruler, 'Sizing', any('endpoints.manage', 'runs.start')],
+    ],
+  },
+  {
+    label: 'Verwaltung',
+    items: [
+      ['/credentials', KeyRound, 'Zugangsdaten', any('tests.manage', 'runs.start', 'endpoints.manage')],
+      ['/members', Users, 'Mitglieder & Teams', any('users.manage', 'teams.manage')],
+    ],
+  },
+  {
+    label: 'Administration',
+    items: [
+      ['/admin/tenants', Building2, 'Mandanten', any('tenants.manage')],
+      ['/admin/roles', ShieldCheck, 'Rollen', any('roles.manage')],
+      ['/admin/audit-log', ScrollText, 'Audit-Log', any('audit.view')],
+      ['/admin/settings', Settings, 'Systemeinstellungen', any('settings.manage')],
+    ],
+  },
 ];
 
 // Angemeldet, aber (noch) ohne Berechtigung: Admin muss eine Rolle vergeben oder das Konto entsperren.
@@ -70,6 +122,20 @@ function NoAccess({ user }) {
   );
 }
 
+function TenantSwitch({ user }) {
+  const tenants = user.tenants ?? [];
+  if (tenants.length < 2) return <span className="tag">{user.tenant?.name}</span>;
+  return (
+    <select className="inline" value={getTenant() ?? user.tenant?.id} onChange={(e) => setTenant(e.target.value)} aria-label="Mandant">
+      {tenants.map((t) => (
+        <option key={t.id} value={t.id}>
+          {t.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [theme, setTheme] = useTheme();
@@ -78,8 +144,14 @@ export default function App() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   // Aktive Läufe als Zähler in der Navigation (wie "Meine Aufgaben" in der Vorlage).
-  const active = useApi(can(user, 'suite.view') ? '/api/runs?scope=me&limit=50' : null, { interval: 10000 });
-  const activeCount = (active.data ?? []).filter((r) => r.status === 'running' || r.status === 'queued').length;
+  const active = useApi(can(user, 'suite.view') ? '/api/runs?status=active&limit=50' : null, { interval: 10000 });
+  const findingStats = useApi(can(user, 'findings.manage') ? '/api/findings/stats' : null, { interval: 60000 });
+  const pendingApprovals = useApi(can(user, 'runs.prod') ? '/api/approvals?status=pending' : null, { interval: 30000 });
+  const badges = {
+    runs: (active.data?.runs ?? []).filter((r) => r.status === 'running' || r.status === 'queued').length,
+    findings: findingStats.data?.open ?? 0,
+    approvals: pendingApprovals.data?.length ?? 0,
+  };
 
   useEffect(() => {
     api('/api/me').then(setUser).catch(() => {});
@@ -90,7 +162,6 @@ export default function App() {
   if (!can(user, 'suite.view')) return <NoAccess user={user} />;
   const name = user.display_name ?? user.username;
   const roleLabel = user.env_admin ? 'Administrator' : user.roles.map((r) => r.name).join(', ') || 'Ohne Rolle';
-  const adminNav = ADMIN_NAV.filter(([permission]) => can(user, permission));
 
   return (
     <UserContext.Provider value={user}>
@@ -100,39 +171,23 @@ export default function App() {
             <div className="brand-logo">A</div>
             AI Suite <span className="brand-tag">TEST</span>
           </div>
-          <nav className="nav">
-            <NavLink to="/" end>
-              <LayoutGrid size={18} /> Dashboard
-            </NavLink>
-            <NavLink to="/platform">
-              <Layers size={18} /> Plattform
-            </NavLink>
-            <NavLink to="/marketplace">
-              <Store size={18} /> Marketplace
-            </NavLink>
-            <NavLink to="/test-builder">
-              <FlaskConical size={18} /> Test-Builder
-              {activeCount > 0 && <span className="count">{activeCount}</span>}
-            </NavLink>
-            <NavLink to="/schedules">
-              <CalendarClock size={18} /> Zeitpläne
-            </NavLink>
-            <NavLink to="/history">
-              <HistoryIcon size={18} /> Historie
-            </NavLink>
-          </nav>
-          {adminNav.length > 0 && (
-            <>
-              <div className="nav-section">Einstellungen</div>
-              <nav className="nav">
-                {adminNav.map(([, to, Icon, label]) => (
-                  <NavLink key={to} to={to}>
-                    <Icon size={18} /> {label}
-                  </NavLink>
-                ))}
-              </nav>
-            </>
-          )}
+          {NAV.map((group) => {
+            const items = group.items.filter(([, , , visible]) => visible(user));
+            if (!items.length) return null;
+            return (
+              <div key={group.label}>
+                <div className="nav-section">{group.label}</div>
+                <nav className="nav">
+                  {items.map(([to, Icon, label, , opts = {}]) => (
+                    <NavLink key={to} to={to} end={opts.end}>
+                      <Icon size={18} /> {label}
+                      {opts.badge && badges[opts.badge] > 0 && <span className="count">{badges[opts.badge]}</span>}
+                    </NavLink>
+                  ))}
+                </nav>
+              </div>
+            );
+          })}
           <div className="sidebar-footer">
             <div className="theme-switch" role="radiogroup" aria-label="Darstellung">
               {[
@@ -167,36 +222,50 @@ export default function App() {
               className="search"
               onSubmit={(e) => {
                 e.preventDefault();
-                navigate(`/history?search=${encodeURIComponent(query)}`);
+                navigate(`/runs?search=${encodeURIComponent(query)}`);
               }}
             >
               <Search size={16} />
-              <input type="search" placeholder="Tests, Modelle und Endpoints durchsuchen…" value={query} onChange={(e) => setQuery(e.target.value)} />
+              <input type="search" placeholder="Läufe und Prüfungen durchsuchen…" value={query} onChange={(e) => setQuery(e.target.value)} />
             </form>
             <div className="spacer" />
+            <TenantSwitch user={user} />
+            <select className="inline" value={getEnv()} onChange={(e) => setEnv(e.target.value)} aria-label="Umgebung">
+              <option value="all">Alle Umgebungen</option>
+              <option value="dev">Dev</option>
+              <option value="prod">Prod</option>
+            </select>
             <span className="app-version" title="Version der Anwendung">v{user.version}</span>
           </header>
           <main className="content">
             <Routes>
               <Route path="/" element={<Dashboard />} />
-              <Route path="/model-profiles" element={<ModelProfiles />} />
-              <Route path="/models/:name" element={<ModelDetail />} />
-              <Route path="/platform" element={<Platform />} />
-              <Route path="/marketplace" element={<Marketplace />} />
-              <Route path="/marketplace/:id" element={<MarketplaceDetail />} />
-              <Route path="/test-builder" element={<TestBuilder />} />
-              <Route path="/test-builder/new" element={<TestEditor />} />
-              <Route path="/test-builder/:id" element={<TestEditor />} />
-              <Route path="/test-types/:type" element={<TestTypeInfo />} />
-              <Route path="/schedules" element={<Schedules />} />
-              <Route path="/history" element={<History />} />
+              <Route path="/findings" element={<Findings />} />
+              <Route path="/reports" element={<Reports />} />
+              <Route path="/reports/:id" element={<ReportDetail />} />
+              <Route path="/audits" element={<Audits />} />
+              <Route path="/audits/new" element={<AuditEditor />} />
+              <Route path="/audits/:id" element={<AuditEditor />} />
+              <Route path="/runs" element={<Runs />} />
               <Route path="/runs/:id" element={<RunDetail />} />
-              <Route path="/admin/endpoints" element={<Endpoints />} />
-              <Route path="/admin/models" element={<Models />} />
-              <Route path="/admin/api-keys" element={<ApiKeys />} />
-              <Route path="/admin/users" element={<UsersPage />} />
-              <Route path="/admin/teams" element={<Teams />} />
+              <Route path="/sovereignty" element={<Sovereignty />} />
+              <Route path="/approvals" element={<Approvals />} />
+              <Route path="/catalog" element={<Catalog />} />
+              <Route path="/catalog/templates/:id" element={<TemplateDetail />} />
+              <Route path="/catalog/packs/:id" element={<PackDetail />} />
+              <Route path="/datasets" element={<Datasets />} />
+              <Route path="/datasets/:id" element={<DatasetDetail />} />
+              <Route path="/platforms" element={<Platforms />} />
+              <Route path="/platforms/:id" element={<PlatformDetail />} />
+              <Route path="/models" element={<Models />} />
+              <Route path="/models/:name" element={<ModelDetail />} />
+              <Route path="/sizing" element={<Sizing />} />
+              <Route path="/credentials" element={<Credentials />} />
+              <Route path="/members" element={<Members />} />
+              <Route path="/admin/tenants" element={<Tenants />} />
               <Route path="/admin/roles" element={<Roles />} />
+              <Route path="/admin/audit-log" element={<AuditLog />} />
+              <Route path="/admin/settings" element={<SystemSettings />} />
               <Route path="*" element={<div className="empty">Seite nicht gefunden</div>} />
             </Routes>
           </main>

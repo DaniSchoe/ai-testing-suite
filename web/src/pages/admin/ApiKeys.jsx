@@ -12,7 +12,7 @@ export default function ApiKeys() {
   const teamName = (id) => teams.data?.find((t) => t.id === id)?.name ?? '…';
 
   async function remove(k) {
-    if (!confirm(`API-Key "${k.name}" löschen? Tests und Endpoints, die ihn verwenden, haben danach keinen Key mehr.`)) return;
+    if (!confirm(`API-Key "${k.name}" löschen? Prüfungen und Komponenten, die ihn verwenden, haben danach keinen Key mehr.`)) return;
     try {
       await api(`/api/api-keys/${k.id}`, { method: 'DELETE' });
       keys.reload();
@@ -23,14 +23,10 @@ export default function ApiKeys() {
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>API-Keys</h1>
-          <p>
-            Keys werden verschlüsselt gespeichert und nie wieder angezeigt. Du siehst deine eigenen Keys, die deiner Teams und globale Keys.
-            Endpoints und Tests verweisen nur auf einen Key aus dieser Liste.
-          </p>
-        </div>
+      <div className="toolbar">
+        <span className="hint" style={{ flex: 1 }}>
+          Keys werden verschlüsselt gespeichert und nie wieder angezeigt. Du siehst deine eigenen Keys, die deiner Teams und globale Keys. Plattform-Komponenten und Prüfungen verweisen nur auf einen Key aus dieser Liste.
+        </span>
         <button className="btn primary" onClick={() => setEditing({ visibility: 'user', teamIds: [], userIds: [] })}>
           <Plus size={15} /> Neuer API-Key
         </button>

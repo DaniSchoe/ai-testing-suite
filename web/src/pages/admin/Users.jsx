@@ -16,7 +16,7 @@ function UserStatus({ u }) {
 
 export default function Users() {
   const me = useUser();
-  const users = useApi('/api/users');
+  const users = useApi('/api/members');
   const roles = useApi(can(me, 'users.manage') ? '/api/roles' : null);
   const teams = useApi('/api/teams');
   const [editing, setEditing] = useState(null);
@@ -27,8 +27,8 @@ export default function Users() {
   );
 
   async function remove(u) {
-    if (!confirm(`Vorab angelegten User ${u.email} löschen?`)) return;
-    await api(`/api/users/${u.id}`, { method: 'DELETE' });
+    if (!confirm(`${u.email} aus diesem Mandanten entfernen? Das Konto selbst bleibt bestehen.`)) return;
+    await api(`/api/members/${u.id}`, { method: 'DELETE' });
     users.reload();
   }
 
@@ -36,7 +36,7 @@ export default function Users() {
     <>
       <div className="page-head">
         <div>
-          <h1>Benutzer</h1>
+          <h1>Mitglieder</h1>
           <p>
             Die Anmeldung läuft über Keycloak, Rollen und Teams vergibst du hier. Neue User erhalten beim ersten Login die Standardrolle. User lassen
             sich auch vorab per E-Mail anlegen; Rollen und Teams gelten dann ab dem ersten Login mit dieser (in Keycloak bestätigten) Adresse.
@@ -172,8 +172,11 @@ function UserEditor({ user, me, roles, teams, onClose, onSaved }) {
   async function save() {
     try {
       const body = { display_name: displayName, roleIds: [...roleIds], teamIds: [...teamIds] };
-      if (isNew) await api('/api/users', { method: 'POST', body: { ...body, email } });
-      else await api(`/api/users/${user.id}`, { method: 'PUT', body: { ...body, disabled } });
+      if (isNew) await api('/api/members', { method: 'POST', body: { ...body, email } });
+      else {
+        await api(`/api/members/${user.id}`, { method: 'PUT', body });
+        if (disabled !== Boolean(user.disabled)) await api(`/api/users/${user.id}`, { method: 'PUT', body: { ...body, disabled } });
+      }
       onSaved();
     } catch (e) {
       setError(e.message);
@@ -251,7 +254,7 @@ function UserEditor({ user, me, roles, teams, onClose, onSaved }) {
         {teams.length === 0 && <div className="empty">Noch keine Teams angelegt</div>}
       </div>
 
-      {!isNew && user.id !== me.id && (
+      {!isNew && user.id !== me.id && can(me, 'roles.manage') && (
         <label className="checkbox">
           <input type="checkbox" checked={disabled} onChange={(e) => setDisabled(e.target.checked)} /> Gesperrt (kein Zugriff, Historie bleibt erhalten)
         </label>

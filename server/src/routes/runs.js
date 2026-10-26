@@ -43,10 +43,11 @@ export default async function runRoutes(app) {
     const pageSize = Math.min(Math.max(Number(q.pageSize ?? 25), 1), 100);
     const drafts = q.drafts === '1';
     const days = q.days ? Math.min(Math.max(Number(q.days), 1), 365) : null;
-    const params = [...scopeParams(request.user, s), request.user.tenant_id, drafts, q.audit_id || null, q.platform_id || null, q.status || null, days, q.search ? `%${q.search}%` : null];
+    const params = [...scopeParams(request.user, s), request.user.tenant_id, drafts, q.audit_id || null, q.platform_id || null, q.status || null, days, q.search ? `%${q.search}%` : null, ['dev', 'prod'].includes(q.environment) ? q.environment : null];
     const where = `${scopeSql(1)} and r.tenant_id = $4 and (($5 and r.is_draft and r.user_id = $2) or (not $5 and not r.is_draft))
-      and ($6::uuid is null or r.audit_id = $6) and ($7::uuid is null or r.platform_id = $7) and ($8::text is null or r.status = $8)
-      and ($9::int is null or r.created_at > now() - make_interval(days => $9::int)) and ($10::text is null or r.label ilike $10)`;
+      and ($6::uuid is null or r.audit_id = $6) and ($7::uuid is null or r.platform_id = $7) and ($8::text is null or r.status = $8 or ($8 = 'active' and r.status in ('queued', 'running')))
+      and ($9::int is null or r.created_at > now() - make_interval(days => $9::int)) and ($10::text is null or r.label ilike $10)
+      and ($11::text is null or exists (select 1 from platforms px where px.id = r.platform_id and px.environment = $11))`;
     const [{ total }] = await many(`select count(*)::int as total from runs r where ${where}`, params);
     const rows = await many(
       `select r.id, r.kind, r.trigger, r.label, r.status, r.audit_id, r.platform_id, r.total, r.passed, r.failed, r.errored, r.outcomes, r.is_draft, r.created_at, r.started_at, r.finished_at,

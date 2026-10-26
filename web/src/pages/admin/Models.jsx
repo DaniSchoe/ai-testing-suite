@@ -213,6 +213,13 @@ function AnalysisSetting({ models, manager }) {
   );
 }
 
+const CAPS = [
+  ['vision', 'Vision'],
+  ['tools', 'Tool-Calling'],
+  ['reasoning', 'Reasoning'],
+  ['json', 'JSON-Modus'],
+];
+
 function ModelEditor({ model, teams, onClose, onSaved }) {
   const users = useUserDirectory();
   const [form, setForm] = useState({
@@ -220,7 +227,15 @@ function ModelEditor({ model, teams, onClose, onSaved }) {
     maintainer_id: model.maintainer_id ?? '',
     environment: model.environment ?? 'prod',
     visibility: model.visibility ?? 'global',
+    license: model.license ?? '',
+    provider: model.provider ?? '',
+    origin: model.origin ?? '',
+    open_weights: model.open_weights === null || model.open_weights === undefined ? '' : String(model.open_weights),
+    revision: model.revision ?? '',
+    quantization: model.quantization ?? '',
+    context_length: model.context_length ?? '',
   });
+  const [capabilities, setCapabilities] = useState(model.capabilities ?? []);
   const [teamIds, setTeamIds] = useState(model.teamIds ?? []);
   const [error, setError] = useState(null);
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
@@ -229,7 +244,16 @@ function ModelEditor({ model, teams, onClose, onSaved }) {
     try {
       await api('/api/endpoint-models', {
         method: 'PUT',
-        body: { endpoint_id: model.endpoint_id, name: model.name, ...form, maintainer_id: form.maintainer_id || null, teamIds },
+        body: {
+          endpoint_id: model.endpoint_id,
+          name: model.name,
+          ...form,
+          open_weights: form.open_weights === '' ? null : form.open_weights === 'true',
+          context_length: form.context_length === '' ? null : Number(form.context_length),
+          capabilities,
+          maintainer_id: form.maintainer_id || null,
+          teamIds,
+        },
       });
       onSaved();
     } catch (e) {
@@ -291,6 +315,52 @@ function ModelEditor({ model, teams, onClose, onSaved }) {
         </label>
       </div>
       {form.visibility === 'teams' && <TeamPicker teams={teams} value={teamIds} onChange={setTeamIds} />}
+      <h3 style={{ margin: '16px 0 4px', fontSize: 14 }}>Metadaten</h3>
+      <div className="hint" style={{ marginBottom: 8 }}>
+        Grundlage für Souveränitätsbewertung und Eignung. Fähigkeiten bestimmen, welche Vorlagen für das Modell gelten (z. B. OCR nur mit Vision).
+      </div>
+      <div className="btn-row" style={{ marginBottom: 12 }}>
+        {CAPS.map(([key, label]) => (
+          <label key={key} className="checkbox">
+            <input type="checkbox" checked={capabilities.includes(key)} onChange={(e) => setCapabilities(e.target.checked ? [...capabilities, key] : capabilities.filter((c) => c !== key))} />
+            {label}
+          </label>
+        ))}
+      </div>
+      <div className="form-grid">
+        <label className="field">
+          <span>Lizenz</span>
+          <input value={form.license} placeholder="Apache-2.0" onChange={(e) => set({ license: e.target.value })} />
+        </label>
+        <label className="field">
+          <span>Anbieter</span>
+          <input value={form.provider} placeholder="Alibaba" onChange={(e) => set({ provider: e.target.value })} />
+        </label>
+        <label className="field">
+          <span>Herkunft (Ländercode)</span>
+          <input value={form.origin} placeholder="DE" onChange={(e) => set({ origin: e.target.value })} />
+        </label>
+        <label className="field">
+          <span>Open Weights</span>
+          <select value={form.open_weights} onChange={(e) => set({ open_weights: e.target.value })}>
+            <option value="">unbekannt</option>
+            <option value="true">ja</option>
+            <option value="false">nein</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Revision</span>
+          <input value={form.revision} onChange={(e) => set({ revision: e.target.value })} />
+        </label>
+        <label className="field">
+          <span>Quantisierung</span>
+          <input value={form.quantization} placeholder="FP8" onChange={(e) => set({ quantization: e.target.value })} />
+        </label>
+        <label className="field">
+          <span>Kontextlänge</span>
+          <input type="number" value={form.context_length} onChange={(e) => set({ context_length: e.target.value })} />
+        </label>
+      </div>
     </Modal>
   );
 }

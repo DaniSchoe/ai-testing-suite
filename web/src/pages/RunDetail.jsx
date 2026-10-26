@@ -1,8 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, RefreshCw, Sparkles, Square } from 'lucide-react';
-import { TrendLines } from '../components/Charts.jsx';
-import { api, can, Card, fmt, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
+import { ArrowLeft, FileText, RefreshCw, ShieldCheck, Sparkles, Square } from 'lucide-react';
+import {
+  api,
+  can,
+  Card,
+  EnvBadge,
+  ErrorBox,
+  fmt,
+  Loading,
+  OUTCOME_LABELS,
+  OutcomeBadge,
+  PageHead,
+  PATH_LABELS,
+  StatusBadge,
+  Tabs,
+  TYPE_LABELS,
+  useAction,
+  useApi,
+  useUser,
+} from '../lib.jsx';
 
 const ACTIVE = ['queued', 'running'];
 
@@ -12,6 +29,8 @@ export default function RunDetail() {
   const [interval, setIntervalMs] = useState(2000);
   const run = useApi(`/api/runs/${id}`, { interval });
   const logs = useRunLogs(id, interval);
+  const [tab, setTab] = useState('results');
+  const [act, error] = useAction();
   const isActive = run.data && ACTIVE.includes(run.data.status);
 
   // Polling endet, wenn der Lauf fertig ist und auch die KI-Analyse nicht mehr erstellt wird.
@@ -19,52 +38,392 @@ export default function RunDetail() {
     if (run.data) setIntervalMs(ACTIVE.includes(run.data.status) || run.data.analysis_status === 'pending' ? 2000 : undefined);
   }, [run.data]);
 
-  async function regenerate() {
-    await api(`/api/runs/${id}/analysis`, { method: 'POST' });
-    run.reload();
-  }
-
-  async function cancel() {
-    await api(`/api/runs/${id}/cancel`, { method: 'POST' });
-    run.reload();
-  }
-
-  if (run.error) return <div className="error-box">{run.error}</div>;
-  if (!run.data) return null;
-  const r = run.data;
+  const regenerate = () =>
+    act(async () => {
+      await api(`/api/runs/${id}/analysis`, { method: 'POST' });
+      run.reload();
+    });
+  const cancel = () =>
+    act(async () => {
+      await api(`/api/runs/${id}/cancel`, { method: 'POST' });
+      run.reload();
+    });
 
   return (
-    <>
-      <div className="page-head">
-        <div>
-          <Link to="/history" className="sub" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-            <ArrowLeft size={14} /> Historie
-          </Link>
-          <h1 style={{ marginTop: 6 }}>{r.label}</h1>
-          <p>
-            <StatusBadge status={r.status} /> · gestartet {fmt.date(r.started_at ?? r.created_at)} von {r.user_name ?? 'Zeitplan'} · {r.passed}/
-            {r.total} bestanden
-          </p>
+    <Loading state={run}>
+      {(r) => (
+        <>
+          <PageHead
+            title={
+              <>
+                {r.label} {r.is_draft && <span className="badge warn">Testlauf</span>}
+              </>
+            }
+            action={
+              <div className="btn-row">
+                {r.report && (
+                  <Link className="btn" to={`/reports/${r.report.id}`}>
+                    <FileText size={15} /> Bericht
+                  </Link>
+                )}
+                {isActive && (r.user_id === user.id ? can(user, 'runs.start') : can(user, 'runs.manage_all')) && (
+                  <button className="btn danger" onClick={cancel}>
+                    <Square size={14} /> Abbrechen
+                  </button>
+                )}
+              </div>
+            }
+          >
+            <Link to="/runs" className="sub">
+              <ArrowLeft size={13} /> Läufe
+            </Link>{' '}
+            · <StatusBadge status={r.status} /> · {r.platform_name} {r.platform_environment && <EnvBadge env={r.platform_environment} />} · gestartet{' '}
+            {fmt.date(r.started_at ?? r.created_at)} von {r.user_name ?? 'Zeitplan'}
+          </PageHead>
+          <ErrorBox error={error} />
+          <Gate run={r} />
+          {r.is_draft && <div className="hint">Dieser Testlauf zählt nicht in Läufen, Dashboard oder Berichten.</div>}
+          <Tabs
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              ['results', `Ergebnisse (${r.results.length})`],
+              ['evidence', 'Nachweise'],
+              ['snapshot', 'Snapshot'],
+              ['log', 'Log'],
+            ]}
+          />
+          {tab === 'results' && (
+            <>
+              {!isActive && r.results.length > 0 && <AnalysisCard run={r} onRegenerate={can(user, 'runs.start') ? regenerate : null} />}
+              {r.comparison && <Comparison comparison={r.comparison} />}
+              <Results run={r} logs={logs} />
+              {r.results.length === 0 && <div className="card empty">Lauf wartet auf einen freien Worker…</div>}
+            </>
+          )}
+          {tab === 'evidence' && <Evidence runId={id} hash={r.evidence_hash} />}
+          {tab === 'snapshot' && <Snapshot snapshot={r.snapshot} />}
+          {tab === 'log' && (
+            <Card title="Lauf-Log" sub="Alle Meldungen dieses Laufs" flush>
+              <LogView logs={logs} />
+            </Card>
+          )}
+        </>
+      )}
+    </Loading>
+  );
+}
+
+function Gate({ run }) {
+  const g = run.gate;
+  const outcomes = Object.entries(run.outcomes ?? {});
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+      <div className="btn-row" style={{ justifyContent: 'space-between' }}>
+        <div className="btn-row">
+          {outcomes.map(([k, n]) => (
+            <span key={k} className="btn-row" style={{ gap: 4 }}>
+              <strong>{n}</strong> <OutcomeBadge outcome={k} />
+            </span>
+          ))}
+          {outcomes.length === 0 && <span className="sub">Noch keine Ergebnisse</span>}
         </div>
-        {isActive && (r.user_id === user.id ? can(user, 'runs.start') : can(user, 'runs.manage_all')) && (
-          <button className="btn danger" onClick={cancel}>
-            <Square size={14} /> Abbrechen
-          </button>
+        {g?.finished && (
+          <span className={`badge ${g.pass ? 'passed' : 'failed'}`} title={`Gate lässt scheitern bei: ${(g.fail_on ?? []).map((x) => OUTCOME_LABELS[x] ?? x).join(', ')}`}>
+            Gate: {g.pass ? 'bestanden' : 'nicht bestanden'}
+          </span>
         )}
       </div>
+      {g?.reasons?.length > 0 && (
+        <ul className="sub" style={{ margin: '8px 0 0 16px' }}>
+          {g.reasons.map((x, i) => (
+            <li key={i}>{typeof x === 'string' ? x : x.message ?? JSON.stringify(x)}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
-      {!isActive && r.results.length > 0 && <AnalysisCard run={r} onRegenerate={can(user, 'runs.start') ? regenerate : null} />}
+function Comparison({ comparison }) {
+  return (
+    <Card title="Vergleich A/B" sub={comparison.kind === 'paths' ? 'Direkt gegen Gateway' : 'Modell A gegen Modell B'} flush>
+      <table>
+        <thead>
+          <tr>
+            <th>Vorlage</th>
+            <th>A</th>
+            <th>B</th>
+            <th>Unterschiede</th>
+          </tr>
+        </thead>
+        <tbody>
+          {comparison.items.map((it, i) => (
+            <tr key={i}>
+              <td>{it.name?.split(' · ')[0]}</td>
+              <td>
+                {it.a.model} <span className="sub">{PATH_LABELS[it.a.path] ?? it.a.path}</span>
+                <div>{it.a.score === null ? '–' : fmt.pct(it.a.score)}</div>
+              </td>
+              <td>
+                {it.b.model} <span className="sub">{PATH_LABELS[it.b.path] ?? it.b.path}</span>
+                <div>{it.b.score === null ? '–' : fmt.pct(it.b.score)}</div>
+              </td>
+              <td className="sub">
+                {Object.entries(it.diff)
+                  .filter(([, d]) => d.delta)
+                  .map(([k, d]) => `${k}: ${formatMetric(k, d.a)} → ${formatMetric(k, d.b)}`)
+                  .join(' · ') || 'keine'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
 
-      {r.results.map((res) => (
-        <ResultCard key={res.id} result={res} logs={logs.filter((l) => l.result_id === res.id)} />
-      ))}
-      {r.results.length === 0 && <div className="card empty">Lauf wartet auf einen freien Worker…</div>}
+function Results({ run, logs }) {
+  const [open, setOpen] = useState(null);
+  if (!run.results.length) return null;
+  return (
+    <div className="card table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Vorlage</th>
+            <th>Modell · Pfad</th>
+            <th>Ergebnis</th>
+            <th className="num">Score</th>
+            <th>Kennzahlen</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {run.results.map((x) => (
+            <ResultRows key={x.id} result={x} open={open === x.id} onToggle={() => setOpen(open === x.id ? null : x.id)} logs={logs.filter((l) => l.result_id === x.id)} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
-      <div style={{ marginTop: 24 }}>
-        <Card title="Lauf-Log" sub="Alle Meldungen dieses Laufs" flush>
+const KEY_METRICS = ['latency_ms_p95', 'ttft_ms_p95', 'tokens_per_s_avg', 'error_rate', 'false_allow', 'pass_rate'];
+
+function ResultRows({ result: x, open, onToggle, logs }) {
+  const violations = x.details?.thresholds?.violations ?? [];
+  const regressions = x.details?.regression?.regressions ?? [];
+  const ci = x.statistics?.score?.ci95 ?? x.statistics?.cases?.ci95;
+  const shown = KEY_METRICS.filter((k) => typeof x.metrics?.[k] === 'number').slice(0, 3);
+  return (
+    <>
+      <tr onClick={onToggle} style={{ cursor: 'pointer' }}>
+        <td style={{ minWidth: 220 }}>
+          <div style={{ fontWeight: 600 }}>{x.test_name.split(' · ')[0]}</div>
+          <div className="sub">
+            {TYPE_LABELS[x.type] ?? x.type} {x.template_version && <span className="mono">{x.template_version}</span>}
+            {x.variant && ` · Variante ${x.variant}`}
+          </div>
+        </td>
+        <td>
+          {x.model_alias ?? x.model ?? '–'}
+          <div className="sub">{PATH_LABELS[x.path] ?? x.path ?? ''}</div>
+        </td>
+        <td>
+          <OutcomeBadge outcome={x.outcome ?? (x.status === 'passed' ? 'passed' : 'technical_error')} />
+          {regressions.length > 0 && <span className="badge warn" style={{ marginLeft: 4 }}>Regression</span>}
+          {x.statistics?.small_sample && <span className="badge warn" style={{ marginLeft: 4 }} title={`Weniger als ${x.statistics.min_cases} Fälle`}>kleine Stichprobe</span>}
+        </td>
+        <td className="num">
+          {x.score === null ? '–' : fmt.pct(x.score)}
+          {ci && <div className="sub">{`${fmt.pct(ci[0])} – ${fmt.pct(ci[1])}`}</div>}
+          {x.statistics?.n > 1 && <div className="sub">Median aus {x.statistics.n}</div>}
+        </td>
+        <td className="sub">{shown.map((k) => `${k}: ${formatMetric(k, x.metrics[k])}`).join(' · ')}</td>
+        <td className="sub">{open ? '▾' : '▸'}</td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={6} style={{ background: 'var(--surface-2, transparent)' }}>
+            <ResultDetail result={x} violations={violations} regressions={regressions} logs={logs} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function ResultDetail({ result: x, violations, regressions, logs }) {
+  const metrics = Object.entries(x.metrics ?? {}).filter(([, v]) => typeof v === 'number' || typeof v === 'string');
+  const d = x.details?.dataset;
+  return (
+    <div style={{ padding: 8 }}>
+      {x.error && <div className="error-box">{x.error}</div>}
+      {x.outcome === 'not_applicable' && <div className="hint">Nicht anwendbar: {x.error ?? 'Voraussetzung des Modells nicht erfüllt'}.</div>}
+      {violations.length > 0 && (
+        <div className="error-box">
+          Schwellwerte verletzt:
+          {violations.map((v, i) => (
+            <div key={i}>{v.message}</div>
+          ))}
+        </div>
+      )}
+      {regressions.length > 0 && (
+        <div className="error-box" style={{ background: 'var(--warn-soft)', color: 'var(--warn)' }}>
+          Regression gegenüber der Baseline (Toleranz {fmt.pct(x.details.regression.tolerance)}):{' '}
+          {regressions.map((r) => `${r.metric} ${formatMetric(r.metric, r.baseline)} → ${formatMetric(r.metric, r.current)}`).join(', ')}{' '}
+          <Link to={`/runs/${x.details.regression.baselineRunId}`}>Baseline-Lauf</Link>
+        </div>
+      )}
+      {d && (
+        <div className="sub" style={{ marginBottom: 8 }}>
+          Datensatz {d.name ?? d.key} <span className="mono">{d.version}</span> · {d.cases} Fälle · Hash <span className="mono">{d.hash?.slice(0, 12)}</span>
+          {d.small_sample && ` · unter der Mindestzahl von ${d.min_cases} Fällen`}
+        </div>
+      )}
+      {metrics.length > 0 && (
+        <div className="metric-grid" style={{ marginBottom: 12 }}>
+          {metrics.map(([k, v]) => (
+            <div className="metric" key={k}>
+              <div className="k">
+                {k}
+                {x.statistics?.metrics?.[k] && x.statistics.n > 1 && (
+                  <span title="Streuung über die Wiederholungen">
+                    {' '}
+                    ({formatMetric(k, x.statistics.metrics[k].min)}–{formatMetric(k, x.statistics.metrics[k].max)})
+                  </span>
+                )}
+              </div>
+              <div className="v">{formatMetric(k, v)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <DetailsTable result={x} />
+      <details style={{ marginTop: 12 }}>
+        <summary className="sub">Rohdaten und Logs</summary>
+        <pre className="json" style={{ marginTop: 8 }}>
+          {JSON.stringify(x.details, null, 2)}
+        </pre>
+        <div style={{ marginTop: 8 }}>
           <LogView logs={logs} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function Evidence({ runId, hash }) {
+  const evidence = useApi(`/api/runs/${runId}/evidence`);
+  const [verify, setVerify] = useState(null);
+  const [act, error, busy] = useAction();
+  const check = () => act(async () => setVerify(await api(`/api/runs/${runId}/evidence/verify`)));
+  return (
+    <Card
+      title="Nachweise"
+      sub={hash ? `Kettenhash ${hash.slice(0, 24)}…` : 'Noch nicht versiegelt (Lauf läuft oder ist ein Testlauf)'}
+      action={
+        hash && (
+          <button className="btn sm" onClick={check} disabled={busy}>
+            <ShieldCheck size={13} /> Integrität prüfen
+          </button>
+        )
+      }
+    >
+      <ErrorBox error={error} />
+      {verify && (
+        <div className={verify.ok ? 'hint' : 'error-box'}>
+          {verify.ok ? `Integrität bestätigt (${verify.checked ?? verify.count ?? ''} Nachweise).` : `Abweichung festgestellt: ${verify.reason ?? JSON.stringify(verify)}`}
+        </div>
+      )}
+      <Loading state={evidence}>
+        {(e) =>
+          e.items.length === 0 ? (
+            <div className="empty">Keine Nachweise</div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fall</th>
+                    <th>Ergebnis</th>
+                    <th>Prompt / Antwort</th>
+                    <th>Hash</th>
+                    <th>Aufbewahrung</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {e.items.map((it) => (
+                    <tr key={it.id}>
+                      <td>{it.case_key}</td>
+                      <td>
+                        <StatusBadge status={it.ok ? 'passed' : 'failed'} />
+                      </td>
+                      <td className="sub" style={{ maxWidth: 480, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {it.masked ? 'Angriffsinhalt maskiert (Berechtigung security.payloads erforderlich)' : it.purged_at ? 'Nach Ablauf der Aufbewahrung gelöscht' : `${(it.prompt ?? '').slice(0, 200)}${it.response ? `\n→ ${it.response.slice(0, 200)}` : ''}`}
+                      </td>
+                      <td className="mono sub">{it.hash.slice(0, 10)}</td>
+                      <td className="sub">{it.retain_until ? fmt.date(it.retain_until) : '–'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
+      </Loading>
+    </Card>
+  );
+}
+
+function Snapshot({ snapshot }) {
+  if (!snapshot) return <div className="card empty">Kein Snapshot gespeichert.</div>;
+  return (
+    <>
+      {snapshot.changes?.length > 0 && (
+        <Card title="Änderungen seit dem vorherigen Lauf" flush>
+          <table>
+            <tbody>
+              {snapshot.changes.map((c, i) => (
+                <tr key={i}>
+                  <td>{c.what ?? c.kind ?? c.component ?? ''}</td>
+                  <td className="sub">{c.message ?? `${c.from ?? ''} → ${c.to ?? ''}`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </Card>
-      </div>
+      )}
+      <Card title="Komponenten zum Zeitpunkt des Laufs" sub={`Snapshot ${snapshot.hash?.slice(0, 12)} vom ${fmt.date(snapshot.taken_at)}`} flush>
+        <table>
+          <tbody>
+            {snapshot.components.map((c, i) => (
+              <tr key={i}>
+                <td>{c.name}</td>
+                <td className="sub">{c.kind}</td>
+                <td>{c.version ?? '–'}</td>
+                <td>
+                  <span className={`badge ${c.status === 'up' ? 'passed' : 'failed'}`}>{c.status}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+      <Card title="Modelle (Version, Lizenz, Quantisierung)" flush>
+        <table>
+          <tbody>
+            {snapshot.models.map((m, i) => (
+              <tr key={i}>
+                <td>{m.alias ?? m.name}</td>
+                <td className="sub">{m.endpoint}</td>
+                <td className="sub">{[m.provider, m.license, m.revision && `rev ${m.revision}`, m.quantization].filter(Boolean).join(' · ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
     </>
   );
 }
@@ -188,67 +547,6 @@ function LogView({ logs }) {
           {l.message}
         </div>
       ))}
-    </div>
-  );
-}
-
-function ResultCard({ result, logs }) {
-  const history = useApi(result.test_id && result.finished_at ? `/api/tests/${result.test_id}/history?limit=30` : null);
-  const metrics = Object.entries(result.metrics ?? {}).filter(([, v]) => typeof v === 'number' || typeof v === 'string');
-  const regression = result.details?.regression;
-  const trendKey = ['ttft_ms_p95', 'latency_ms_p95', 'error_rate'].find((k) => typeof result.metrics?.[k] === 'number');
-  const trend = (history.data ?? [])
-    .slice()
-    .reverse()
-    .map((h) => ({ day: h.finished_at, Score: h.score, [trendKey]: h.metrics?.[trendKey] }));
-
-  return (
-    <div id={result.id} style={{ marginBottom: 20 }}>
-      <Card
-        title={result.test_name}
-        sub={`${TYPE_LABELS[result.type] ?? result.type} · ${result.endpoint_name ?? ''}${result.model ? ` · ${result.model}` : ''}${result.api_key_name ? ` · mit Key ${result.api_key_name}` : ''} · ${fmt.ms(result.duration_ms)}`}
-        action={<StatusBadge status={result.status} />}
-      >
-        {result.error && <div className="error-box">{result.error}</div>}
-        {metrics.length > 0 && (
-          <div className="metric-grid" style={{ marginBottom: 16 }}>
-            {result.score !== null && (
-              <div className="metric">
-                <div className="k">score</div>
-                <div className="v">{fmt.pct(result.score)}</div>
-              </div>
-            )}
-            {metrics.map(([k, v]) => (
-              <div className="metric" key={k}>
-                <div className="k">{k}</div>
-                <div className="v">{formatMetric(k, v)}</div>
-              </div>
-            ))}
-          </div>
-        )}
-        {regression?.regressions?.length > 0 && (
-          <div className="error-box" style={{ background: 'var(--warn-soft)', color: 'var(--warn)' }}>
-            Regression gegenüber der letzten bestandenen Ausführung (Toleranz {fmt.pct(regression.tolerance)}):{' '}
-            {regression.regressions.map((x) => `${x.metric} ${formatMetric(x.metric, x.baseline)} → ${formatMetric(x.metric, x.current)}`).join(', ')}
-          </div>
-        )}
-        {trendKey && trend.length > 1 && (
-          <div style={{ marginBottom: 16 }}>
-            <h2 style={{ fontSize: 13, marginBottom: 8 }}>Verlauf {trendKey}</h2>
-            <TrendLines data={trend} keys={[trendKey]} valueFormatter={(v) => formatMetric(trendKey, v)} height={180} />
-          </div>
-        )}
-        <DetailsTable result={result} />
-        <details style={{ marginTop: 12 }}>
-          <summary className="sub">Rohdaten und Logs</summary>
-          <pre className="json" style={{ marginTop: 8 }}>
-            {JSON.stringify(result.details, null, 2)}
-          </pre>
-          <div style={{ marginTop: 8 }}>
-            <LogView logs={logs} />
-          </div>
-        </details>
-      </Card>
     </div>
   );
 }

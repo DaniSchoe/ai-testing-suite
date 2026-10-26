@@ -22,8 +22,8 @@ const FLAVORS = [
   ['claude', 'Claude (Anthropic Messages API)'],
 ];
 
-export default function Endpoints() {
-  const endpoints = useApi('/api/endpoints');
+export default function Components({ platform }) {
+  const endpoints = useApi(`/api/endpoints?platform_id=${platform.id}`);
   const teams = useTeams();
   const [editing, setEditing] = useState(null);
   const [checks, setChecks] = useState({});
@@ -38,24 +38,20 @@ export default function Endpoints() {
   }
 
   async function remove(e) {
-    if (!confirm(`Endpoint "${e.name}" löschen? Zugehörige Tests werden ebenfalls gelöscht.`)) return;
+    if (!confirm(`Endpoint "${e.name}" löschen? Prüfungen mit diesem Endpoint verlieren ihr Ziel.`)) return;
     await api(`/api/endpoints/${e.id}`, { method: 'DELETE' });
     endpoints.reload();
   }
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Endpoints</h1>
-          <p>
-            AI Proxys (z. B. LiteLLM), LLM-Endpoints (OpenAI-compatible oder Claude, z. B. ein vLLM-Server pro Modell) und MCP-Server. Modelle werden
-            automatisch abgefragt; gleiche Modelle mit unterschiedlichen Namen führst du im <Link to="/admin/models">Modellkatalog</Link> zusammen. Den
-            API-Key wählst du aus den <Link to="/admin/api-keys">API-Keys</Link>.
-          </p>
-        </div>
+      <div className="toolbar">
+        <span className="hint" style={{ flex: 1 }}>
+          AI Proxys (z. B. LiteLLM), LLM-Endpoints (OpenAI-compatible oder Claude, z. B. ein vLLM-Server pro Modell) und MCP-Server dieser Plattform. Den API-Key wählst du unter{' '}
+          <Link to="/credentials">Zugangsdaten</Link>.
+        </span>
         <button className="btn primary" onClick={() => setEditing({})}>
-          <Plus size={15} /> Neuer Endpoint
+          <Plus size={15} /> Neue Komponente
         </button>
       </div>
       <div className="card table-wrap">
@@ -102,7 +98,7 @@ export default function Endpoints() {
                       '–'
                     ) : (
                       <>
-                        <Link to="/admin/models">{e.models.filter((m) => m.available).length} Modelle</Link>
+                        <Link to="/models">{e.models.filter((m) => m.available).length} Modelle</Link>
                         {e.models.some((m) => !m.available) && <span> · {e.models.filter((m) => !m.available).length} verschwunden</span>}
                         {e.default_model && <div>Standard: {e.default_model}</div>}
                         <div>{e.auto_discover ? `abgefragt ${fmt.ago(e.models_synced_at)}` : 'manuell gepflegt'}</div>
@@ -146,6 +142,7 @@ export default function Endpoints() {
       {editing && (
         <EndpointEditor
           endpoint={editing}
+          platform={platform}
           teams={teams.data ?? []}
           onClose={() => setEditing(null)}
           onSaved={(result) => {
@@ -207,7 +204,7 @@ function DiscoveredPopup({ info, onClose }) {
   );
 }
 
-function EndpointEditor({ endpoint, teams, onClose, onSaved }) {
+function EndpointEditor({ endpoint, platform, teams, onClose, onSaved }) {
   const keys = useApi('/api/api-keys');
   const users = useUserDirectory();
   const [form, setForm] = useState({
@@ -237,7 +234,7 @@ function EndpointEditor({ endpoint, teams, onClose, onSaved }) {
   async function runTest() {
     setTest({ pending: true });
     try {
-      setTest(await api('/api/endpoints/test', { method: 'POST', body: { ...form, api_key_id: form.api_key_id || null, headers } }));
+      setTest(await api('/api/endpoints/test', { method: 'POST', body: { ...form, platform_id: platform.id, environment: platform.environment, api_key_id: form.api_key_id || null, headers } }));
     } catch (e) {
       setTest({ ok: false, error: e.message });
     }
@@ -246,6 +243,8 @@ function EndpointEditor({ endpoint, teams, onClose, onSaved }) {
   async function save() {
     const body = {
       ...form,
+      platform_id: platform.id,
+      environment: platform.environment,
       api_key_id: form.api_key_id || null,
       maintainer_id: form.maintainer_id || null,
       teamIds,
@@ -354,16 +353,9 @@ function EndpointEditor({ endpoint, teams, onClose, onSaved }) {
             </option>
           ))}
         </select>
-        <div className="hint">Keys verwaltest du unter Einstellungen › API-Keys.</div>
+        <div className="hint">Keys verwaltest du unter Verwaltung › Zugangsdaten.</div>
       </label>
       <div className="form-grid">
-        <label className="field">
-          <span>Umgebung</span>
-          <select value={form.environment} onChange={(e) => set({ environment: e.target.value })}>
-            <option value="prod">Prod</option>
-            <option value="dev">Dev</option>
-          </select>
-        </label>
         <label className="field">
           <span>Veröffentlicht für</span>
           <select value={form.visibility} onChange={(e) => set({ visibility: e.target.value })}>

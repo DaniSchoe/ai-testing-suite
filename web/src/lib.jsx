@@ -2,10 +2,46 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { Bot, Cpu, Globe, Lock, Plug, Route, Users as UsersIcon, X } from 'lucide-react';
 
-export async function api(path, { method = 'GET', body } = {}) {
+// Mandant und Umgebung gelten für die ganze Oberfläche; ein Wechsel lädt die Seite neu.
+const store = {
+  get(key, fallback = null) {
+    try {
+      return localStorage.getItem(key) || fallback;
+    } catch {
+      return fallback;
+    }
+  },
+  set(key, value) {
+    try {
+      if (value) localStorage.setItem(key, value);
+      else localStorage.removeItem(key);
+    } catch {
+      /* Speicher nicht verfügbar */
+    }
+  },
+};
+export const getTenant = () => store.get('tenant');
+export const setTenant = (id) => {
+  store.set('tenant', id);
+  window.location.assign('/');
+};
+export const getEnv = () => store.get('env', 'all');
+export const setEnv = (env) => {
+  store.set('env', env === 'all' ? null : env);
+  window.location.reload();
+};
+// Query-Zusatz für Endpunkte, die nach Umgebung filtern.
+export const envParam = (prefix = '?') => (getEnv() === 'all' ? '' : `${prefix}environment=${getEnv()}`);
+export const qs = (params) => {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== 'all')).toString();
+  return q ? `?${q}` : '';
+};
+
+export async function api(path, { method = 'GET', body, raw } = {}) {
+  const tenant = getTenant();
   const res = await fetch(path, {
     method,
-    headers: body ? { 'content-type': 'application/json' } : undefined,
+    headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(tenant ? { 'x-tenant-id': tenant } : {}) },
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });
@@ -13,6 +49,7 @@ export async function api(path, { method = 'GET', body } = {}) {
     window.location.href = '/auth/login';
     throw new Error('Nicht angemeldet');
   }
+  if (raw && res.ok) return res.text();
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
   return data;
@@ -135,6 +172,32 @@ export const TYPE_LABELS = {
   structured: 'Tool-Calling / JSON',
   thinking: 'Thinking vs. Non-Thinking',
 };
+
+export const OUTCOME_LABELS = {
+  passed: 'Bestanden',
+  quality_deviation: 'Qualitätsabweichung',
+  security_finding: 'Sicherheitsbefund',
+  technical_error: 'Technischer Fehler',
+  not_applicable: 'Nicht anwendbar',
+};
+const OUTCOME_CLASS = { passed: 'passed', quality_deviation: 'failed', security_finding: 'failed', technical_error: 'error', not_applicable: 'skipped' };
+export function OutcomeBadge({ outcome }) {
+  return <span className={`badge ${OUTCOME_CLASS[outcome] ?? ''}`}>{OUTCOME_LABELS[outcome] ?? outcome ?? '–'}</span>;
+}
+
+export const SEVERITY_LABELS = { critical: 'Kritisch', high: 'Hoch', medium: 'Mittel', low: 'Niedrig', info: 'Info' };
+export const SEVERITY_CLASS = { critical: 'failed', high: 'failed', medium: 'error', low: 'queued', info: 'skipped' };
+export function SeverityBadge({ severity }) {
+  return <span className={`badge ${SEVERITY_CLASS[severity] ?? ''}`}>{SEVERITY_LABELS[severity] ?? severity}</span>;
+}
+
+export const LIFECYCLE_LABELS = { draft: 'Entwurf', review: 'In Prüfung', published: 'Veröffentlicht', deprecated: 'Veraltet', approved: 'Freigegeben', rejected: 'Abgelehnt', pending: 'Offen', revoked: 'Widerrufen', in_review: 'In Prüfung' };
+const LIFECYCLE_CLASS = { draft: 'queued', review: 'running', in_review: 'running', published: 'passed', approved: 'passed', deprecated: 'skipped', rejected: 'failed', pending: 'running', revoked: 'skipped' };
+export function LifecycleBadge({ status }) {
+  return <span className={`badge ${LIFECYCLE_CLASS[status] ?? ''}`}>{LIFECYCLE_LABELS[status] ?? status}</span>;
+}
+
+export const PATH_LABELS = { direct: 'direkt', gateway: 'über Gateway', both: 'direkt und Gateway' };
 
 export const STATUS_LABELS = {
   passed: 'Bestanden',
@@ -331,3 +394,78 @@ export function describeSchedule(b) {
   if (b.schedule_run_at) return `Einmalig ${fmt.date(b.schedule_run_at)}${b.schedule_enabled ? '' : ' (erledigt)'}`;
   return `${CRON_PRESETS.find(([c]) => c === b.schedule_cron)?.[1] ?? b.schedule_cron}${b.schedule_enabled ? '' : ' (pausiert)'}`;
 }
+
+
+export function PageHead({ title, children, action }) {
+  return (
+    <div className="page-head">
+      <div>
+        <h1>{title}</h1>
+        {children && <p>{children}</p>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+export function Field({ label, hint, children }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      {children}
+      {hint && <div className="hint">{hint}</div>}
+    </label>
+  );
+}
+
+export function Tabs({ tabs, value, onChange }) {
+  return (
+    <div className="segmented" role="tablist" style={{ marginBottom: 14 }}>
+      {tabs.map(([key, label]) => (
+        <button key={key} role="tab" aria-selected={value === key} className={value === key ? 'active' : ''} onClick={() => onChange(key)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export const Empty = ({ children }) => <div className="empty">{children}</div>;
+export const ErrorBox = ({ error }) => (error ? <div className="error-box">{error}</div> : null);
+
+// Zustand einer Seite, die Daten lädt: Fehler und Ladezustand einheitlich.
+export function Loading({ state, children }) {
+  if (state.error) return <ErrorBox error={state.error} />;
+  if (!state.data) return <Empty>Lädt…</Empty>;
+  return children(state.data);
+}
+
+// Aktion mit Fehleranzeige; gibt [run, error, busy] zurück.
+export function useAction() {
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const run = useCallback(async (fn) => {
+    setBusy(true);
+    setError(null);
+    try {
+      return await fn();
+    } catch (e) {
+      setError(e.message);
+      return undefined;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+  return [run, error, busy, setError];
+}
+
+export function download(filename, text, type = 'text/plain') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export const pctText = (v) => (v === null || v === undefined ? '–' : `${Math.round(v * 100)} %`);

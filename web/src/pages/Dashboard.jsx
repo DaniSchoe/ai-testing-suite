@@ -1,305 +1,543 @@
-import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Activity, AlertTriangle, Gauge as GaugeIcon, ListFilter, Percent, Table2 } from 'lucide-react';
-import { DailyBars, Gauge, LoadScatter, ProgressList, RadarProfile, TrendLines } from '../components/Charts.jsx';
-import FilterDialog from '../components/FilterDialog.jsx';
-import { can, Card, fmt, initials, ScopePicker, scopeLabel, scopeParams, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
-import { bestModels, profileAxes } from '../modelProfile.js';
+import { useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, ArrowLeft, Info, Lock } from 'lucide-react';
+import { RadarProfile, TrendLines } from '../components/Charts.jsx';
+import { Card, Empty, EnvBadge, envParam, fmt, Loading, Modal, OutcomeBadge, PageHead, PATH_LABELS, pctText, SeverityBadge, StatusBadge, TYPE_LABELS, useApi } from '../lib.jsx';
+
+const DIMENSIONS = [
+  ['quality', 'Qualität'],
+  ['security', 'Sicherheit'],
+  ['performance', 'Performance'],
+  ['efficiency', 'Effizienz'],
+  ['sovereignty', 'Souveränität'],
+];
+const RATING = {
+  suitable: ['passed', 'geeignet'],
+  conditional: ['warn', 'bedingt'],
+  unsuitable: ['failed', 'ungeeignet'],
+  incomplete: ['queued', 'zu wenig Daten'],
+  not_applicable: ['skipped', 'nicht anwendbar'],
+};
 
 export default function Dashboard() {
-  const user = useUser();
-  const navigate = useNavigate();
-  const [scope, setScope] = useState(() => (can(user, 'results.view_all') ? 'all' : 'me'));
+  const [params, setParams] = useSearchParams();
+  const platform = params.get('platform');
+  const model = params.get('model');
   const [days, setDays] = useState(30);
-  const [selection, setSelection] = useState({ models: [], endpoints: [] });
-  const [filtering, setFiltering] = useState(false);
-  const query = new URLSearchParams({ ...scopeParams(scope), days: String(days) });
-  if (selection.models.length) query.set('models', selection.models.join(','));
-  if (selection.endpoints.length) query.set('endpoints', selection.endpoints.join(','));
-  const filters = useApi('/api/dashboard/filters');
-  const { data, error } = useApi(`/api/dashboard?${query}`, { interval: 15000 });
-  const teams = useApi(scope.startsWith('team:') && can(user, 'results.view_all') ? '/api/teams' : null);
-  const today = new Date().toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
-
-  const perf = useMemo(() => {
-    const byDay = new Map();
-    const models = new Set();
-    for (const row of data?.perfByModel ?? []) {
-      models.add(row.model);
-      const entry = byDay.get(row.day) ?? { day: row.day };
-      entry[row.model] = row.ttft_ms_p95;
-      byDay.set(row.day, entry);
-    }
-    return { rows: [...byDay.values()], models: [...models] };
-  }, [data]);
-
-  // Ein Polygon je Modell, wie bei der TTFT-Ansicht; mehr als acht Modelle unterscheiden sich farblich nicht mehr.
-  const radar = useMemo(() => (data?.profiles ?? []).slice(0, 8).map((m) => ({ name: m.model, axes: profileAxes(m) })), [data]);
-  const best = useMemo(() => bestModels(data?.profiles), [data]);
-  // Filter für die Folgeseiten (Historie, Modellprofil) übernehmen.
-  const carry = new URLSearchParams({ scope, days: String(days) });
-  if (selection.models.length) carry.set('models', selection.models.join(','));
-  if (selection.endpoints.length) carry.set('endpoints', selection.endpoints.join(','));
-  const selectedCount = selection.models.length + selection.endpoints.length;
-
-  if (error) return <div className="error-box">{error}</div>;
-  const k = data?.kpis ?? {};
-
+  const [scales, setScales] = useState(false);
+  const go = (next) => setParams(next);
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Hallo {(user.display_name ?? user.username).split(' ')[0]}</h1>
-          <p>
-            {scopeLabel(scope, user, teams.data ?? [])} am {today}.
-          </p>
-        </div>
-        <div className="btn-row">
-          <ScopePicker value={scope} onChange={setScope} withTeams={false} />
-          <select className="inline" value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Zeitraum">
-            <option value={7}>Letzte 7 Tage</option>
-            <option value={30}>Letzte 30 Tage</option>
-            <option value={90}>Letzte 90 Tage</option>
-          </select>
-          <button className={`btn${selectedCount ? ' primary' : ''}`} onClick={() => setFiltering(true)}>
-            <ListFilter size={15} /> {selectedCount ? `${selection.endpoints.length} Endpoints, ${selection.models.length} Modelle` : 'Modelle und Endpoints'}
-          </button>
-        </div>
-      </div>
-
-      <div className="grid kpis">
-        <Kpi
-          title="Testläufe"
-          icon={<Activity size={16} />}
-          value={fmt.num(k.runs, 0)}
-          sub={`${fmt.num(k.results, 0)} Testergebnisse · ${k.active ?? 0} aktiv`}
-          to={`/history?${carry}`}
-        />
-        <Kpi
-          title="Erfolgsquote"
-          icon={<Percent size={16} />}
-          value={fmt.pct(k.pass_rate)}
-          sub={`${k.passed ?? 0} bestanden · ${(k.failed ?? 0) + (k.errored ?? 0)} nicht bestanden`}
-        />
-        <Kpi
-          title="TTFT p95 (Ø)"
-          icon={<GaugeIcon size={16} />}
-          value={fmt.ms(k.ttft_ms_p95)}
-          sub={`${fmt.num(k.tokens_per_s, 0)} Tokens/s · Security-Score ${fmt.pct(k.security_score)}`}
-        />
-        <Kpi
-          title="Fehlschläge (24 h)"
-          icon={<AlertTriangle size={16} />}
-          tone="bad"
-          value={fmt.num(k.failing_24h, 0)}
-          sub={`${k.regressions ?? 0} Regressionen im Zeitraum`}
-          subTone={k.regressions ? 'bad' : undefined}
-        />
-      </div>
-
-      <div className="two-col">
-        <Card title="Genauigkeit / Qualität" sub={`Ø Score aus Qualitäts- und Tool-Calling-Tests${data?.quality?.results ? ` (${data.quality.results} Ergebnisse)` : ''}`}>
-          <div style={{ minHeight: 300, display: 'grid', placeItems: 'center' }}>
-            <Gauge value={data?.quality?.score ?? null} label="Genauigkeit und Qualität" sub={data?.quality?.results ? 'Grün ab 80 %, gelb ab 60 %' : 'Noch keine Qualitätsdaten im Zeitraum'} />
+      <PageHead
+        title="Dashboard"
+        action={
+          <div className="btn-row">
+            <select className="inline" value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Zeitraum">
+              <option value={7}>7 Tage</option>
+              <option value={30}>30 Tage</option>
+              <option value={90}>90 Tage</option>
+              <option value={365}>12 Monate</option>
+            </select>
+            <button className="btn" onClick={() => setScales(true)}>
+              <Info size={15} /> Skalen
+            </button>
           </div>
-        </Card>
-        <Card
-          title={
-            <Link to={`/model-profiles?${carry}`} className="title-link">
-              Modellprofil <Table2 size={15} style={{ verticalAlign: -2 }} />
-            </Link>
-          }
-          sub="Ein Netz je Modell, alle Achsen von 0 bis 100, höher ist besser"
-          action={
-            <Link className="btn sm" to={`/model-profiles?${carry}`}>
-              Details
-            </Link>
-          }
-        >
-          {radar.length ? <RadarProfile series={radar} /> : <div className="empty">Keine Modelldaten im Zeitraum</div>}
-        </Card>
-      </div>
-
-      <div className="grid kpis">
-        {best.map((b) => (
-          <section className="card kpi" key={b.key}>
-            <div className="kpi-top">
-              <span>Bestes Modell: {b.title}</span>
-            </div>
-            <div className="kpi-value" style={{ fontSize: 22, overflowWrap: 'anywhere' }}>
-              {b.model ?? '–'}
-            </div>
-            <div className="kpi-sub">
-              <strong>{b.score}</strong> · {b.detail}
-            </div>
-          </section>
-        ))}
-      </div>
-
-      <div className="two-col">
-        <Card title="Last: Antwortzeit und parallele Anfragen" sub="p95 je Laststufe aus den Lasttests im Zeitraum">
-          {data?.loadPoints?.length ? <LoadScatter points={data.loadPoints} /> : <div className="empty">Noch keine Lasttests im Zeitraum</div>}
-        </Card>
-        <Card title="Time-to-first-Token p95 je Modell" sub="Aus Performance-Tests, Tagesmittel">
-          {perf.rows.length ? <TrendLines data={perf.rows} keys={perf.models} valueFormatter={fmt.ms} /> : <div className="empty">Noch keine Performance-Daten</div>}
-        </Card>
-      </div>
-
-      <div className="grid cols-2">
-        <Card title="Erfolgsquote nach Testart" sub="Anteil bestandener Ergebnisse je Testtyp" action={<Link to="/test-builder">Zum Test-Builder</Link>}>
-          {data?.byType?.length ? (
-            <ProgressList
-              rows={data.byType.map((t) => ({
-                label: TYPE_LABELS[t.type] ?? t.type,
-                count: t.total,
-                value: t.total ? t.passed / t.total : 0,
-                valueLabel: fmt.pct(t.total ? t.passed / t.total : null),
-              }))}
-            />
-          ) : (
-            <div className="empty">Noch keine Ergebnisse im Zeitraum</div>
-          )}
-        </Card>
-        <Card title="Ergebnisse pro Tag" sub={`Letzte ${days} Tage`}>
-          <DailyBars
-            data={data?.trend ?? []}
-            series={[
-              { key: 'passed', label: 'Bestanden', color: 'var(--bar)' },
-              { key: 'failed', label: 'Fehlgeschlagen', color: 'var(--series-8)' },
-              { key: 'errored', label: 'Fehler', color: 'var(--series-4)' },
-            ]}
-          />
-        </Card>
-      </div>
-
-      <div style={{ marginBottom: 24 }}>
-        <Card title="Letzte Fehlschläge" sub="Die neuesten zuerst" action={<Link to="/history?status=failed">Alle</Link>} flush>
-          {data?.recentFailures?.length ? (
-            <table>
-              <tbody>
-                {data.recentFailures.map((f) => (
-                  <tr key={f.id} className="clickable" onClick={() => navigate(`/runs/${f.run_id}`)}>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{f.test_name}</div>
-                      <div className="sub">
-                        {TYPE_LABELS[f.type]} · {f.model ?? '–'} · {f.user_name ?? 'Zeitplan'}
-                      </div>
-                    </td>
-                    <td>
-                      <StatusBadge status={f.status} />
-                    </td>
-                    <td className="num sub">{fmt.ago(f.finished_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="empty">Keine Fehlschläge im Zeitraum</div>
-          )}
-        </Card>
-      </div>
-
-      {data?.thinking?.length > 0 && (
-        <div style={{ marginBottom: 24 }}>
-          <Card title="Thinking vs. Non-Thinking" sub="Mittelwerte aus Thinking-Tests im Zeitraum: was bringt Reasoning und was kostet es?" flush>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Modell</th>
-                    <th className="num">Tests</th>
-                    <th className="num">Genauigkeit mit Thinking</th>
-                    <th className="num">Gewinn ggü. ohne</th>
-                    <th className="num">Token-Faktor</th>
-                    <th className="num">Latenz-Faktor</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.thinking.map((t) => (
-                    <tr key={t.model}>
-                      <td style={{ fontWeight: 600 }}>{t.model}</td>
-                      <td className="num">{t.results}</td>
-                      <td className="num">{fmt.pct(t.thinking_accuracy)}</td>
-                      <td className="num">
-                        {t.accuracy_gain === null ? '–' : `${t.accuracy_gain >= 0 ? '+' : ''}${fmt.num(t.accuracy_gain * 100, 0)} Pkt.`}
-                      </td>
-                      <td className="num">{t.token_factor === null ? '–' : `${fmt.num(t.token_factor)}×`}</td>
-                      <td className="num">{t.latency_factor === null ? '–' : `${fmt.num(t.latency_factor)}×`}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {scope !== 'me' && (
-        <Card title={scope === 'all' ? 'Alle Nutzer' : 'Teammitglieder'} sub="Testaktivität je Nutzer im Zeitraum" flush>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Nutzer</th>
-                  <th className="num">Läufe</th>
-                  <th className="num">Ergebnisse</th>
-                  <th className="num">Erfolgsquote</th>
-                  <th className="num">Letzter Lauf</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data?.byUser ?? []).map((u) => (
-                  <tr key={u.id}>
-                    <td>
-                      <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
-                        <span className="avatar sm">{initials(u.display_name ?? u.username)}</span>
-                        {u.display_name ?? u.username}
-                      </span>
-                    </td>
-                    <td className="num">{u.runs}</td>
-                    <td className="num">{u.results}</td>
-                    <td className="num">{fmt.pct(u.pass_rate)}</td>
-                    <td className="num">{fmt.ago(u.last_run_at)}</td>
-                  </tr>
-                ))}
-                {!data?.byUser?.length && (
-                  <tr>
-                    <td colSpan={5} className="empty">
-                      Noch keine Läufe
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
-      {filtering && (
-        <FilterDialog
-          filters={filters.data ?? []}
-          selection={selection}
-          canDev={user.is_admin}
-          onClose={() => setFiltering(false)}
-          onApply={(next) => {
-            setSelection(next);
-            setFiltering(false);
-          }}
-        />
-      )}
+        }
+      >
+        Drei Ebenen: Portfolio aller Plattformen, eine Plattform im Detail, ein Modell auf einer Plattform. Es zählen nur Läufe von Prüfungen, keine Testläufe.
+      </PageHead>
+      {!platform && <Portfolio days={days} go={go} />}
+      {platform && !model && <PlatformLevel id={platform} days={days} go={go} />}
+      {platform && model && <ModelLevel platformId={platform} model={model} days={days} go={go} />}
+      {scales && <ScalesDialog onClose={() => setScales(false)} />}
     </>
   );
 }
 
-function Kpi({ title, icon, value, sub, tone, subTone, to }) {
-  const Wrapper = to ? Link : 'section';
+function Kpi({ label, value, sub, bad }) {
   return (
-    <Wrapper className={`card kpi${to ? ' kpi-link' : ''}`} {...(to ? { to, title: 'Zur Historie' } : {})}>
-      <div className="kpi-top">
-        <span>{title}</span>
-        <span className={`kpi-icon${tone ? ` ${tone}` : ''}`}>{icon}</span>
+    <section className="card kpi">
+      <div className="kpi-top">{label}</div>
+      <div className="kpi-value" style={bad ? { color: 'var(--bad, #dc2626)' } : undefined}>
+        {value}
       </div>
-      <div className="kpi-value">{value}</div>
-      <div className={`kpi-sub${subTone ? ` ${subTone}` : ''}`}>{sub}</div>
-    </Wrapper>
+      {sub && <div className="kpi-sub">{sub}</div>}
+    </section>
+  );
+}
+
+function Portfolio({ days, go }) {
+  const data = useApi(`/api/dashboard/portfolio?days=${days}${envParam('&')}`, { interval: 60000 });
+  return (
+    <Loading state={data}>
+      {(d) => (
+        <>
+          <div className="grid kpis">
+            <Kpi label="Plattformen" value={d.totals.platforms} />
+            <Kpi label="Bestehensquote" value={pctText(d.totals.pass_rate)} sub={`${d.totals.tests} Messungen`} />
+            <Kpi label="Anforderungen erfüllt" value={pctText(d.totals.slo.rate)} sub={`${d.totals.slo.fulfilled} von ${d.totals.slo.total} Schwellwerten`} />
+            <Kpi label="Offene Findings" value={d.totals.open_findings} sub={`${d.totals.critical_findings} kritisch`} bad={d.totals.critical_findings > 0} />
+            <Kpi label="Freigaben offen" value={d.totals.pending_approvals} />
+            <Kpi label="Berichte in Prüfung" value={d.totals.reports_in_review} />
+          </div>
+          {d.platforms.length === 0 ? (
+            <Empty>Keine Plattformen in dieser Umgebung. Lege unter Ziele › Plattformen eine an.</Empty>
+          ) : (
+            <Card title="Plattformen" flush>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Plattform</th>
+                      <th>Komponenten</th>
+                      <th className="num">Bestehensquote</th>
+                      <th className="num">Anforderungen</th>
+                      <th>Findings</th>
+                      <th>Letzter Lauf</th>
+                      <th className="num">SEAL min.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.platforms.map((p) => (
+                      <tr key={p.id} onClick={() => go({ platform: p.id })} style={{ cursor: 'pointer' }}>
+                        <td>
+                          <span className="title-link">{p.name}</span> <EnvBadge env={p.environment} />
+                          {p.locked && (
+                            <span className="badge failed" style={{ marginLeft: 6 }}>
+                              <Lock size={11} /> gesperrt
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <span className={`badge ${p.components.up === p.components.total ? 'passed' : 'failed'}`}>
+                            {p.components.up}/{p.components.total} erreichbar
+                          </span>
+                        </td>
+                        <td className="num">{pctText(p.pass_rate)}</td>
+                        <td className="num">{pctText(p.slo.rate)}</td>
+                        <td>
+                          {p.open_findings === 0 ? (
+                            <span className="sub">keine</span>
+                          ) : (
+                            Object.entries(p.findings)
+                              .filter(([, n]) => n)
+                              .map(([s, n]) => (
+                                <span key={s} style={{ marginRight: 4 }}>
+                                  {n}× <SeverityBadge severity={s} />
+                                </span>
+                              ))
+                          )}
+                        </td>
+                        <td>{p.last_run ? <StatusBadge status={p.last_run.status} /> : '–'}</td>
+                        <td className="num">{p.sovereignty_min ?? '–'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+          <Card title="Letzte Läufe" flush>
+            <table>
+              <tbody>
+                {d.recent_runs.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <Link to={`/runs/${r.id}`}>{r.label}</Link>
+                    </td>
+                    <td className="sub">{r.platform_name}</td>
+                    <td>
+                      <StatusBadge status={r.status} />
+                    </td>
+                    <td className="sub">{fmt.ago(r.finished_at ?? r.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
+    </Loading>
+  );
+}
+
+function Back({ onClick, children }) {
+  return (
+    <button className="btn sm" onClick={onClick} style={{ marginBottom: 12 }}>
+      <ArrowLeft size={14} /> {children}
+    </button>
+  );
+}
+
+function Dim({ d }) {
+  if (!d) return <span className="sub">–</span>;
+  return (
+    <span title={d.ci95 ? `95-%-Intervall ${d.ci95[0]}–${d.ci95[1]}, ${d.n} Fälle` : undefined}>
+      <strong>{d.value}</strong>
+      {d.ci95 && (
+        <span className="sub">
+          {' '}
+          ({d.ci95[0]}–{d.ci95[1]})
+        </span>
+      )}
+      {d.low_confidence && <AlertTriangle size={12} style={{ marginLeft: 4, color: 'var(--warn, #c77d12)' }} aria-label="geringe Aussagekraft" />}
+    </span>
+  );
+}
+
+function Suitability({ items }) {
+  return (
+    <div className="btn-row">
+      {items.map((s) => {
+        const [cls, text] = RATING[s.rating] ?? ['queued', s.rating];
+        return (
+          <span key={s.key} className={`badge ${cls}`} title={s.note ?? `Abdeckung ${pctText(s.coverage)}`}>
+            {s.label}: {s.value !== undefined ? `${s.value} ` : ''}
+            {text}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlatformLevel({ id, days, go }) {
+  const data = useApi(`/api/dashboard/platforms/${id}?days=${days}`, { interval: 60000 });
+  return (
+    <Loading state={data}>
+      {(d) => (
+        <>
+          <Back onClick={() => go({})}>Portfolio</Back>
+          <h2 style={{ margin: '0 0 12px' }}>
+            {d.platform.name} <EnvBadge env={d.platform.environment} />
+            {d.platform.locked && <span className="badge failed" style={{ marginLeft: 8 }}>gesperrt: {d.platform.locked_reason}</span>}
+          </h2>
+          {d.view === 'customer' && <div className="hint">Kundenansicht: Rohdaten und Fehlermeldungen sind ausgeblendet.</div>}
+          <div className="grid kpis">
+            <Kpi label="Anforderungen erfüllt" value={pctText(d.slo.rate)} sub={`${d.slo.fulfilled} von ${d.slo.total} (95 %: ${pctText(d.slo.ci95?.[0])}–${pctText(d.slo.ci95?.[1])})`} />
+            <Kpi label="Offene Findings" value={Object.values(d.findings.open).reduce((a, b) => a + b, 0)} bad={Boolean(d.findings.open.critical)} />
+            <Kpi label="Souveränität gesamt" value={d.sovereignty?.overall != null ? `SEAL-${d.sovereignty.overall}` : '–'} sub={`Ziel mindestens SEAL-${d.sovereignty?.min_level ?? '–'}`} />
+            <Kpi label="Modelle" value={d.models.length} />
+          </div>
+          <Card title="Komponenten" flush>
+            <table>
+              <tbody>
+                {(d.status?.components ?? []).map((c) => (
+                  <tr key={c.endpoint_id}>
+                    <td>{c.name}</td>
+                    <td className="sub">{c.kind}</td>
+                    <td>
+                      <span className={`badge ${c.status === 'up' ? 'passed' : 'failed'}`}>{c.status === 'up' ? 'erreichbar' : 'gestört'}</span>
+                    </td>
+                    <td className="sub">{c.version ?? ''}</td>
+                    <td className="sub">{c.error}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+          <Card title="Scorecard der Modelle" sub="Werte 0–100 mit 95-%-Intervall; ⚠ bedeutet geringe Aussagekraft wegen weniger Fälle." flush>
+            {d.models.length === 0 ? (
+              <Empty>Noch keine Messungen in diesem Zeitraum.</Empty>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Modell</th>
+                      {DIMENSIONS.map(([k, l]) => (
+                        <th key={k}>{l}</th>
+                      ))}
+                      <th>Eignung</th>
+                      <th>Auffälligkeiten</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.models.map((m) => (
+                      <tr key={m.alias} onClick={() => go({ platform: id, model: m.alias })} style={{ cursor: 'pointer' }}>
+                        <td>
+                          <span className="title-link">{m.alias}</span>
+                          <div className="sub">{m.capabilities.join(', ')}</div>
+                        </td>
+                        {DIMENSIONS.map(([k]) => (
+                          <td key={k}>
+                            <Dim d={m.scorecard.dimensions[k]} />
+                          </td>
+                        ))}
+                        <td>
+                          <Suitability items={m.suitability} />
+                        </td>
+                        <td className="sub">
+                          {m.failed > 0 && `${m.failed} von ${m.tests} nicht bestanden`}
+                          {m.regressions > 0 && ` · ${m.regressions} Regression(en)`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+          <Heatmap heatmap={d.heatmap} />
+          <div className="two-col">
+            <Card title="Verlauf Bestehensquote" sub="Marker zeigen Änderungen der Plattform (Version, Modell, Konfiguration) zwischen Läufen.">
+              {d.trend.length > 1 ? <TrendLines data={d.trend} keys={['rate']} valueFormatter={(v) => pctText(v)} height={200} /> : <Empty>Zu wenige Datenpunkte</Empty>}
+              {d.markers.map((m) => (
+                <div key={m.run_id} className="sub">
+                  {fmt.day(m.at)}: {m.changes.map((c) => c.message ?? c.what ?? JSON.stringify(c)).join('; ')}
+                </div>
+              ))}
+            </Card>
+            <Card title="Top-Findings" flush>
+              <table>
+                <tbody>
+                  {d.findings.top.map((f) => (
+                    <tr key={f.id}>
+                      <td>
+                        <SeverityBadge severity={f.severity} />
+                      </td>
+                      <td>
+                        <Link to="/findings">{f.title}</Link>
+                        <div className="sub">
+                          {f.model} · {PATH_LABELS[f.path] ?? f.path}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {d.findings.top.length === 0 && (
+                    <tr>
+                      <td className="empty">Keine offenen Findings</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </Card>
+          </div>
+          {d.slo.failing?.length > 0 && (
+            <Card title="Nicht erfüllte Anforderungen" flush>
+              <table>
+                <tbody>
+                  {d.slo.failing.map((f, i) => (
+                    <tr key={i}>
+                      <td>{f.template}</td>
+                      <td>{f.model}</td>
+                      <td className="sub">{PATH_LABELS[f.path] ?? f.path}</td>
+                      <td className="sub">{f.rules.map((r) => `${r.metric} ${r.op} ${r.value}`).join(', ')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+        </>
+      )}
+    </Loading>
+  );
+}
+
+// OWASP-Heatmap: je Modell und Pfad, ob das Gateway blockiert oder das Modell selbst verweigert hat.
+function Heatmap({ heatmap }) {
+  if (!heatmap?.columns?.length) return null;
+  return (
+    <Card title="OWASP LLM Top 10" sub="Bestehensquote je Kategorie. Zeigt, ob das Gateway Angriffe blockiert oder erst das Modell verweigert." flush>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Kategorie</th>
+              {heatmap.columns.map((c) => (
+                <th key={c.key}>
+                  {c.model} <span className="sub">{PATH_LABELS[c.path] ?? c.path}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {heatmap.rows.map((r) => (
+              <tr key={r.key}>
+                <td>
+                  {r.key} <span className="sub">{r.name}</span>
+                </td>
+                {heatmap.columns.map((c) => {
+                  const cell = r.cells[c.key];
+                  if (!cell) return <td key={c.key} className="sub">nicht geprüft</td>;
+                  const rate = cell.passed / cell.total;
+                  return (
+                    <td key={c.key} title={`Gateway blockiert: ${cell.blocked_by_gateway}, Modell verweigert: ${cell.model_refusals}`}>
+                      <span className={`badge ${rate === 1 ? 'passed' : rate >= 0.8 ? 'warn' : 'failed'}`}>
+                        {cell.passed}/{cell.total}
+                      </span>
+                      <span className="sub">
+                        {' '}
+                        GW {cell.blocked_by_gateway} · Modell {cell.model_refusals}
+                      </span>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function ModelLevel({ platformId, model, days, go }) {
+  const data = useApi(`/api/dashboard/models?platform_id=${platformId}&model=${encodeURIComponent(model)}&days=${days}`);
+  return (
+    <Loading state={data}>
+      {(d) => {
+        const paths = Object.entries(d.by_path);
+        const series = (paths.length ? paths : [['gesamt', d.scorecard]]).map(([path, card]) => ({
+          name: PATH_LABELS[path] ?? path,
+          axes: DIMENSIONS.map(([k, label]) => ({ label, value: card.dimensions[k]?.value ?? 0, display: card.dimensions[k] ? `${card.dimensions[k].value}` : 'keine Daten', missing: !card.dimensions[k] })),
+        }));
+        const trend = d.trend.map((t) => ({ day: t.at, Qualität: t.quality, Sicherheit: t.security }));
+        return (
+          <>
+            <Back onClick={() => go({ platform: platformId })}>{d.platform.name}</Back>
+            <h2 style={{ margin: '0 0 4px' }}>
+              {d.model} <EnvBadge env={d.platform.environment} />
+            </h2>
+            <div className="sub" style={{ marginBottom: 12 }}>
+              {[d.info?.provider, d.info?.license, d.info?.origin, d.info?.quantization, d.info?.open_weights ? 'Open Weights' : null, d.info?.revision && `rev ${d.info.revision}`].filter(Boolean).join(' · ')}
+              {d.capabilities.length > 0 && ` · Fähigkeiten: ${d.capabilities.join(', ')}`}
+            </div>
+            <Suitability items={d.suitability} />
+            <div className="two-col" style={{ marginTop: 12 }}>
+              <Card title="Profil" sub="Direkt und über das Gateway getrennt, wenn beides gemessen wurde.">
+                <RadarProfile series={series} />
+              </Card>
+              <Card title="Verlauf" sub="Anteil bestandener Fälle je Lauf.">
+                {trend.length > 1 ? <TrendLines data={trend} keys={['Qualität', 'Sicherheit']} valueFormatter={(v) => pctText(v)} height={260} /> : <Empty>Zu wenige Datenpunkte</Empty>}
+                {d.markers.map((m) => (
+                  <div key={m.run_id} className="sub">
+                    {fmt.day(m.at)}: {m.changes.map((c) => c.message ?? c.what ?? JSON.stringify(c)).join('; ')}
+                  </div>
+                ))}
+              </Card>
+            </div>
+            <Card title="Letzte Ergebnisse je Vorlage" flush>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Vorlage</th>
+                      <th>Pfad</th>
+                      <th>Ergebnis</th>
+                      <th className="num">Score</th>
+                      <th className="num">Fälle</th>
+                      <th>Hinweise</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.results.map((r) => (
+                      <tr key={r.id}>
+                        <td>
+                          <Link to={`/runs/${r.run_id}`}>{r.template}</Link> <span className="sub mono">{r.version}</span>
+                          <div className="sub">{TYPE_LABELS[r.type] ?? r.type}</div>
+                        </td>
+                        <td className="sub">{PATH_LABELS[r.path] ?? r.path}</td>
+                        <td>
+                          <OutcomeBadge outcome={r.outcome} />
+                        </td>
+                        <td className="num">{r.score === null ? '–' : pctText(r.score)}</td>
+                        <td className="num">{r.cases_total ?? '–'}</td>
+                        <td className="sub">
+                          {r.small_sample && 'kleine Stichprobe '}
+                          {r.regressions?.length > 0 && 'Regression'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+            {d.baselines.length > 0 && (
+              <Card title="Baselines" flush>
+                <table>
+                  <tbody>
+                    {d.baselines.map((b) => (
+                      <tr key={b.audit_id}>
+                        <td>
+                          <Link to={`/audits/${b.audit_id}`}>{b.name}</Link>
+                        </td>
+                        <td className="sub">{fmt.date(b.at)}</td>
+                        <td>
+                          <Link to={`/runs/${b.baseline_run_id}`}>Lauf</Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+            )}
+            {d.findings.length > 0 && (
+              <Card title="Findings" flush>
+                <table>
+                  <tbody>
+                    {d.findings.map((f) => (
+                      <tr key={f.id}>
+                        <td>
+                          <SeverityBadge severity={f.severity} />
+                        </td>
+                        <td>{f.title}</td>
+                        <td className="sub">
+                          {PATH_LABELS[f.path] ?? f.path} · {f.category}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+            )}
+          </>
+        );
+      }}
+    </Loading>
+  );
+}
+
+// Dokumentierte Normalisierung, damit die Werte der Scorecard nachvollziehbar sind.
+function ScalesDialog({ onClose }) {
+  const n = useApi('/api/dashboard/normalization');
+  return (
+    <Modal
+      title="So entstehen die Werte"
+      onClose={onClose}
+      footer={
+        <button className="btn" onClick={onClose}>
+          Schließen
+        </button>
+      }
+    >
+      {n.data && (
+        <>
+          <p className="sub">Normalisierung Version {n.data.version}. Alle Werte liegen zwischen 0 und 100.</p>
+          {Object.entries(n.data.dimensions).map(([k, dim]) => (
+            <div key={k} style={{ marginBottom: 10 }}>
+              <strong>{dim.label}</strong>
+              <div className="sub">{dim.description}</div>
+              {dim.scales &&
+                Object.entries(dim.scales).map(([m, s]) => (
+                  <div key={m} className="sub mono">
+                    {m}: 100 bei {s.full}, 0 bei {s.zero} ({s.unit})
+                  </div>
+                ))}
+            </div>
+          ))}
+          <strong>Eignungsprofile</strong>
+          {Object.entries(n.data.profiles).map(([k, p]) => (
+            <div key={k} className="sub">
+              {p.label}: {Object.entries(p.weights).map(([m, w]) => `${m} ${w} %`).join(', ')}
+            </div>
+          ))}
+          <div className="sub" style={{ marginTop: 8 }}>
+            geeignet ab {n.data.suitability.suitable}, bedingt ab {n.data.suitability.conditional}; Abdeckung mindestens {pctText(n.data.suitability.min_coverage)}.
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }

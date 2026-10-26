@@ -1056,3 +1056,12 @@ details > summary {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* Aufeinanderfolgende Karten und Tabellen auf Seiten ohne Raster */
+.content > .card,
+.content > section.card {
+  margin-bottom: 16px;
+}
+.content > .toolbar {
+  margin-bottom: 12px;
+}

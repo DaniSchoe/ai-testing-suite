@@ -53,12 +53,13 @@ export function parseModels(text) {
   });
 }
 
-export default function Platform() {
+export default function SizingView({ platformId }) {
+  const base = `/api/platforms/${platformId}/sizing`;
   const user = useUser();
   const admin = can(user, 'endpoints.manage');
-  const platform = useApi('/api/platform');
-  const live = useApi('/api/platform/live', { interval: 10000 });
-  const loads = useApi('/api/platform/load-results', { interval: 60000 });
+  const platform = useApi(base);
+  const live = useApi(`${base}/live`, { interval: 10000 });
+  const loads = useApi(`${base}/load-results`, { interval: 60000 });
   const [cfg, setCfg] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -100,7 +101,7 @@ export default function Platform() {
     setSaving(true);
     setError(null);
     try {
-      const saved = await api('/api/platform', { method: 'PUT', body: cfg });
+      const saved = await api(base, { method: 'PUT', body: cfg });
       setCfg(saved.config);
       setDirty(false);
       platform.reload();
@@ -128,7 +129,7 @@ export default function Platform() {
     <>
       <div className="page-head">
         <div>
-          <h1>Plattform</h1>
+          <h1>Sizing</h1>
           <p>Baue deine GPU-Plattform zusammen und sieh, wie viel VRAM und Bandbreite sie hat, welche Modelle laufen, für wie viele Nutzer sie reicht und wie sie sich unter Last verhält.</p>
         </div>
         {admin && (
@@ -339,7 +340,7 @@ export default function Platform() {
       </details>
 
       {editing && (
-        <ComponentDialog
+        <ComponentDialog base={base}
           component={editing}
           cfg={cfg}
           set={set}
@@ -633,7 +634,7 @@ function EstimateVsMeasured({ measured, result, cfg }) {
 }
 
 // Konfiguration einer Komponente: Metrik-Endpunkt (URLs, Key), Test der Verbindung und komponentenspezifische Details.
-function ComponentDialog({ component, cfg, set, onClose }) {
+function ComponentDialog({ base, component, cfg, set, onClose }) {
   const keys = useApi('/api/api-keys');
   const m = cfg.metrics[component];
   const [urls, setUrls] = useState((m.urls ?? []).join('\n'));
@@ -644,7 +645,7 @@ function ComponentDialog({ component, cfg, set, onClose }) {
   async function test() {
     setBusy(true);
     try {
-      setProbe(await api('/api/platform/metrics/test', { method: 'POST', body: { component, urls: urls.split('\n'), api_key_id: keyId || null } }));
+      setProbe(await api(`${base}/metrics-test`, { method: 'POST', body: { component, urls: urls.split('\n'), api_key_id: keyId || null } }));
     } catch (e) {
       setProbe({ values: null, error: e.message });
     } finally {

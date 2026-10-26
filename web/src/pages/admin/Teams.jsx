@@ -5,7 +5,7 @@ import { api, Card, initials, Modal, useApi } from '../../lib.jsx';
 
 export default function Teams() {
   const teams = useApi('/api/teams');
-  const users = useApi('/api/users');
+  const users = useApi('/api/members');
   const [editing, setEditing] = useState(null);
 
   async function remove(t) {
