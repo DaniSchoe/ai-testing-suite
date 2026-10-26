@@ -46,14 +46,14 @@ jobs:
           node tools/seed.js
           node src/server.js &
           for i in $(seq 1 30); do curl -sf localhost:8080/readyz && break; sleep 1; done
-          curl -sf -c jar -b jar -o /dev/null localhost:8080/auth/login
-          RUN=$(curl -sf -b jar -H 'content-type: application/json' -d '{"kind":"all"}' localhost:8080/api/runs | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          curl -sf -c /tmp/jar -b /tmp/jar -o /dev/null localhost:8080/auth/login
+          RUN=$(curl -sf -b /tmp/jar -H 'content-type: application/json' -d '{"kind":"all"}' localhost:8080/api/runs | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
           for i in $(seq 1 90); do
-            STATUS=$(curl -sf -b jar localhost:8080/api/runs/$RUN | node -pe 'JSON.parse(require("fs").readFileSync(0)).status')
+            STATUS=$(curl -sf -b /tmp/jar localhost:8080/api/runs/$RUN | node -pe 'JSON.parse(require("fs").readFileSync(0)).status')
             [ "$STATUS" != queued ] && [ "$STATUS" != running ] && break
             sleep 2
           done
-          curl -sf -b jar localhost:8080/api/runs/$RUN | node -e '
+          curl -sf -b /tmp/jar localhost:8080/api/runs/$RUN | node -e '
             const r = JSON.parse(require("fs").readFileSync(0));
             for (const x of r.results) console.log(x.status.padEnd(7), x.test_name, x.error ?? "");
             // Der Mock rechnet bei mock-small absichtlich falsch: genau ein Qualitätstest schlägt fehl.
