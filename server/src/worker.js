@@ -10,7 +10,20 @@ import { syncAllModels } from './models.js';
 import { executeRun } from './runner/executor.js';
 import { createRun } from './runs.js';
 
+// Mit MIGRATE_ON_START=false (Helm) migriert ein Job. Der Worker wartet, bis das Schema da ist,
+// statt mit "relation does not exist" abzustürzen.
+async function waitForSchema(logger, timeoutS = 300) {
+  for (let waited = 0; ; waited += 5) {
+    const row = await one(`select to_regclass('public.runs') is not null as ready`).catch(() => null);
+    if (row?.ready) return;
+    if (waited >= timeoutS) throw new Error('Datenbankschema fehlt: Migration (Job "migrate") ist nicht durchgelaufen');
+    if (waited % 30 === 0) logger.info('Warte auf Datenbankmigration…');
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+}
+
 export async function startWorker(logger = console) {
+  await waitForSchema(logger);
   const boss = await getBoss();
 
   // Nach einem Pod-Neustart hängengebliebene Läufe als Fehler markieren.

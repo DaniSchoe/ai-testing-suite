@@ -1,5 +1,5 @@
 -- Grundschema der AI Testing Suite.
-create extension if not exists pgcrypto;
+-- gen_random_uuid() ist seit PostgreSQL 13 eingebaut, keine Extension (und keine Superuser-Rechte) nötig.
 
 create table users (
   id            uuid primary key default gen_random_uuid(),
