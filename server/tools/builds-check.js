@@ -114,8 +114,36 @@ assert.equal((await bob(`/api/builds/${build.id}`)).status, 404);
 const team = (await admin('/api/teams', { method: 'POST', body: { name: `BT ${suffix}`, memberIds: [bobMe.id] } })).data;
 const roles = (await admin('/api/roles')).data;
 await admin(`/api/users/${bobMe.id}`, { method: 'PUT', body: { roleIds: [roles.find((x) => x.key === 'tester').id] } });
-await admin(`/api/builds/${build.id}/publish`, { method: 'POST', body: { visibility: 'teams', teamIds: [team.id] } });
+await admin(`/api/builds/${build.id}/publish`, { method: 'POST', body: { visibility: 'teams', teamIds: [team.id], requires_api_key: true } });
 assert.ok((await bob('/api/builds')).data.some((b) => b.id === build.id), 'Team-Mitglied sieht den Test');
+
+// Marketplace: Detail, Merkliste, Ausführen mit eigenem Key
+const detail = (await bob(`/api/marketplace/${build.id}`)).data;
+assert.equal(detail.requires_api_key, true);
+assert.equal(detail.endpoint.name, gateway.name);
+assert.equal(detail.configs, undefined, 'Konfiguration nur für Berechtigte');
+assert.ok((await admin(`/api/marketplace/${build.id}`)).data.configs);
+assert.equal((await bob(`/api/builds/${build.id}/watch`, { method: 'POST' })).status, 200);
+assert.equal((await bob(`/api/builds/${build.id}/watch`, { method: 'POST' })).status, 200, 'doppelt merken ist harmlos');
+assert.equal((await bob(`/api/marketplace/${build.id}`)).data.watch_count, 1);
+assert.equal((await bob(`/api/marketplace/${build.id}`)).data.watched, true);
+assert.equal((await bob(`/api/builds/${build.id}/run`, { method: 'POST', body: {} })).status, 400, 'eigener Key ist Pflicht');
+const adminKey = (await admin('/api/api-keys')).data.find((k) => k.admin_only);
+assert.equal((await bob(`/api/builds/${build.id}/run`, { method: 'POST', body: { api_key_id: adminKey.id } })).status, 403, 'fremden Key nicht nutzbar');
+const bobKey = (await bob('/api/api-keys', { method: 'POST', body: { name: `bob-key-${suffix}`, secret: 'sk-admin', visibility: 'user' } })).data;
+const bobRun = await bob(`/api/builds/${build.id}/run`, { method: 'POST', body: { api_key_id: bobKey.id } });
+assert.equal(bobRun.status, 200);
+for (let i = 0; i < 60; i++) {
+  const r = (await bob(`/api/runs/${bobRun.data.id}`)).data;
+  if (!['queued', 'running'].includes(r.status)) {
+    assert.ok(r.results.every((x) => x.api_key_name === `bob-key-${suffix}`), 'Lauf nutzt den eigenen Key');
+    break;
+  }
+  await new Promise((res) => setTimeout(res, 1000));
+}
+assert.equal((await bob(`/api/builds/${build.id}/watch`, { method: 'DELETE' })).status, 200);
+assert.equal((await bob(`/api/marketplace/${build.id}`)).data.watch_count, 0);
+step('Marketplace: Detail, Merkliste, Ausführen mit eigenem Key');
 assert.equal((await bob(`/api/builds/${build.id}`, { method: 'PUT', body: spec })).status, 403, 'Fremde dürfen nicht ändern');
 assert.equal((await bob(`/api/builds/${build.id}/publish`, { method: 'POST', body: { visibility: 'global' } })).status, 403);
 const other = (await admin('/api/teams', { method: 'POST', body: { name: `BT2 ${suffix}` } })).data;

@@ -27,7 +27,7 @@ export async function resolveTestIds({ kind, testIds, suiteId, buildId }) {
   throw new Error(`Unbekannte Laufart ${kind}`);
 }
 
-export async function createRun({ kind, trigger = 'manual', testIds, suiteId, buildId, scheduleId, userId, label }) {
+export async function createRun({ kind, trigger = 'manual', testIds, suiteId, buildId, apiKeyId, scheduleId, userId, label }) {
   const ids = await resolveTestIds({ kind, testIds, suiteId, buildId });
   if (ids.length === 0) throw Object.assign(new Error('Keine Tests für diesen Lauf gefunden'), { statusCode: 400 });
   if (!label) {
@@ -38,9 +38,9 @@ export async function createRun({ kind, trigger = 'manual', testIds, suiteId, bu
     else label = `${ids.length} ausgewählte Tests`;
   }
   const run = await one(
-    `insert into runs (kind, trigger, label, suite_id, build_id, schedule_id, user_id, test_ids, total)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *`,
-    [kind, trigger, label, suiteId ?? null, buildId ?? null, scheduleId ?? null, userId ?? null, ids, ids.length],
+    `insert into runs (kind, trigger, label, suite_id, build_id, api_key_id, schedule_id, user_id, test_ids, total)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
+    [kind, trigger, label, suiteId ?? null, buildId ?? null, apiKeyId ?? null, scheduleId ?? null, userId ?? null, ids, ids.length],
   );
   await enqueueRun(run.id);
   return run;

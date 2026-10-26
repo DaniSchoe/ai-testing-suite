@@ -20,6 +20,7 @@ export async function loadBuilds() {
     `select t.*, e.name as endpoint_name, e.kind as endpoint_kind, k.name as api_key_name,
        coalesce(u.display_name, u.username) as maintainer_name, coalesce(c.display_name, c.username) as creator_name,
        (select count(distinct res.run_id)::int from results res join test_definitions td on td.id = res.test_id where td.build_id = t.id) as run_count,
+       (select count(*)::int from test_watchlist w where w.test_id = t.id) as watch_count,
        lr.status as last_status, lr.score as last_score, lr.finished_at as last_run_at,
        sc.id as schedule_id, sc.cron as schedule_cron, sc.run_at as schedule_run_at, sc.timezone as schedule_timezone,
        sc.enabled as schedule_enabled
@@ -50,13 +51,43 @@ export default async function buildRoutes(app) {
     return build;
   };
 
-  const withRights = (user, b) => ({ ...b, can_edit: canEditBuild(user, b), mine: b.created_by === user.id });
+  const withRights = (user, b, watched = new Set()) => ({ ...b, can_edit: canEditBuild(user, b), mine: b.created_by === user.id, watched: watched.has(b.id) });
+  const watchedBy = async (user) => new Set((await many('select test_id from test_watchlist where user_id = $1', [user.id])).map((r) => r.test_id));
 
-  app.get('/api/builds', viewer, async (request) =>
-    (await loadBuilds()).filter((b) => canSeeBuild(request.user, b)).map((b) => withRights(request.user, b)),
+  app.get('/api/builds', viewer, async (request) => {
+    const watched = await watchedBy(request.user);
+    return (await loadBuilds()).filter((b) => canSeeBuild(request.user, b)).map((b) => withRights(request.user, b, watched));
+  });
+
+  app.get('/api/builds/:id', viewer, async (request) =>
+    withRights(request.user, await visibleBuild(request.user, request.params.id), await watchedBy(request.user)),
   );
 
-  app.get('/api/builds/:id', viewer, async (request) => withRights(request.user, await visibleBuild(request.user, request.params.id)));
+  // Detailseite im Marketplace: Metadaten wie Endpoint, Modelle und Testarten (ohne Konfiguration) und die letzten Läufe.
+  app.get('/api/marketplace/:id', viewer, async (request) => {
+    const user = request.user;
+    const build = await visibleBuild(user, request.params.id);
+    const { configs, ...rest } = build;
+    const runs = await many(
+      `select r.id, r.status, r.created_at, r.finished_at, r.total, r.passed, r.failed, r.errored, coalesce(u.display_name, u.username) as user_name
+       from runs r left join users u on u.id = r.user_id where r.build_id = $1 order by r.created_at desc limit 10`,
+      [build.id],
+    );
+    const endpoint = await one('select name, kind, llm_flavor, environment from endpoints where id = $1', [build.endpoint_id]);
+    const teams = build.teamIds.length ? await many('select id, name from teams where id = any($1::uuid[])', [build.teamIds]) : [];
+    // Nur Berechtigte (Ersteller, Maintainer, Admin) sehen die Konfiguration.
+    return { ...withRights(user, rest, await watchedBy(user)), endpoint, teams, runs, ...(canEditBuild(user, build) ? { configs } : {}) };
+  });
+
+  app.post('/api/builds/:id/watch', viewer, async (request) => {
+    const build = await visibleBuild(request.user, request.params.id);
+    await query('insert into test_watchlist (test_id, user_id) values ($1, $2) on conflict do nothing', [build.id, request.user.id]);
+    return { ok: true };
+  });
+  app.delete('/api/builds/:id/watch', viewer, async (request) => {
+    await query('delete from test_watchlist where test_id = $1 and user_id = $2', [request.params.id, request.user.id]);
+    return { ok: true };
+  });
 
   // Einzeltests, die der Test beim Ausführen erzeugt (Vorschau im Builder).
   app.post('/api/builds/preview', editor, async (request) => {
@@ -169,8 +200,13 @@ export default async function buildRoutes(app) {
   });
 
   app.post('/api/builds/:id/run', starter, async (request) => {
-    const build = await visibleBuild(request.user, request.params.id);
-    return createRun({ kind: 'build', buildId: build.id, userId: request.user.id });
+    const user = request.user;
+    const build = await visibleBuild(user, request.params.id);
+    const keyId = request.body?.api_key_id || null;
+    // Verlangt der Test einen eigenen Key, muss ihn jeder außer Ersteller und Maintainer mitbringen.
+    if (build.requires_api_key && !keyId && !canEditBuild(user, build)) throw err('Dieser Test braucht deinen eigenen API-Key');
+    await assertKeyUsable(user, keyId, null);
+    return createRun({ kind: 'build', buildId: build.id, apiKeyId: keyId, userId: user.id });
   });
 
   // Veröffentlichen: nur für sich (private), für Teams (Mitglied) oder global.
@@ -180,6 +216,7 @@ export default async function buildRoutes(app) {
     if (!canEditBuild(user, build)) throw err('Nur Ersteller, Maintainer oder Administratoren dürfen veröffentlichen', 403);
     const b = request.body ?? {};
     const visibility = b.visibility ?? 'global';
+    const requiresKey = Boolean(b.requires_api_key);
     if (!VISIBILITIES.includes(visibility)) throw err('Ungültige Sichtbarkeit');
     const teamIds = visibility === 'teams' ? [...new Set(b.teamIds ?? [])] : [];
     if (visibility === 'teams') {
@@ -189,9 +226,9 @@ export default async function buildRoutes(app) {
     }
     await tx(async (c) => {
       await c.query(
-        `update tests set visibility = $2, published_at = case when $2 = 'private' then null else coalesce(published_at, now()) end,
-           updated_at = now() where id = $1`,
-        [build.id, visibility],
+        `update tests set visibility = $2, requires_api_key = $3,
+           published_at = case when $2 = 'private' then null else coalesce(published_at, now()) end, updated_at = now() where id = $1`,
+        [build.id, visibility, requiresKey],
       );
       await c.query('delete from test_teams where test_id = $1', [build.id]);
       if (teamIds.length) await c.query('insert into test_teams select $1, unnest($2::uuid[])', [build.id, teamIds]);

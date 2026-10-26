@@ -118,7 +118,7 @@ export default function TestBuilder() {
                 return (
                   <tr key={b.id}>
                     <td style={{ minWidth: 240 }}>
-                      <div style={{ fontWeight: 600 }}>{b.can_edit ? <Link to={`/test-builder/${b.id}`}>{b.name}</Link> : b.name}</div>
+                      <div style={{ fontWeight: 600 }}>{b.can_edit ? <Link to={`/test-builder/${b.id}`}>{b.name}</Link> : <Link to={`/marketplace/${b.id}`}>{b.name}</Link>}</div>
                       {b.description && <div className="sub">{b.description}</div>}
                       <div className="tags" style={{ marginTop: 4 }}>
                         {(b.tags ?? []).map((t) => (
@@ -217,11 +217,12 @@ export default function TestBuilder() {
 export function PublishDialog({ build, teams, onClose, onDone }) {
   const [visibility, setVisibility] = useState(build.visibility === 'private' ? 'teams' : build.visibility);
   const [teamIds, setTeamIds] = useState(build.teamIds ?? []);
+  const [requiresKey, setRequiresKey] = useState(Boolean(build.requires_api_key));
   const [error, setError] = useState(null);
 
   async function save() {
     try {
-      await api(`/api/builds/${build.id}/publish`, { method: 'POST', body: { visibility, teamIds } });
+      await api(`/api/builds/${build.id}/publish`, { method: 'POST', body: { visibility, teamIds, requires_api_key: requiresKey } });
       onDone();
     } catch (e) {
       setError(e.message);
@@ -252,6 +253,14 @@ export function PublishDialog({ build, teams, onClose, onDone }) {
         </select>
       </label>
       {visibility === 'teams' && <TeamPicker teams={teams} value={teamIds} onChange={setTeamIds} />}
+      <label className="checkbox" style={{ marginTop: 12 }}>
+        <input type="checkbox" checked={requiresKey} onChange={(e) => setRequiresKey(e.target.checked)} /> Andere müssen ihren eigenen API-Key verwenden
+      </label>
+      <div className="hint">
+        {requiresKey
+          ? 'Wer den Test ausführt, wählt dafür einen eigenen Key. So verprobt jeder seine Berechtigungen.'
+          : `Sonst läuft der Test mit dem hinterlegten Key${build.api_key_name ? ` „${build.api_key_name}“` : ' (Key des Endpoints)'}.`}
+      </div>
       <div className="hint" style={{ marginTop: 10 }}>
         Andere sehen den Test im Marketplace und können ihn ausführen. Du kannst ihn jederzeit zurückziehen.
       </div>
