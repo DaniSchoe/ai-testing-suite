@@ -28,20 +28,34 @@ class PgSessionStore {
   }
 }
 
+// Issuer vergleichen ohne Unterschied bei abschließendem Slash.
+const normalizeIssuer = (url) => String(url).replace(/\/+$/, '');
+
+// Discovery über die .well-known-URL. Die Bibliothek vergleicht bei der Issuer-URL strikt (inkl. Slash und
+// Schema) und meldet nur "issuer does not match". Hier prüfen wir selbst und nennen beide Werte.
+async function discover(clientId, clientAuthentication) {
+  const issuer = normalizeIssuer(config.auth.issuer ?? '');
+  if (!issuer) throw new Error('OIDC_ISSUER_URL ist nicht gesetzt');
+  const options = config.auth.allowInsecure ? { execute: [oidc.allowInsecureRequests] } : undefined;
+  const cfg = await oidc.discovery(new URL(`${issuer}/.well-known/openid-configuration`), clientId, undefined, clientAuthentication, options);
+  const discovered = normalizeIssuer(cfg.serverMetadata().issuer);
+  if (discovered !== issuer) {
+    const hint =
+      `OIDC_ISSUER_URL ist "${issuer}", Keycloak meldet aber den Issuer "${discovered}". ` +
+      'Meist liegt das an Keycloak-Hostname/Proxy-Einstellungen (KC_HOSTNAME, KC_PROXY_HEADERS) oder an http statt https. ' +
+      'Den gemeldeten Wert als OIDC_ISSUER_URL setzen oder OIDC_TRUST_DISCOVERED_ISSUER=true.';
+    if (!config.auth.trustDiscoveredIssuer) throw new Error(hint);
+    console.warn(`OIDC: ${hint} Verwende den gemeldeten Issuer.`);
+  }
+  return cfg;
+}
+
 let oidcConfig;
 async function getOidcConfig() {
-  if (!oidcConfig) {
-    const options = config.auth.allowInsecure ? { execute: [oidc.allowInsecureRequests] } : undefined;
-    oidcConfig = await oidc.discovery(
-      new URL(config.auth.issuer),
-      config.auth.clientId,
-      undefined,
-      oidc.ClientSecretPost(config.auth.clientSecret),
-      options,
-    );
-  }
+  oidcConfig ??= await discover(config.auth.clientId, oidc.ClientSecretPost(config.auth.clientSecret));
   return oidcConfig;
 }
+export const getOidcConfigForTest = getOidcConfig;
 
 // Login übernehmen: bekannter User (sub), vorab angelegter User (bestätigte E-Mail) oder neuer User.
 export async function upsertUser({ sub, username, email, emailVerified, displayName }) {
@@ -196,13 +210,9 @@ const personaTokenCache = new Map();
 export async function getPersonaToken(username, password) {
   const cached = personaTokenCache.get(username);
   if (cached && cached.expiresAt > Date.now() + 30e3) return cached.token;
-  const options = config.auth.allowInsecure ? { execute: [oidc.allowInsecureRequests] } : undefined;
-  const cfg = await oidc.discovery(
-    new URL(config.auth.issuer),
+  const cfg = await discover(
     config.auth.personaClientId,
-    undefined,
     config.auth.personaClientSecret ? oidc.ClientSecretPost(config.auth.personaClientSecret) : oidc.None(),
-    options,
   );
   const tokens = await oidc.genericGrantRequest(cfg, 'password', { username, password, scope: 'openid' });
   personaTokenCache.set(username, { token: tokens.access_token, expiresAt: Date.now() + (tokens.expires_in ?? 60) * 1000 });

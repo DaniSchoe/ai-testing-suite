@@ -76,6 +76,13 @@ Das Image wird von der CI bei jedem Merge nach `main` als `ghcr.io/danischoe/ai-
 
 ### Keycloak einrichten
 
+`OIDC_ISSUER_URL` (Helm: `oidc.issuerUrl`) muss exakt der Issuer sein, den Keycloak meldet, bei Keycloak
+ab Version 17 ohne `/auth`: `https://keycloak.example.com/realms/<realm>`. Prüfen mit
+`curl <issuerUrl>/.well-known/openid-configuration` und dem Feld `issuer`. Weicht er ab (z. B. `http://`
+statt `https://` oder ein interner Hostname), Keycloak hinter dem Ingress mit `KC_HOSTNAME` und
+`KC_PROXY_HEADERS=xforwarded` betreiben oder den gemeldeten Wert als Issuer eintragen. Ein
+abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_ISSUER=true` den gemeldeten Wert.
+
 1. Client `ai-testing-suite`: confidential, Standard Flow, PKCE S256, Redirect-URI `<publicUrl>/auth/callback`,
    Post-Logout-Redirect `<publicUrl>`.
 2. Client `ai-testing-personas`: confidential, nur Direct Access Grants (für Test-Personas).
@@ -102,6 +109,7 @@ Das Image wird von der CI bei jedem Merge nach `main` als `ghcr.io/danischoe/ai-
 | `PUBLIC_URL` | Öffentliche URL, z. B. `https://ai-testing.example.com` |
 | `AUTH_MODE` | `oidc` (Standard) oder `dev` (lokal ohne Keycloak) |
 | `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Login-Client |
+| `OIDC_TRUST_DISCOVERED_ISSUER` | `true` = Issuer aus der Discovery-Antwort übernehmen, auch wenn er von `OIDC_ISSUER_URL` abweicht |
 | `OIDC_PERSONA_CLIENT_ID`, `OIDC_PERSONA_CLIENT_SECRET` | Client für Test-Personas |
 | `ADMIN_EMAILS` | Kommagetrennte Keycloak-E-Mails mit Admin-Zugriff (im Dev-Modus `dev@localhost`) |
 | `RUN_WORKER` | Worker im Web-Prozess mitlaufen lassen (lokal `true`, in Kubernetes `false`) |

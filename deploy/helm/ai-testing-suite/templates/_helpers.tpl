@@ -33,6 +33,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: oidc
 - name: OIDC_ISSUER_URL
   value: {{ .Values.oidc.issuerUrl | quote }}
+- name: OIDC_TRUST_DISCOVERED_ISSUER
+  value: {{ .Values.oidc.trustDiscoveredIssuer | default false | quote }}
 - name: OIDC_CLIENT_ID
   value: {{ .Values.oidc.clientId | quote }}
 - name: OIDC_PERSONA_CLIENT_ID

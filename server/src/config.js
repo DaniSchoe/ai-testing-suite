@@ -28,6 +28,9 @@ export const config = {
     personaClientId: env.OIDC_PERSONA_CLIENT_ID ?? 'ai-testing-personas',
     personaClientSecret: env.OIDC_PERSONA_CLIENT_SECRET,
     allowInsecure: env.OIDC_ALLOW_INSECURE === 'true', // nur für lokales http-Keycloak
+    // Issuer aus den Discovery-Daten übernehmen, auch wenn er von OIDC_ISSUER_URL abweicht
+    // (z. B. Keycloak hinter Proxy meldet http:// oder einen anderen Hostnamen).
+    trustDiscoveredIssuer: env.OIDC_TRUST_DISCOVERED_ISSUER === 'true',
     // Diese E-Mail-Adressen (kommagetrennt) sind immer Admin. Rollen werden sonst in der App vergeben.
     adminEmails: (env.ADMIN_EMAILS ?? (authMode === 'dev' ? 'dev@localhost' : ''))
       .split(/[\s,;]+/)

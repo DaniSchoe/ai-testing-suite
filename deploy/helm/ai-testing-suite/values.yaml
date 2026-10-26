@@ -28,6 +28,9 @@ oidc:
   issuerUrl: https://keycloak.example.com/realms/ai-testing
   clientId: ai-testing-suite
   personaClientId: ai-testing-personas
+  # Issuer aus Keycloaks Discovery-Antwort übernehmen, auch wenn er von issuerUrl abweicht.
+  # Nur als Notlösung, besser Keycloak (KC_HOSTNAME, KC_PROXY_HEADERS) oder issuerUrl korrigieren.
+  trustDiscoveredIssuer: false
 
 # Rollen, Berechtigungen und Teams werden in der Anwendung vergeben (Admin > Rollen/Benutzer/Teams).
 # Diese Keycloak-E-Mails haben immer Admin-Zugriff (nur mit in Keycloak bestätigter E-Mail).
