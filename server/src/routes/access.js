@@ -55,6 +55,11 @@ export default async function accessRoutes(app) {
   const roleAdmin = { preHandler: requirePermission('roles.manage') };
   const teamAdmin = { preHandler: requirePermission('teams.manage') };
 
+  // Namen aller User, z. B. zur Auswahl eines Maintainers. Keine E-Mails.
+  app.get('/api/user-directory', viewer, async () =>
+    many(`select id, coalesce(display_name, username, email) as name from users where sub is not null and not disabled order by 2`),
+  );
+
   app.get('/api/permissions', { preHandler: requireAny('roles.manage', 'users.manage') }, async () => PERMISSIONS);
 
   // --- Rollen ---

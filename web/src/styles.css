@@ -976,3 +976,6 @@ details > summary {
   outline: 2px solid var(--primary);
   outline-offset: -1px;
 }
+
+.kind-tag { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.icon-chip { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--primary-soft); flex: none; }

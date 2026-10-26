@@ -7,8 +7,8 @@ Entwicklung im Dashboard.
 
 - **Node.js** (Fastify) und **PostgreSQL**, Job-Queue und Zeitpläne ebenfalls in Postgres (pg-boss)
 - **Keycloak-Login** (OIDC); **Rollen, Berechtigungen und Teams** werden in der App gepflegt
-- **Test-Personas** für userspezifische Freigabetests
-- **Admin-Panel** für Endpoints (LiteLLM, mehrere vLLM-Endpunkte, MCP) und Personas
+- **API-Key-Sammlung**: Keys privat, pro Team, global oder einzelnen Usern zugeordnet; Endpoints und Tests wählen nur einen Key aus der Liste
+- **Admin-Panel** für Endpoints (AI Proxy, LLM-Endpoint OpenAI-compatible/Claude, MCP) mit Maintainer, Dev/Prod und Veröffentlichung
 - **Modellkatalog**: Modelle werden automatisch von LiteLLM und jedem vLLM-Endpunkt abgefragt,
   unterschiedliche Namen desselben Modells werden per Alias zusammengeführt
 - **Thinking vs. Non-Thinking**: Genauigkeit, Token-Verbrauch, Latenz und Schlüssigkeit im Vergleich
@@ -29,7 +29,7 @@ npm run build --prefix web
 
 cd server
 node tools/mock-llm.js &            # Mock-Gateway auf :4000 (OpenAI-API + MCP)
-AUTH_MODE=dev node tools/seed.js    # Demo-Endpoints (LiteLLM, vLLM, MCP), Personas, 14 Beispieltests
+AUTH_MODE=dev node tools/seed.js    # Demo-Endpoints (LiteLLM, vLLM, MCP), API-Keys, 14 Beispieltests
 AUTH_MODE=dev npm start             # http://localhost:8080, Login als Dev-Admin
 ```
 
@@ -43,8 +43,7 @@ docker compose up --build
 ```
 
 Keycloak importiert den Realm `ai-testing` aus `deploy/keycloak/realm-ai-testing.json` mit den
-Usern `admin/admin` (über `ADMIN_EMAILS` Admin), `tester/tester`, `viewer/viewer` und dem Persona-User
-`persona-team-a`. Die App läuft auf http://localhost:8080, die Keycloak-Konsole auf http://keycloak:8081.
+Usern `admin/admin` (über `ADMIN_EMAILS` Admin), `tester/tester`, `viewer/viewer`. Die App läuft auf http://localhost:8080, die Keycloak-Konsole auf http://keycloak:8081.
 
 ## Kubernetes
 
@@ -58,8 +57,7 @@ helm install ai-testing deploy/helm/ai-testing-suite \
   --set ingress.host=ai-testing.example.com \
   --set oidc.issuerUrl=https://keycloak.example.com/realms/ai-testing \
   --set 'adminEmails={admin@example.com}' \
-  --set secrets.oidcClientSecret=... \
-  --set secrets.oidcPersonaClientSecret=...
+  --set secrets.oidcClientSecret=...
 ```
 
 - **Postgres**: läuft standardmäßig im Cluster. Das PVC `<release>-postgres-data` (10 Gi) bleibt bei
@@ -85,8 +83,7 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
 
 1. Client `ai-testing-suite`: confidential, Standard Flow, PKCE S256, Redirect-URI `<publicUrl>/auth/callback`,
    Post-Logout-Redirect `<publicUrl>`.
-2. Client `ai-testing-personas`: confidential, nur Direct Access Grants (für Test-Personas).
-3. Keine Rollen in Keycloak nötig. Keycloak liefert nur die Identität (inkl. bestätigter E-Mail).
+2. Keine Rollen in Keycloak nötig. Keycloak liefert nur die Identität (inkl. bestätigter E-Mail).
 
 ### Rollen, Berechtigungen und Teams
 
@@ -110,7 +107,6 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
 | `AUTH_MODE` | `oidc` (Standard) oder `dev` (lokal ohne Keycloak) |
 | `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Login-Client |
 | `OIDC_TRUST_DISCOVERED_ISSUER` | `true` = Issuer aus der Discovery-Antwort übernehmen, auch wenn er von `OIDC_ISSUER_URL` abweicht |
-| `OIDC_PERSONA_CLIENT_ID`, `OIDC_PERSONA_CLIENT_SECRET` | Client für Test-Personas |
 | `ADMIN_EMAILS` | Kommagetrennte Keycloak-E-Mails mit Admin-Zugriff (im Dev-Modus `dev@localhost`) |
 | `RUN_WORKER` | Worker im Web-Prozess mitlaufen lassen (lokal `true`, in Kubernetes `false`) |
 | `WORKER_CONCURRENCY` | parallele Läufe pro Worker |
@@ -125,15 +121,15 @@ vorbefüllt. Beispiel für einen Berechtigungstest:
 ```json
 {
   "cases": [
-    { "persona": "team-a", "model": "gpt-oss-120b", "expect": "allow" },
-    { "persona": "team-a", "model": "llama-3.3-70b", "expect": "deny" },
-    { "persona": "team-a", "method": "GET", "path": "/key/list", "expect": "deny" },
-    { "persona": null, "model": "gpt-oss-120b", "expect": "deny", "name": "Ohne Credentials" }
+    { "apiKey": "team-a", "model": "gpt-oss-120b", "expect": "allow" },
+    { "apiKey": "team-a", "model": "llama-3.3-70b", "expect": "deny" },
+    { "apiKey": "team-a", "method": "GET", "path": "/key/list", "expect": "deny" },
+    { "apiKey": null, "model": "gpt-oss-120b", "expect": "deny", "name": "Ohne Credentials" }
   ]
 }
 ```
 
-Persona-Namen beziehen sich auf die Test-Personas (Standard: LiteLLM-Key pro User/Team).
+`apiKey` nennt einen Key aus der API-Key-Sammlung (Einstellungen > API-Keys) per Namen.
 
 Thinking-Test für ein Qwen3-Modell auf vLLM; für gpt-oss oder über LiteLLM stattdessen
 `reasoning_effort` in den Varianten setzen:

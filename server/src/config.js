@@ -24,9 +24,6 @@ export const config = {
     issuer: env.OIDC_ISSUER_URL, // z. B. https://keycloak.example.com/realms/ai-testing
     clientId: env.OIDC_CLIENT_ID ?? 'ai-testing-suite',
     clientSecret: env.OIDC_CLIENT_SECRET,
-    // Client für Test-Personas (Direct Access Grants), getrennt vom Login-Client.
-    personaClientId: env.OIDC_PERSONA_CLIENT_ID ?? 'ai-testing-personas',
-    personaClientSecret: env.OIDC_PERSONA_CLIENT_SECRET,
     allowInsecure: env.OIDC_ALLOW_INSECURE === 'true', // nur für lokales http-Keycloak
     // Issuer aus den Discovery-Daten übernehmen, auch wenn er von OIDC_ISSUER_URL abweicht
     // (z. B. Keycloak hinter Proxy meldet http:// oder einen anderen Hostnamen).

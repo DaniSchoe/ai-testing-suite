@@ -27,7 +27,6 @@ worker:
 oidc:
   issuerUrl: https://keycloak.example.com/realms/ai-testing
   clientId: ai-testing-suite
-  personaClientId: ai-testing-personas
   # Issuer aus Keycloaks Discovery-Antwort übernehmen, auch wenn er von issuerUrl abweicht.
   # Nur als Notlösung, besser Keycloak (KC_HOSTNAME, KC_PROXY_HEADERS) oder issuerUrl korrigieren.
   trustDiscoveredIssuer: false
@@ -38,14 +37,13 @@ adminEmails: []
 #  - admin@example.com
 
 # Secrets: entweder hier setzen (Chart legt ein Secret an) oder existingSecret mit den Keys
-# DATABASE_URL, APP_SECRET, OIDC_CLIENT_SECRET, OIDC_PERSONA_CLIENT_SECRET (und bei
+# DATABASE_URL, APP_SECRET, OIDC_CLIENT_SECRET (und bei
 # postgresql.enabled zusätzlich POSTGRES_PASSWORD) angeben.
 secrets:
   existingSecret: ""
   databaseUrl: ""            # nur für externe Postgres (postgresql.enabled=false)
   appSecret: ""              # leer = wird einmalig zufällig erzeugt und bei Upgrades beibehalten
   oidcClientSecret: ""
-  oidcPersonaClientSecret: ""
 
 # Postgres im Cluster (StatefulSet + PVC). Für eine externe/verwaltete Datenbank
 # enabled: false setzen und secrets.databaseUrl angeben.

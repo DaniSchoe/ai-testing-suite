@@ -1,6 +1,6 @@
 // Gemeinsame Helfer: API-Zugriff, Formatierung, Theme, kleine UI-Bausteine.
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { Bot, Cpu, Globe, Lock, Plug, Route, Users as UsersIcon, X } from 'lucide-react';
 
 export async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(path, {
@@ -251,3 +251,68 @@ export function JsonField({ label, value, onChange, rows = 14, hint }) {
     </label>
   );
 }
+
+// Endpoint-Arten mit eigenem Icon, damit sie in Listen schnell unterscheidbar sind.
+export const KIND_META = {
+  ai_proxy: { label: 'AI Proxy', Icon: Route, color: 'var(--primary)' },
+  llm: { label: 'LLM-Endpoint', Icon: Cpu, color: 'var(--ok, #1a9b5f)' },
+  mcp: { label: 'MCP', Icon: Plug, color: 'var(--warn, #c77d12)' },
+};
+export const FLAVOR_LABEL = { openai: 'OpenAI-compatible', claude: 'Claude' };
+
+export function KindBadge({ kind, flavor }) {
+  const meta = KIND_META[kind] ?? { label: kind, Icon: Cpu };
+  const Icon = kind === 'llm' && flavor === 'claude' ? Bot : meta.Icon;
+  return (
+    <span className="tag kind-tag" style={{ color: meta.color }}>
+      <Icon size={13} /> <span style={{ color: 'var(--text)' }}>{meta.label}</span>
+      {kind === 'llm' && flavor && <span className="sub"> · {FLAVOR_LABEL[flavor]}</span>}
+    </span>
+  );
+}
+
+export function EnvBadge({ env }) {
+  return <span className={`badge ${env === 'dev' ? 'warn' : 'passed'}`}>{env === 'dev' ? 'Dev' : 'Prod'}</span>;
+}
+
+// Wer sieht das? Liste der Sichtbarkeitsstufen für Endpoints und Modelle bzw. API-Keys.
+export const PUBLISH_LABEL = { admins: 'Nur Administratoren', teams: 'Bestimmte Teams', global: 'Global' };
+export const KEY_VISIBILITY_LABEL = { user: 'Nur ich', teams: 'Teams', global: 'Global' };
+
+export function VisibilityBadge({ visibility, teamNames = [], adminOnly }) {
+  const Icon = visibility === 'global' ? Globe : visibility === 'admins' ? Lock : visibility === 'user' ? Lock : UsersIcon;
+  const label = { ...PUBLISH_LABEL, ...KEY_VISIBILITY_LABEL }[visibility] ?? visibility;
+  return (
+    <span className="tag" title={teamNames.join(', ')}>
+      <Icon size={12} /> {adminOnly ? 'Nur Administratoren' : label}
+      {visibility === 'teams' && teamNames.length > 0 && !adminOnly && <span className="sub"> · {teamNames.join(', ')}</span>}
+    </span>
+  );
+}
+
+// Mehrfachauswahl von Teams als Checkbox-Liste.
+export function TeamPicker({ teams, value, onChange }) {
+  const set = new Set(value);
+  if (teams.length === 0) return <div className="hint">Keine Teams verfügbar</div>;
+  return (
+    <div className="pick-list" style={{ maxHeight: 150 }}>
+      {teams.map((t) => (
+        <label key={t.id}>
+          <input
+            type="checkbox"
+            checked={set.has(t.id)}
+            onChange={() => {
+              const next = new Set(set);
+              next.has(t.id) ? next.delete(t.id) : next.add(t.id);
+              onChange([...next]);
+            }}
+          />
+          <span style={{ fontWeight: 600 }}>{t.name}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+export const useTeams = () => useApi('/api/teams');
+export const useUserDirectory = () => useApi('/api/user-directory');

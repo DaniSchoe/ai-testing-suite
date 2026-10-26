@@ -5,9 +5,8 @@ URL: {{ .Values.publicUrl }}
 Keycloak-Checkliste (Realm aus {{ .Values.oidc.issuerUrl }}):
   1. Client "{{ .Values.oidc.clientId }}" (confidential, Standard Flow, PKCE S256),
      Redirect-URI {{ .Values.publicUrl }}/auth/callback
-  2. Client "{{ .Values.oidc.personaClientId }}" mit Direct Access Grants für Test-Personas
 
-Rollen und Teams vergibst du in der Anwendung unter Administrator > Benutzer.
+Rollen und Teams vergibst du in der Anwendung unter Einstellungen > Benutzer.
 {{- if .Values.adminEmails }}
 Admin-Zugriff per E-Mail: {{ join ", " .Values.adminEmails }}
 {{- else }}

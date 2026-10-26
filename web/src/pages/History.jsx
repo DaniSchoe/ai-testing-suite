@@ -140,7 +140,7 @@ export default function History() {
                       <div style={{ fontWeight: 600 }}>{r.test_name}</div>
                       <div className="sub">
                         {r.endpoint_name}
-                        {r.persona_name ? ` · als ${r.persona_name}` : ''}
+                        {r.api_key_name ? ` · Key ${r.api_key_name}` : ''}
                         {r.trigger === 'schedule' ? ' · geplant' : ''}
                       </div>
                     </td>

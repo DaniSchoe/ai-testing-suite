@@ -115,7 +115,7 @@ function ResultCard({ result, logs }) {
     <div id={result.id} style={{ marginBottom: 20 }}>
       <Card
         title={result.test_name}
-        sub={`${TYPE_LABELS[result.type] ?? result.type} · ${result.endpoint_name ?? ''}${result.model ? ` · ${result.model}` : ''}${result.persona_name ? ` · als ${result.persona_name}` : ''} · ${fmt.ms(result.duration_ms)}`}
+        sub={`${TYPE_LABELS[result.type] ?? result.type} · ${result.endpoint_name ?? ''}${result.model ? ` · ${result.model}` : ''}${result.api_key_name ? ` · mit Key ${result.api_key_name}` : ''} · ${fmt.ms(result.duration_ms)}`}
         action={<StatusBadge status={result.status} />}
       >
         {result.error && <div className="error-box">{result.error}</div>}

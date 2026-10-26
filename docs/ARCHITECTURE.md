@@ -48,7 +48,6 @@ Postgres ist die einzige Abhängigkeit: Daten, Sessions und die Job-Queue samt C
 | `schedules.manage` | eigene Zeitpläne pflegen |
 | `runs.manage_all` | Läufe und Zeitpläne anderer User abbrechen/ändern |
 | `endpoints.manage` | Endpoints und Modellkatalog |
-| `personas.manage` | Test-Personas |
 | `users.manage` | User anlegen, sperren, Rollen und Teams zuweisen |
 | `teams.manage` | Teams und Mitglieder |
 | `roles.manage` | Rollen und ihre Berechtigungen |
@@ -58,20 +57,18 @@ Sichtbarkeit: eigene Läufe immer, Läufe von Mitgliedern gemeinsamer Teams imme
 - Jeder Lauf gehört dem User, der ihn gestartet hat (bzw. dem Besitzer des Zeitplans). Daraus
   entstehen die nutzerspezifischen Auswertungen und die Seite "Meine Tests".
 
-### Test-Personas
+### API-Keys
 
-Personas sind die Identitäten, *unter denen* Tests laufen, getrennt vom angemeldeten User:
+Tests laufen mit API-Keys aus einer zentralen Sammlung (`api_keys`); Endpoints und Tests verweisen nur
+darauf. Ein Key ist `user` (nur der Ersteller), `teams` (Mitglieder der Teams) oder `global`
+(Administratoren), zusätzlich lassen sich Keys einzelnen Usern zuordnen oder auf `admin_only` stellen.
+Normale User legen nur Keys für sich und ihre Teams an. Auflösung im Executor: Key des Laufs, dann Key
+des Tests, dann Key des Endpoints. In `access`- und `mcp`-Fällen wählt `apiKey` einen Key per Namen.
 
-- `api_key` (Standard): LiteLLM-Key bzw. Virtual Key eines Users oder Teams. So vergibt LiteLLM
-  heute die Berechtigungen; Modell- und MCP-Freigaben werden pro Key geprüft.
-- `keycloak_password`: Keycloak-Testuser. Der Runner holt sich per Password Grant über einen
-  eigenen Client (`ai-testing-personas`) ein Access Token und schickt es als Bearer-Token.
-  Für den Fall, dass LiteLLM später JWT-Auth nutzt.
-- `none`: anonym, für Negativtests.
-
+LLM-Endpoints gibt es als OpenAI-compatible oder Claude (Anthropic Messages API, Übersetzung im Client).
 vLLM-Endpunkte brauchen keine Berechtigung; dort bleibt der API-Key leer.
 
-Secrets (Endpoint-Keys, Persona-Passwörter) werden mit AES-256-GCM verschlüsselt gespeichert,
+Secrets (API-Keys) werden mit AES-256-GCM verschlüsselt gespeichert,
 der Schlüssel wird aus `APP_SECRET` abgeleitet.
 
 ## Modellkatalog
@@ -102,8 +99,8 @@ Neue Typen werden in `testtypes/index.js` registriert und erscheinen automatisch
 | `comparison` | gleicher Datensatz gegen mehrere Modelle oder Endpoints (`targets`, z. B. LiteLLM vs. vLLM direkt) | Ranking nach Score und Latenz, Gateway-Overhead |
 | `thinking` | dieselben Aufgaben mit und ohne Reasoning (Varianten frei konfigurierbar) | Genauigkeit, Ø Tokens und Reasoning-Tokens, Latenz, Tokens je richtige Antwort, Schlüssigkeit per Judge, Genauigkeitsgewinn pro 1.000 Zusatz-Tokens |
 | `security` | Prompt Injection, Jailbreak, schädliche Anfragen, DLP auf Ein- und Ausgabe | Pass-Rate je Kategorie, vom Gateway geblockt |
-| `access` | Persona X darf Modell/Route Y (nicht) nutzen | falsch erlaubt, falsch verweigert |
-| `mcp` | Tool-Katalog je Persona, Tool-Aufrufe, verbotene Tools | geleakte Tools, Checks |
+| `access` | API-Key X darf Modell/Route Y (nicht) nutzen | falsch erlaubt, falsch verweigert |
+| `mcp` | Tool-Katalog je API-Key, Tool-Aufrufe, verbotene Tools | geleakte Tools, Checks |
 | `ratelimit` | Burst gegen RPM/TPM-Limits (Virtual Keys, Teams) | erfolgreich vs. 429 |
 | `structured` | Function Calling und JSON-Ausgaben | korrekt aufgerufene Tools |
 
@@ -132,8 +129,8 @@ letzten bestandenen Ausführung derselben Testdefinition verglichen (Standardtol
 | `teams`, `team_members` | Teams und Mitglieder |
 | `endpoints` | LiteLLM/vLLM/MCP mit URL, optional verschlüsseltem Key, Discovery-Status |
 | `endpoint_models` | abgefragte Modelle je Endpoint mit Alias und Verfügbarkeit |
-| `personas` | Test-Identitäten mit verschlüsseltem Secret |
-| `test_definitions` | Typ, Endpoint, Persona, Konfiguration (JSON) |
+| `api_keys` | API-Key-Sammlung (verschlüsselt) mit Teams/Usern |
+| `test_definitions` | Typ, Endpoint, API-Key, Konfiguration (JSON) |
 | `suites`, `suite_tests` | gebündelte Läufe mit Reihenfolge |
 | `schedules` | Cron, Ziel, Besitzer |
 | `runs` | ein Lauf: Art, Auslöser, User, Status, Zähler |

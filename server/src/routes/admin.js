@@ -1,43 +1,61 @@
-// Admin-Panel: Endpoints (LiteLLM, vLLM, MCP), Modellkatalog und Test-Personas.
+// Admin-Panel: Endpoints (AI Proxy, LLM-Endpoint, MCP) und Modellkatalog.
 import { requirePermission } from '../auth.js';
-import { encrypt, mask } from '../crypto.js';
-import { many, one, query } from '../db.js';
-import { endpointHeaders, syncEndpointModels } from '../models.js';
+import { many, one, query, tx } from '../db.js';
+import { ENDPOINT_SELECT, endpointHeaders, llmClientFor, syncEndpointModels } from '../models.js';
+import { hasPermission } from '../permissions.js';
 import { McpClient } from '../runner/clients.js';
+import { canSeePublished } from '../visibility.js';
 
-const KINDS = ['litellm', 'vllm', 'openai', 'mcp'];
-const AUTH_TYPES = ['keycloak_password', 'api_key', 'none'];
+const KINDS = ['ai_proxy', 'llm', 'mcp'];
+const FLAVORS = ['openai', 'claude'];
+const ENVIRONMENTS = ['dev', 'prod'];
+const VISIBILITIES = ['admins', 'teams', 'global'];
 
-function publicEndpoint(e) {
-  const { api_key_enc, ...rest } = e;
-  return { ...rest, api_key_masked: mask(api_key_enc), has_api_key: Boolean(api_key_enc) };
+function badRequest(message, statusCode = 400) {
+  return Object.assign(new Error(message), { statusCode });
 }
 
-function publicPersona(p) {
-  const { secret_enc, ...rest } = p;
-  return { ...rest, has_secret: Boolean(secret_enc) };
-}
-
-function badRequest(message) {
-  return Object.assign(new Error(message), { statusCode: 400 });
-}
-
-function validateEndpoint(body) {
-  if (!body.name?.trim()) throw badRequest('Name fehlt');
-  if (!KINDS.includes(body.kind)) throw badRequest(`Typ muss einer von ${KINDS.join(', ')} sein`);
+function validateEndpoint(b) {
+  if (!b.name?.trim()) throw badRequest('Name fehlt');
+  if (!KINDS.includes(b.kind)) throw badRequest(`Art muss eine von ${KINDS.join(', ')} sein`);
+  if (b.kind === 'llm' && b.llm_flavor && !FLAVORS.includes(b.llm_flavor)) throw badRequest('Ungültige API-Art');
+  if (b.environment && !ENVIRONMENTS.includes(b.environment)) throw badRequest('Umgebung muss dev oder prod sein');
+  if (b.visibility && !VISIBILITIES.includes(b.visibility)) throw badRequest('Ungültige Veröffentlichung');
+  if (b.visibility === 'teams' && !(b.teamIds ?? []).length) throw badRequest('Mindestens ein Team auswählen');
   try {
-    new URL(body.base_url);
+    new URL(b.base_url);
   } catch {
     throw badRequest('Basis-URL ist ungültig');
+  }
+}
+
+// Das Flavor gilt nur für LLM-Endpoints; AI-Proxys und MCP sind immer OpenAI-kompatibel bzw. MCP.
+const flavorOf = (b) => (b.kind === 'llm' && b.llm_flavor === 'claude' ? 'claude' : 'openai');
+
+// Verbindungstest einer (auch noch nicht gespeicherten) Konfiguration: Modelle bzw. MCP-Tools abrufen.
+async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc }) {
+  const e = { kind, llm_flavor: flavorOf({ kind, llm_flavor }), base_url, headers: headers ?? {}, api_key_enc: secretEnc };
+  const t0 = performance.now();
+  const latency = () => Math.round(performance.now() - t0);
+  try {
+    if (kind === 'mcp') {
+      const mcp = new McpClient({ url: base_url, headers: endpointHeaders(e), timeoutMs: 15_000 });
+      const info = await mcp.initialize();
+      const tools = await mcp.listTools();
+      return { ok: true, latencyMs: latency(), server: info?.serverInfo, tools: tools.map((t) => t.name) };
+    }
+    const models = await llmClientFor(e, { timeoutMs: 15_000 }).models();
+    return { ok: true, latencyMs: latency(), models };
+  } catch (err) {
+    return { ok: false, latencyMs: latency(), error: err.message };
   }
 }
 
 export default async function adminRoutes(app) {
   const viewer = { preHandler: requirePermission('suite.view') };
   const endpointAdmin = { preHandler: requirePermission('endpoints.manage') };
-  const personaAdmin = { preHandler: requirePermission('personas.manage') };
+  const canManage = (user) => hasPermission(user, 'endpoints.manage');
 
-  // Manuell eingetragene Modelle (für Endpoints ohne /v1/models) abgleichen.
   async function saveManualModels(endpointId, names) {
     const list = (names ?? []).map((n) => n.trim()).filter(Boolean);
     await query(`delete from endpoint_models where endpoint_id = $1 and source = 'manual' and not (name = any($2::text[]))`, [endpointId, list]);
@@ -48,110 +66,144 @@ export default async function adminRoutes(app) {
     );
   }
 
-  async function syncQuietly(endpoint, log) {
-    if (!endpoint.auto_discover || endpoint.kind === 'mcp') return;
-    await syncEndpointModels(endpoint).catch((err) => log.warn(`Modellabruf ${endpoint.name}: ${err.message}`));
+  async function setEndpointTeams(c, endpointId, teamIds) {
+    await c.query('delete from endpoint_teams where endpoint_id = $1', [endpointId]);
+    if (teamIds.length) await c.query('insert into endpoint_teams select $1, unnest($2::uuid[])', [endpointId, teamIds]);
+  }
+
+  // Modelle von Endpoint abrufen; Ergebnis für das Popup nach dem Anlegen.
+  async function discover(endpoint) {
+    if (endpoint.kind === 'mcp') return null;
+    if (!endpoint.auto_discover) return { ok: true, models: [], skipped: true };
+    try {
+      return { ok: true, models: await syncEndpointModels(endpoint) };
+    } catch (err) {
+      return { ok: false, models: [], error: err.message };
+    }
+  }
+
+  async function loadEndpoint(id) {
+    return one(`${ENDPOINT_SELECT} where e.id = $1`, [id]);
+  }
+
+  // Endpoints und Modelle mit Teams, Maintainer und Sichtbarkeit für den anfragenden User.
+  async function catalog(user) {
+    const [endpoints, models, endpointTeams, modelTeams, users] = await Promise.all([
+      many(`${ENDPOINT_SELECT} order by e.kind, e.name`),
+      many('select * from endpoint_models order by coalesce(alias, name)'),
+      many('select * from endpoint_teams'),
+      many('select * from model_teams'),
+      many('select id, coalesce(display_name, username) as name from users'),
+    ]);
+    const userName = new Map(users.map((u) => [u.id, u.name]));
+    const manager = user.is_admin || canManage(user);
+    const out = [];
+    for (const e of endpoints) {
+      const teamIds = endpointTeams.filter((t) => t.endpoint_id === e.id).map((t) => t.team_id);
+      if (!canSeePublished(user, { ...e, teamIds })) continue;
+      const { api_key_enc, headers, ...rest } = e;
+      const own = models
+        .filter((m) => m.endpoint_id === e.id)
+        .map((m) => {
+          const mTeamIds = modelTeams.filter((t) => t.endpoint_id === e.id && t.model_name === m.name).map((t) => t.team_id);
+          return { ...m, teamIds: mTeamIds, maintainer_name: userName.get(m.maintainer_id) ?? null, can_edit: manager || m.maintainer_id === user.id };
+        })
+        .filter((m) => canSeePublished(user, m) || manager);
+      out.push({
+        ...rest,
+        ...(manager ? { headers } : {}),
+        has_api_key: Boolean(api_key_enc),
+        teamIds,
+        maintainer_name: userName.get(e.maintainer_id) ?? null,
+        models: own,
+      });
+    }
+    return out;
   }
 
   // --- Endpoints ---
-  app.get('/api/endpoints', viewer, async () => {
-    const [endpoints, models] = await Promise.all([
-      many('select * from endpoints order by kind, name'),
-      many('select * from endpoint_models order by coalesce(alias, name)'),
-    ]);
-    return endpoints.map((e) => ({ ...publicEndpoint(e), models: models.filter((m) => m.endpoint_id === e.id) }));
+  app.get('/api/endpoints', viewer, async (request) => catalog(request.user));
+
+  // Verbindungstest vor dem Speichern (Neuanlage und Bearbeiten).
+  app.post('/api/endpoints/test', endpointAdmin, async (request) => {
+    const b = request.body ?? {};
+    if (!KINDS.includes(b.kind)) throw badRequest('Art fehlt');
+    try {
+      new URL(b.base_url);
+    } catch {
+      throw badRequest('Basis-URL ist ungültig');
+    }
+    const key = b.api_key_id ? await one('select secret_enc from api_keys where id = $1', [b.api_key_id]) : null;
+    return testConnection({ ...b, secretEnc: key?.secret_enc });
   });
 
-  app.post('/api/endpoints', endpointAdmin, async (request) => {
+  async function save(request, id) {
     const b = request.body ?? {};
     validateEndpoint(b);
-    const row = await one(
-      `insert into endpoints (name, kind, base_url, api_key_enc, headers, auto_discover, default_model, enabled, notes, created_by)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
-      [
-        b.name.trim(),
-        b.kind,
-        b.base_url.trim(),
-        encrypt(b.api_key),
-        b.headers ?? {},
-        b.auto_discover ?? true,
-        b.default_model || null,
-        b.enabled ?? true,
-        b.notes ?? null,
-        request.user.id,
-      ],
-    );
+    const visibility = b.visibility ?? 'global';
+    const teamIds = visibility === 'teams' ? [...new Set(b.teamIds ?? [])] : [];
+    if (b.api_key_id && !(await one('select 1 from api_keys where id = $1', [b.api_key_id]))) throw badRequest('API-Key existiert nicht');
+    const values = [
+      b.name.trim(),
+      b.kind,
+      flavorOf(b),
+      b.base_url.trim(),
+      b.api_key_id || null,
+      b.headers ?? {},
+      b.auto_discover ?? true,
+      b.default_model || null,
+      b.enabled ?? true,
+      b.notes ?? null,
+      b.maintainer_id || null,
+      b.environment ?? 'prod',
+      visibility,
+    ];
+    const row = await tx(async (c) => {
+      const { rows } = id
+        ? await c.query(
+            `update endpoints set name = $2, kind = $3, llm_flavor = $4, base_url = $5, api_key_id = $6, headers = $7,
+               auto_discover = $8, default_model = $9, enabled = $10, notes = $11, maintainer_id = $12,
+               environment = $13, visibility = $14, updated_at = now()
+             where id = $1 returning id`,
+            [id, ...values],
+          )
+        : await c.query(
+            `insert into endpoints (name, kind, llm_flavor, base_url, api_key_id, headers, auto_discover, default_model, enabled,
+               notes, maintainer_id, environment, visibility, created_by)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning id`,
+            [...values, request.user.id],
+          );
+      if (!rows[0]) throw badRequest('Endpoint nicht gefunden', 404);
+      await setEndpointTeams(c, rows[0].id, teamIds);
+      return rows[0];
+    });
     await saveManualModels(row.id, b.manual_models);
-    await syncQuietly(row, request.log);
-    return publicEndpoint(row);
-  });
+    const endpoint = await loadEndpoint(row.id);
+    // Nach dem Speichern die Modelle lesen; das Frontend zeigt das Ergebnis kurz als Popup.
+    const discovered = await discover(endpoint);
+    const full = (await catalog(request.user)).find((e) => e.id === row.id);
+    return { endpoint: full, discovered };
+  }
 
-  app.put('/api/endpoints/:id', endpointAdmin, async (request, reply) => {
-    const b = request.body ?? {};
-    validateEndpoint(b);
-    // api_key: undefined = unverändert, '' = löschen, sonst neu setzen
-    const row = await one(
-      `update endpoints set name = $2, kind = $3, base_url = $4,
-         api_key_enc = case when $5::boolean then $6 else api_key_enc end,
-         headers = $7, auto_discover = $8, default_model = $9, enabled = $10, notes = $11, updated_at = now()
-       where id = $1 returning *`,
-      [
-        request.params.id,
-        b.name.trim(),
-        b.kind,
-        b.base_url.trim(),
-        b.api_key !== undefined,
-        encrypt(b.api_key),
-        b.headers ?? {},
-        b.auto_discover ?? true,
-        b.default_model || null,
-        b.enabled ?? true,
-        b.notes ?? null,
-      ],
-    );
-    if (!row) return reply.code(404).send({ error: 'Endpoint nicht gefunden' });
-    await saveManualModels(row.id, b.manual_models);
-    await syncQuietly(row, request.log);
-    return publicEndpoint(row);
-  });
+  app.post('/api/endpoints', endpointAdmin, async (request) => save(request, null));
+  app.put('/api/endpoints/:id', endpointAdmin, async (request) => save(request, request.params.id));
 
   app.delete('/api/endpoints/:id', endpointAdmin, async (request) => {
     await query('delete from endpoints where id = $1', [request.params.id]);
     return { ok: true };
   });
 
-  // Verbindungstest aus dem Admin-Panel: Modelle (bzw. MCP-Tools) abrufen und Latenz messen.
+  // Verbindungstest eines gespeicherten Endpoints; gleicht den Modellkatalog direkt mit ab.
   app.post('/api/endpoints/:id/check', endpointAdmin, async (request, reply) => {
-    const e = await one('select * from endpoints where id = $1', [request.params.id]);
+    const e = await loadEndpoint(request.params.id);
     if (!e) return reply.code(404).send({ error: 'Endpoint nicht gefunden' });
-    const headers = endpointHeaders(e);
-    const t0 = performance.now();
-    try {
-      if (e.kind === 'mcp') {
-        const mcp = new McpClient({ url: e.base_url, headers, timeoutMs: 15_000 });
-        const info = await mcp.initialize();
-        const tools = await mcp.listTools();
-        return { ok: true, latencyMs: Math.round(performance.now() - t0), server: info?.serverInfo, tools: tools.map((t) => t.name) };
-      }
-      // Verbindungstest gleicht den Modellkatalog direkt mit ab.
-      const models = await syncEndpointModels(e);
-      return { ok: true, latencyMs: Math.round(performance.now() - t0), models };
-    } catch (err) {
-      return { ok: false, latencyMs: Math.round(performance.now() - t0), error: err.message };
-    }
+    const result = await testConnection({ ...e, secretEnc: e.api_key_enc });
+    if (result.ok && result.models) await syncEndpointModels(e).catch(() => {});
+    return result;
   });
 
-  // --- Modellkatalog ---
-  app.get('/api/models', viewer, async () =>
-    many(
-      `select m.*, e.name as endpoint_name, e.kind as endpoint_kind, e.enabled as endpoint_enabled
-       from endpoint_models m join endpoints e on e.id = m.endpoint_id
-       order by coalesce(m.alias, m.name), e.name`,
-    ),
-  );
-
   app.post('/api/endpoints/:id/sync-models', endpointAdmin, async (request, reply) => {
-    const e = await one('select * from endpoints where id = $1', [request.params.id]);
+    const e = await loadEndpoint(request.params.id);
     if (!e) return reply.code(404).send({ error: 'Endpoint nicht gefunden' });
     try {
       return { ok: true, models: await syncEndpointModels(e) };
@@ -160,58 +212,47 @@ export default async function adminRoutes(app) {
     }
   });
 
-  // Alias setzen (Body statt Pfad, weil Modellnamen wie "Qwen/Qwen3-32B" Schrägstriche enthalten).
-  app.put('/api/endpoint-models', endpointAdmin, async (request, reply) => {
-    const b = request.body ?? {};
-    const row = await one('update endpoint_models set alias = $3 where endpoint_id = $1 and name = $2 returning *', [
-      b.endpoint_id,
-      b.name,
-      b.alias?.trim() || null,
-    ]);
-    if (!row) return reply.code(404).send({ error: 'Modell nicht gefunden' });
-    return row;
-  });
-
-  // --- Test-Personas ---
-  app.get('/api/personas', viewer, async () => (await many('select * from personas order by name')).map(publicPersona));
-
-  app.post('/api/personas', personaAdmin, async (request) => {
-    const b = request.body ?? {};
-    if (!b.name?.trim()) throw badRequest('Name fehlt');
-    if (!AUTH_TYPES.includes(b.auth_type)) throw badRequest('Ungültige Authentifizierungsart');
-    const row = await one(
-      `insert into personas (name, description, auth_type, username, secret_enc, attributes)
-       values ($1, $2, $3, $4, $5, $6) returning *`,
-      [b.name.trim(), b.description ?? null, b.auth_type, b.username ?? null, encrypt(b.secret), b.attributes ?? {}],
+  // --- Modellkatalog ---
+  app.get('/api/models', viewer, async (request) => {
+    const endpoints = await catalog(request.user);
+    return endpoints.flatMap((e) =>
+      e.models.map((m) => ({
+        ...m,
+        endpoint_name: e.name,
+        endpoint_kind: e.kind,
+        endpoint_enabled: e.enabled,
+        endpoint_environment: e.environment,
+        // Dev, sobald Endpoint oder Modell als Dev markiert ist.
+        effective_environment: e.environment === 'dev' || m.environment === 'dev' ? 'dev' : 'prod',
+      })),
     );
-    return publicPersona(row);
   });
 
-  app.put('/api/personas/:id', personaAdmin, async (request, reply) => {
+  // Modell bearbeiten (Body statt Pfad, weil Modellnamen wie "Qwen/Qwen3-32B" Schrägstriche enthalten).
+  // Erlaubt für Administratoren und den Maintainer des Modells.
+  app.put('/api/endpoint-models', viewer, async (request, reply) => {
     const b = request.body ?? {};
-    if (!b.name?.trim()) throw badRequest('Name fehlt');
-    if (!AUTH_TYPES.includes(b.auth_type)) throw badRequest('Ungültige Authentifizierungsart');
-    const row = await one(
-      `update personas set name = $2, description = $3, auth_type = $4, username = $5,
-         secret_enc = case when $6::boolean then $7 else secret_enc end, attributes = $8, updated_at = now()
-       where id = $1 returning *`,
-      [
-        request.params.id,
-        b.name.trim(),
-        b.description ?? null,
-        b.auth_type,
-        b.username ?? null,
-        b.secret !== undefined,
-        encrypt(b.secret),
-        b.attributes ?? {},
-      ],
-    );
-    if (!row) return reply.code(404).send({ error: 'Persona nicht gefunden' });
-    return publicPersona(row);
-  });
-
-  app.delete('/api/personas/:id', personaAdmin, async (request) => {
-    await query('delete from personas where id = $1', [request.params.id]);
-    return { ok: true };
+    const existing = await one('select * from endpoint_models where endpoint_id = $1 and name = $2', [b.endpoint_id, b.name]);
+    if (!existing) return reply.code(404).send({ error: 'Modell nicht gefunden' });
+    const user = request.user;
+    if (!(user.is_admin || canManage(user) || existing.maintainer_id === user.id)) {
+      return reply.code(403).send({ error: 'Nur Administratoren und der Maintainer dürfen Modelle bearbeiten' });
+    }
+    const visibility = b.visibility ?? existing.visibility;
+    const environment = b.environment ?? existing.environment;
+    if (!VISIBILITIES.includes(visibility)) throw badRequest('Ungültige Veröffentlichung');
+    if (!ENVIRONMENTS.includes(environment)) throw badRequest('Umgebung muss dev oder prod sein');
+    const teamIds = visibility === 'teams' ? [...new Set(b.teamIds ?? [])] : [];
+    if (visibility === 'teams' && !teamIds.length) throw badRequest('Mindestens ein Team auswählen');
+    await tx(async (c) => {
+      await c.query(
+        `update endpoint_models set alias = $3, maintainer_id = $4, environment = $5, visibility = $6
+         where endpoint_id = $1 and name = $2`,
+        [b.endpoint_id, b.name, b.alias?.trim() || null, b.maintainer_id === undefined ? existing.maintainer_id : b.maintainer_id || null, environment, visibility],
+      );
+      await c.query('delete from model_teams where endpoint_id = $1 and model_name = $2', [b.endpoint_id, b.name]);
+      if (teamIds.length) await c.query('insert into model_teams select $1, $2, unnest($3::uuid[])', [b.endpoint_id, b.name, teamIds]);
+    });
+    return one('select * from endpoint_models where endpoint_id = $1 and name = $2', [b.endpoint_id, b.name]);
   });
 }

@@ -21,6 +21,6 @@ export function describeTypes() {
     label,
     description,
     defaults,
-    endpointKinds: endpointKinds ?? ['litellm', 'vllm', 'openai'],
+    endpointKinds: endpointKinds ?? ['ai_proxy', 'llm'],
   }));
 }
