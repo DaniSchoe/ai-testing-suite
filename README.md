@@ -13,6 +13,7 @@ Entwicklung im Dashboard.
   unterschiedliche Namen desselben Modells werden per Alias zusammengeführt
 - **Thinking vs. Non-Thinking**: Genauigkeit, Token-Verbrauch, Latenz und Schlüssigkeit im Vergleich
 - **Test-Builder**: ein Test kombiniert beliebige Testarten mit Endpoint, mehreren Modellen und API-Key und läuft sofort, einmalig geplant oder regelmäßig; Veröffentlichung für dich, Teams oder alle
+- **Marketplace**: Tests entdecken (Filter nach Testart, privat/öffentlich, Sortierung, Namenssuche), Detailseite, Merkliste; Herausgeber können verlangen, dass andere mit ihrem eigenen API-Key ausführen
 - **Zeitpläne** als Kalender mit geplanten und bisherigen Läufen
 - Dashboard **global oder nutzerspezifisch**, Tabelle aller eigenen Testausführungen
 - **Hell-, Dunkel- und System-Modus**

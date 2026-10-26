@@ -131,6 +131,7 @@ letzten bestandenen Ausführung derselben Testdefinition verglichen (Standardtol
 | `endpoint_models` | abgefragte Modelle je Endpoint mit Alias und Verfügbarkeit |
 | `api_keys` | API-Key-Sammlung (verschlüsselt) mit Teams/Usern |
 | `tests`, `test_teams` | Test aus dem Test-Builder: Name, Beschreibung, Tags, Maintainer, Endpoint, Modelle, API-Key, Testarten mit Konfiguration, Veröffentlichung |
+| `test_watchlist` | Merkliste je User |
 | `test_definitions` | ausführbare Einzeltests (Testart × Modell), vom Test erzeugt (`build_id`) und bei jedem Speichern abgeglichen, damit IDs und Historie stabil bleiben |
 | `suites`, `suite_tests` | Altbestand, wird von der UI nicht mehr verwendet |
 | `schedules` | Cron oder einmaliger Zeitpunkt (`run_at`), Ziel (Test), Besitzer |
@@ -147,7 +148,9 @@ Smoke, Vergleich), `first` (erstes Modell, z. B. Zugriff) oder `none` (MCP). Ein
 führt alle Einzeltests des Tests aus. Zeitpläne eines Tests sind Cron-Ausdrücke oder ein einmaliger
 Zeitpunkt (pg-boss `startAfter`); `/api/calendar` liefert daraus die kommenden Termine und die bisherigen
 Läufe. Sichtbar ist ein Test für Ersteller, Maintainer und Administratoren, nach dem Veröffentlichen
-zusätzlich für die gewählten Teams oder alle.
+zusätzlich für die gewählten Teams oder alle. Im Marketplace führen andere User veröffentlichte Tests aus;
+ist `requires_api_key` gesetzt, wählen sie einen eigenen Key (`runs.api_key_id`), der vor dem Key des Tests
+und des Endpoints gilt.
 
 ## Kubernetes
 

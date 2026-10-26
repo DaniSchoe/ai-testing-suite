@@ -13,12 +13,15 @@ import {
   Boxes,
   Search,
   ShieldCheck,
+  Store,
   Sun,
   Users,
   UsersRound,
 } from 'lucide-react';
 import { api, can, initials, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Marketplace from './pages/Marketplace.jsx';
+import MarketplaceDetail from './pages/MarketplaceDetail.jsx';
 import TestBuilder from './pages/TestBuilder.jsx';
 import TestEditor from './pages/TestEditor.jsx';
 import TestTypeInfo from './pages/TestTypeInfo.jsx';
@@ -96,6 +99,9 @@ export default function App() {
             <NavLink to="/" end>
               <LayoutGrid size={18} /> Dashboard
             </NavLink>
+            <NavLink to="/marketplace">
+              <Store size={18} /> Marketplace
+            </NavLink>
             <NavLink to="/test-builder">
               <FlaskConical size={18} /> Test-Builder
               {activeCount > 0 && <span className="count">{activeCount}</span>}
@@ -161,6 +167,8 @@ export default function App() {
           <main className="content">
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/marketplace" element={<Marketplace />} />
+              <Route path="/marketplace/:id" element={<MarketplaceDetail />} />
               <Route path="/test-builder" element={<TestBuilder />} />
               <Route path="/test-builder/new" element={<TestEditor />} />
               <Route path="/test-builder/:id" element={<TestEditor />} />
