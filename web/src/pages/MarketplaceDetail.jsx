@@ -90,14 +90,7 @@ export default function MarketplaceDetail() {
             </span>
           </Row>
           <Row label="Testarten">
-            <TypeIcons types={b.types} />
-            <ul className="steps" style={{ marginTop: 8 }}>
-              {b.types.map((x) => (
-                <li key={x}>
-                  <Link to={`/test-types/${x}`}>{TYPE_LABELS[x] ?? x}</Link>
-                </li>
-              ))}
-            </ul>
+            <TypeIcons types={b.types} link />
           </Row>
         </Card>
       </div>

@@ -46,3 +46,13 @@ export async function dashboardAccess(user, query) {
     selected,
   };
 }
+
+// SQL-Fragment für Ergebnisse (Alias res) samt Parametern, ab Parameternummer n.
+// Dashboard und Historie verwenden dasselbe: sichtbare Endpoints/Modelle (ohne Auswahl nur Prod) und die Auswahl als Vereinigung.
+export function resultFilter(access, n) {
+  const sql = `res.endpoint_id = any($${n}::uuid[])
+    and not exists (select 1 from unnest($${n + 1}::uuid[], $${n + 2}::text[]) as b(e, m) where b.e = res.endpoint_id and b.m = res.model)
+    and (cardinality($${n + 3}::text[]) + cardinality($${n + 4}::uuid[]) = 0
+         or coalesce(res.model_alias, res.model) = any($${n + 3}::text[]) or res.endpoint_id = any($${n + 4}::uuid[]))`;
+  return { sql, params: [access.allowedEndpoints, access.blockedEndpoints, access.blockedModels, access.selModels, access.selEndpoints] };
+}

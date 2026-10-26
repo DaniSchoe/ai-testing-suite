@@ -4,15 +4,23 @@ import { CalendarClock, Eye, EyeOff, Pencil, Play, Plus, Trash2 } from 'lucide-r
 import { api, can, describeSchedule, fmt, Modal, StatusBadge, TeamPicker, TYPE_LABELS, useApi, useTeams, useUser, VisibilityBadge } from '../lib.jsx';
 import { typeIcon } from '../testTypeDocs.js';
 
-export function TypeIcons({ types }) {
+export function TypeIcons({ types, link }) {
   return (
     <span className="type-icons">
       {types.map((t) => {
         const Icon = typeIcon(t);
-        return (
+        const chip = (
           <span key={t} className="icon-chip" title={TYPE_LABELS[t] ?? t} style={{ width: 26, height: 26 }}>
             <Icon size={14} />
           </span>
+        );
+        // Mit link führt das Symbol zur Erklärungsseite der Testart.
+        return link ? (
+          <Link key={t} to={`/test-types/${t}`} aria-label={`${TYPE_LABELS[t] ?? t}: Erklärung`}>
+            {chip}
+          </Link>
+        ) : (
+          chip
         );
       })}
     </span>

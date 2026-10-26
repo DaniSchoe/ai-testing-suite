@@ -51,11 +51,11 @@ export function can(user, permission) {
 
 // Umfang für Dashboard und Ergebnisse: 'all' (alle Nutzer), 'me' oder 'team:<id>'.
 // Ohne results.view_all stehen nur "Nur ich" und die eigenen Teams zur Wahl.
-export function ScopePicker({ value, onChange }) {
+export function ScopePicker({ value, onChange, withTeams = true }) {
   const user = useUser();
   const viewAll = can(user, 'results.view_all');
-  const allTeams = useApi(viewAll ? '/api/teams' : null);
-  const teams = viewAll ? (allTeams.data ?? []) : (user.teams ?? []);
+  const allTeams = useApi(viewAll && withTeams ? '/api/teams' : null);
+  const teams = !withTeams ? [] : viewAll ? (allTeams.data ?? []) : (user.teams ?? []);
   const teamId = value.startsWith('team:') ? value.slice(5) : '';
   return (
     <>
@@ -127,7 +127,6 @@ export const TYPE_LABELS = {
   performance: 'Performance',
   load: 'Last',
   quality: 'Qualität',
-  comparison: 'Modell-Vergleich',
   security: 'Security / DLP',
   access: 'Zugriff',
   mcp: 'MCP',

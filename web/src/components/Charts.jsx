@@ -148,8 +148,8 @@ export function Gauge({ value, label, sub }) {
   const c = Math.PI * r; // Länge des Halbkreises
   const arc = `M 20 100 A ${r} ${r} 0 0 1 180 100`;
   return (
-    <div className="gauge" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(v * 100)} aria-label={label}>
-      <svg viewBox="0 0 200 118" width="100%" style={{ maxWidth: 280 }}>
+    <div className="gauge" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%' }} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(v * 100)} aria-label={label}>
+      <svg viewBox="0 0 200 118" width="100%" style={{ maxWidth: 280, display: 'block', margin: '0 auto' }}>
         <path d={arc} fill="none" stroke="var(--grid)" strokeWidth="16" strokeLinecap="round" />
         {has && <path d={arc} fill="none" stroke={color} strokeWidth="16" strokeLinecap="round" strokeDasharray={`${c * v} ${c}`} />}
         <text x="100" y="92" textAnchor="middle" fontSize="30" fontWeight="700" fill="var(--text)">
@@ -213,35 +213,74 @@ export function LoadScatter({ points, height = 260 }) {
   );
 }
 
-// Netzdiagramm: Achsen mit Werten von 0 bis 100 (höher ist besser); Rohwerte stehen im Tooltip.
-export function RadarProfile({ axes, height = 300 }) {
+// Achsenbeschriftung mit Zeilenumbruch vor der Klammer ("Last-Performance" / "(Stabilität)").
+function AxisTick({ x, y, payload, textAnchor }) {
+  const lines = String(payload.value).split(/ (?=\()/);
   return (
-    <div style={{ width: '100%', height }}>
-      <ResponsiveContainer>
-        <RadarChart data={axes} outerRadius="72%">
-          <PolarGrid stroke="var(--grid)" />
-          <PolarAngleAxis dataKey="label" tick={{ fill: 'var(--text-2)', fontSize: 12 }} />
-          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-          <Tooltip
-            content={({ active, payload }) =>
-              active && payload?.length ? (
-                <div className="chart-tooltip">
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{payload[0].payload.label}</div>
-                  <div className="row">
-                    <span>Wert</span>
-                    <strong>{payload[0].payload.display}</strong>
+    <text x={x} y={y} textAnchor={textAnchor} fill="var(--text-2)" fontSize={12}>
+      {lines.map((l, i) => (
+        <tspan key={l} x={x} dy={i === 0 ? 0 : 14}>
+          {l}
+        </tspan>
+      ))}
+    </text>
+  );
+}
+
+// Netzdiagramm: ein Polygon je Modell, Achsen mit Werten von 0 bis 100 (höher ist besser); Rohwerte stehen im Tooltip.
+// series: [{ name, axes: [{ label, value, display, missing }] }]
+export function RadarProfile({ series, height = 340 }) {
+  const labels = series[0]?.axes.map((a) => a.label) ?? [];
+  const data = labels.map((label, i) => {
+    const row = { label };
+    series.forEach((s, j) => {
+      row[`v${j}`] = s.axes[i].value;
+    });
+    return row;
+  });
+  const items = series.map((s, j) => ({ label: s.name, color: SERIES[j % SERIES.length] }));
+  return (
+    <>
+      <Legend items={items} />
+      <div style={{ width: '100%', height }}>
+        <ResponsiveContainer>
+          <RadarChart data={data} outerRadius="62%">
+            <PolarGrid stroke="var(--grid)" />
+            <PolarAngleAxis dataKey="label" tick={AxisTick} />
+            <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+            <Tooltip
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const i = labels.indexOf(payload[0].payload.label);
+                return (
+                  <div className="chart-tooltip">
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{payload[0].payload.label}</div>
+                    {series.map((s, j) => (
+                      <div className="row" key={s.name}>
+                        <span>
+                          <i className="swatch" style={{ background: SERIES[j % SERIES.length] }} /> {s.name}
+                        </span>
+                        <strong>{s.axes[i].missing ? 'keine Daten' : `${s.axes[i].display} · ${Math.round(s.axes[i].value)}/100`}</strong>
+                      </div>
+                    ))}
                   </div>
-                  <div className="row">
-                    <span>Bewertung</span>
-                    <strong>{payload[0].payload.missing ? 'keine Daten' : `${Math.round(payload[0].payload.value)} / 100`}</strong>
-                  </div>
-                </div>
-              ) : null
-            }
-          />
-          <Radar dataKey="value" stroke="var(--series-1)" fill="var(--series-1)" fillOpacity={0.25} strokeWidth={2} />
-        </RadarChart>
-      </ResponsiveContainer>
-    </div>
+                );
+              }}
+            />
+            {series.map((s, j) => (
+              <Radar
+                key={s.name}
+                name={s.name}
+                dataKey={`v${j}`}
+                stroke={SERIES[j % SERIES.length]}
+                fill={SERIES[j % SERIES.length]}
+                fillOpacity={series.length > 1 ? 0.08 : 0.25}
+                strokeWidth={2}
+              />
+            ))}
+          </RadarChart>
+        </ResponsiveContainer>
+      </div>
+    </>
   );
 }

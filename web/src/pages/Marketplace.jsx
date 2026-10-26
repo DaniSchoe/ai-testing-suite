@@ -17,9 +17,16 @@ export default function Marketplace() {
   const builds = useApi('/api/builds');
   const types = useApi('/api/test-types');
   const teams = useTeams();
-  const [f, setF] = useState({ search: '', type: '', scope: '', sort: 'newest', watched: false });
+  const [f, setF] = useState({ search: '', type: '', endpoint: '', model: '', scope: '', sort: 'newest', watched: false });
   const set = (patch) => setF((x) => ({ ...x, ...patch }));
   const teamName = (id) => teams.data?.find((t) => t.id === id)?.name ?? '…';
+
+  const endpointOptions = useMemo(() => {
+    const map = new Map();
+    for (const b of builds.data ?? []) if (b.endpoint_id) map.set(b.endpoint_id, b.endpoint_name ?? b.endpoint_id);
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], 'de'));
+  }, [builds.data]);
+  const modelOptions = useMemo(() => [...new Set((builds.data ?? []).flatMap((b) => b.models ?? []))].sort((a, b) => a.localeCompare(b, 'de')), [builds.data]);
 
   const list = useMemo(
     () =>
@@ -28,6 +35,8 @@ export default function Marketplace() {
           (b) =>
             b.name.toLowerCase().includes(f.search.toLowerCase()) &&
             (!f.type || b.types.includes(f.type)) &&
+            (!f.endpoint || b.endpoint_id === f.endpoint) &&
+            (!f.model || (b.models ?? []).includes(f.model)) &&
             (!f.scope || (f.scope === 'private' ? b.visibility === 'private' : f.scope === 'public' ? b.visibility !== 'private' : b.visibility === f.scope)) &&
             (!f.watched || b.watched),
         )
@@ -56,6 +65,22 @@ export default function Marketplace() {
             {(types.data ?? []).map((t) => (
               <option key={t.type} value={t.type}>
                 {TYPE_LABELS[t.type] ?? t.label}
+              </option>
+            ))}
+          </select>
+          <select className="inline" value={f.endpoint} onChange={(e) => set({ endpoint: e.target.value })} aria-label="Endpoint">
+            <option value="">Alle Endpoints</option>
+            {endpointOptions.map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <select className="inline" value={f.model} onChange={(e) => set({ model: e.target.value })} aria-label="Modell">
+            <option value="">Alle Modelle</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
               </option>
             ))}
           </select>

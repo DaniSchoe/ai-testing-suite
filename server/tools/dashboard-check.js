@@ -28,9 +28,23 @@ assert.equal(full.selection.isDefault, true);
 assert.ok(full.quality.score !== null, 'Gauge hat einen Wert');
 assert.ok(full.loadPoints.length > 0, 'Lastpunkte vorhanden');
 assert.ok(full.loadPoints.every((p) => p.concurrency && p.latency_ms_p95 != null));
-for (const k of ['latency_ms', 'ttft_ms', 'tokens_per_s', 'quality', 'load_score']) assert.ok(full.radar[k] != null, `Radar ${k}`);
-assert.ok(full.radar.load_score > 0 && full.radar.load_score <= 1);
+const prof = full.profiles.find((m) => m.load_score != null);
+assert.ok(prof && prof.latency_ms != null && prof.ttft_ms != null && prof.quality != null, "Modellprofil mit Kennzahlen");
 step('Standardansicht, Gauge, Lastpunkte, Radar-Rohwerte');
+
+// Historie: Läufe als Bündel mit Bestanden/Fehlgeschlagen, gleiche Filter wie das Dashboard.
+const hist = (await admin('/api/history?scope=all&pageSize=50')).data;
+assert.ok(hist.total > 0 && hist.runs.length > 0, 'Historie hat Läufe');
+for (const r of hist.runs) {
+  assert.equal(r.results.length, r.total, 'Bündel enthält alle Einzelergebnisse');
+  assert.equal(r.passed + r.failed + r.errored <= r.total, true);
+}
+const failedOnly = (await admin('/api/history?scope=all&status=failed&pageSize=50')).data;
+assert.ok(failedOnly.runs.every((r) => r.failed > 0), 'Statusfilter zeigt nur Läufe mit Fehlschlägen');
+const someModel = hist.runs.flatMap((r) => r.results).find((x) => x.model)?.model_alias ?? hist.runs.flatMap((r) => r.results).find((x) => x.model)?.model;
+const byModel2 = (await admin(`/api/history?scope=all&models=${encodeURIComponent(someModel)}&pageSize=50`)).data;
+assert.ok(byModel2.runs.length > 0 && byModel2.runs.every((r) => r.results.every((x) => (x.model_alias ?? x.model) === someModel)), 'Modellfilter');
+step('Historie: Bündel und Filter')
 
 const filters = (await admin('/api/dashboard/filters')).data;
 const vllm = filters.find((f) => f.name === 'vLLM Qwen3 (Mock)');
@@ -71,6 +85,6 @@ assert.equal(a.kpis.results + b.kpis.results, both.kpis.results, 'Endpoints werd
 const model = gateway.models[0].alias;
 const byModel = await dash(admin, `&models=${encodeURIComponent(model)}`);
 assert.ok(byModel.kpis.results > 0 && byModel.kpis.results <= full.kpis.results);
-assert.ok(byModel.models.every((m) => m.model === model), 'Tabelle zeigt nur das gewählte Modell');
+assert.ok(byModel.profiles.every((m) => m.model === model), 'Tabelle zeigt nur das gewählte Modell');
 step('Mehrfachauswahl wird summiert');
 console.log('Dashboard-Prüfung erfolgreich');

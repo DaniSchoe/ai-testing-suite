@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   CalendarClock,
+  History as HistoryIcon,
   FlaskConical,
   KeyRound,
   LayoutGrid,
@@ -21,6 +22,7 @@ import {
 import { api, can, initials, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ModelDetail from './pages/ModelDetail.jsx';
+import ModelProfiles from './pages/ModelProfiles.jsx';
 import Marketplace from './pages/Marketplace.jsx';
 import MarketplaceDetail from './pages/MarketplaceDetail.jsx';
 import TestBuilder from './pages/TestBuilder.jsx';
@@ -110,6 +112,9 @@ export default function App() {
             <NavLink to="/schedules">
               <CalendarClock size={18} /> Zeitpläne
             </NavLink>
+            <NavLink to="/history">
+              <HistoryIcon size={18} /> Historie
+            </NavLink>
           </nav>
           {adminNav.length > 0 && (
             <>
@@ -168,6 +173,7 @@ export default function App() {
           <main className="content">
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/model-profiles" element={<ModelProfiles />} />
               <Route path="/models/:name" element={<ModelDetail />} />
               <Route path="/marketplace" element={<Marketplace />} />
               <Route path="/marketplace/:id" element={<MarketplaceDetail />} />

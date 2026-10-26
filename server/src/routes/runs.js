@@ -1,7 +1,7 @@
 // Testläufe starten und einsehen, Ergebnistabelle ("Meine Tests") und Dashboard-Auswertungen.
 import { hasPermission, requirePermission } from '../auth.js';
 import { many, one, query } from '../db.js';
-import { dashboardAccess, dashboardFilters } from '../dashboardFilter.js';
+import { dashboardAccess, dashboardFilters, resultFilter } from '../dashboardFilter.js';
 import { createRun } from '../runs.js';
 import { canSeeRunOf, resolveScope, scopeParams, scopeSql } from '../scope.js';
 
@@ -100,6 +100,65 @@ export default async function runRoutes(app) {
     return { total, page, pageSize, rows, scope: s.scope, teamId: s.teamId };
   });
 
+  // Historie: Testläufe als Bündel, darin die einzelnen Testergebnisse. Filter wie im Dashboard
+  // (Team/Nutzer, Endpoints und Modelle als Vereinigung, ohne Auswahl nur Prod), dazu Status, Testart, Suche und Zeitraum.
+  app.get('/api/history', viewer, async (request) => {
+    const q = request.query;
+    const s = resolveScope(request.user, q);
+    const page = Math.max(1, Number(q.page ?? 1));
+    const pageSize = Math.min(Math.max(Number(q.pageSize ?? 20), 1), 100);
+    const days = q.days ? Math.min(Math.max(Number(q.days), 1), 365) : null;
+    const access = await dashboardAccess(request.user, q);
+    const filter = resultFilter(access, 5);
+    const status = q.status || null;
+    const type = q.type || null;
+    const search = q.search ? `%${q.search}%` : null;
+    const params = [...scopeParams(request.user, s), days, ...filter.params, type, search];
+    const typeSql = '($10::text is null or res.type = $10)';
+    const searchSql = '($11::text is null or res.test_name ilike $11 or res.model ilike $11 or res.endpoint_name ilike $11 or mr.label ilike $11)';
+    const filtered = access.selected || type || search ? 'true' : 'false';
+    // Innerer Lauf heißt mr, damit er den äußeren Lauf r nicht überdeckt.
+    const matching = `from results res join runs mr on mr.id = res.run_id
+      where ${scopeSql(1, 'mr')} and ($4::int is null or mr.created_at > now() - make_interval(days => $4::int))
+        and ${filter.sql} and ${typeSql} and ${searchSql}`;
+    // Läufe ohne Ergebnisse (wartend/laufend) bleiben sichtbar, solange kein Filter gesetzt ist.
+    const sel = `from runs r left join users u on u.id = r.user_id
+      where ${scopeSql(1)} and ($4::int is null or r.created_at > now() - make_interval(days => $4::int))
+        and (exists (select 1 ${matching} and res.run_id = r.id and ($12::text is null or res.status = $12))
+             or (not ${filtered} and $12::text is null and not exists (select 1 from results x where x.run_id = r.id)))`;
+    const p = [...params, status];
+    const [{ total }] = await many(`select count(*)::int as total ${sel}`, p);
+    const runs = await many(
+      `select r.id, r.label, r.kind, r.trigger, r.status, r.created_at, r.started_at, r.finished_at, u.display_name as user_name
+       ${sel} order by r.created_at desc limit ${pageSize} offset ${(page - 1) * pageSize}`,
+      p,
+    );
+    const ids = runs.map((r) => r.id);
+    const rows = ids.length
+      ? await many(
+          `select res.id, res.run_id, res.test_name, res.type, res.endpoint_name, res.model, res.model_alias, res.api_key_name,
+             res.status, res.score, res.duration_ms, res.metrics, res.error, res.started_at,
+             (jsonb_array_length(coalesce(res.details->'regression'->'regressions', '[]'::jsonb)) > 0) as regression
+           ${matching} and res.run_id = any($12::uuid[]) order by res.started_at`,
+          [...params, ids],
+        )
+      : [];
+    const byRun = new Map();
+    for (const r of rows) byRun.set(r.run_id, [...(byRun.get(r.run_id) ?? []), r]);
+    return {
+      total,
+      page,
+      pageSize,
+      runs: runs.map((r) => {
+        const results = byRun.get(r.id) ?? [];
+        const count = (st) => results.filter((x) => x.status === st).length;
+        return { ...r, results, total: results.length, passed: count('passed'), failed: count('failed'), errored: count('error') };
+      }),
+      scope: s.scope,
+      teamId: s.teamId,
+    };
+  });
+
   app.get('/api/results/:id', viewer, async (request, reply) => {
     const row = await one('select res.*, r.user_id from results res join runs r on r.id = res.run_id where res.id = $1', [
       request.params.id,
@@ -116,26 +175,16 @@ export default async function runRoutes(app) {
     const s = resolveScope(request.user, request.query, 'all');
     const days = Math.min(Math.max(Number(request.query.days ?? 30), 1), 365);
     const access = await dashboardAccess(request.user, request.query);
-    const p = [
-      ...scopeParams(request.user, s),
-      days,
-      access.allowedEndpoints,
-      access.blockedEndpoints,
-      access.blockedModels,
-      access.selModels,
-      access.selEndpoints,
-    ];
+    const filter = resultFilter(access, 5);
+    const p = [...scopeParams(request.user, s), days, ...filter.params];
     // Nur sichtbare Endpoints/Modelle (ohne Auswahl: nur Prod); mit Auswahl die gewählten Modelle und Endpoints, summiert.
     const base = `from results res join runs r on r.id = res.run_id
       where res.finished_at is not null
         and res.finished_at > now() - make_interval(days => $4::int)
         and ${scopeSql(1)}
-        and res.endpoint_id = any($5::uuid[])
-        and not exists (select 1 from unnest($6::uuid[], $7::text[]) as b(e, m) where b.e = res.endpoint_id and b.m = res.model)
-        and (cardinality($8::text[]) + cardinality($9::uuid[]) = 0
-             or coalesce(res.model_alias, res.model) = any($8::text[]) or res.endpoint_id = any($9::uuid[]))`;
+        and ${filter.sql}`;
 
-    const [kpis, trend, byType, perfByModel, models, recentFailures, regressions, runsCount, byUser, thinking, quality, radar, loadRows] = await Promise.all([
+    const [kpis, trend, byType, perfByModel, profiles, recentFailures, regressions, runsCount, byUser, thinking, quality, loadRows] = await Promise.all([
       one(
         `select count(*)::int as results,
            count(*) filter (where res.status = 'passed')::int as passed,
@@ -171,15 +220,20 @@ export default async function runRoutes(app) {
          ${base} and res.type = 'performance' and res.model is not null group by 1, 2 order by 1`,
         p,
       ),
+      // Profil je Modell: Kennzahlen für Netzdiagramm, Modelltabelle und die Bestenkacheln.
       many(
-        `select coalesce(res.model_alias, res.model) as model, count(*)::int as results,
+        `select coalesce(res.model_alias, res.model) as model, count(*)::int as results, count(distinct res.run_id)::int as runs,
            count(distinct res.endpoint_id)::int as endpoints,
-           avg(res.score) filter (where res.type in ('quality', 'structured')) as quality_score,
-           avg(res.score) filter (where res.type = 'security') as security_score,
-           avg((res.metrics->>'ttft_ms_p95')::numeric) as ttft_ms_p95,
-           avg((res.metrics->>'tokens_per_s_avg')::numeric) as tokens_per_s,
-           count(*) filter (where res.status = 'passed')::float / nullif(count(*), 0) as pass_rate
-         ${base} and res.model is not null and res.type not in ('comparison', 'thinking') group by 1 order by 2 desc limit 12`,
+           count(*) filter (where res.status = 'passed')::float / nullif(count(*), 0) as pass_rate,
+           avg((res.metrics->>'latency_ms_p50')::numeric) filter (where res.type = 'performance') as latency_ms,
+           avg((res.metrics->>'ttft_ms_p95')::numeric) filter (where res.type = 'performance') as ttft_ms,
+           avg((res.metrics->>'tokens_per_s_avg')::numeric) filter (where res.type = 'performance') as tokens_per_s,
+           avg(res.score) filter (where res.type in ('quality', 'structured')) as quality,
+           avg(res.score) filter (where res.type = 'coding') as coding,
+           avg(res.score) filter (where res.type = 'ocr') as ocr,
+           avg(least(1, greatest(0, (res.details->'variants'->0->>'reasoning_tokens_avg')::numeric
+               / nullif((res.details->'variants'->0->>'completion_tokens_avg')::numeric, 0)))) filter (where res.type = 'thinking') as thinking_share
+         ${base} and res.model is not null and res.type <> 'comparison' group by 1 order by runs desc, results desc limit 12`,
         p,
       ),
       many(
@@ -226,17 +280,6 @@ export default async function runRoutes(app) {
            and res.type in ('quality', 'structured') and res.score is not null`,
         p,
       ),
-      // Rohwerte für das Netzdiagramm über die gesamte Auswahl.
-      one(
-        `select avg((res.metrics->>'latency_ms_p50')::numeric) filter (where res.type = 'performance') as latency_ms,
-           avg((res.metrics->>'ttft_ms_p95')::numeric) filter (where res.type = 'performance') as ttft_ms,
-           avg((res.metrics->>'tokens_per_s_avg')::numeric) filter (where res.type = 'performance') as tokens_per_s,
-           avg(res.score) filter (where res.type in ('quality', 'structured')) as quality,
-           avg(least(1, greatest(0, (res.details->'variants'->0->>'reasoning_tokens_avg')::numeric
-               / nullif((res.details->'variants'->0->>'completion_tokens_avg')::numeric, 0)))) filter (where res.type = 'thinking') as thinking_share
-         ${base}`,
-        p,
-      ),
       // Lasttests: Stufen mit Parallelität, Antwortzeit und Fehlerquote.
       many(
         `select res.id, coalesce(res.model_alias, res.model) as model, res.finished_at, res.details->'stages' as stages
@@ -249,7 +292,7 @@ export default async function runRoutes(app) {
     // Lastpunkte (Parallelität × Antwortzeit) und Lastwert: Anteil erfolgreicher Anfragen, gewichtet damit,
     // wie stabil die Antwortzeit von der ersten zur letzten Stufe bleibt.
     const loadPoints = [];
-    const loadScores = [];
+    const loadScores = new Map();
     for (const row of loadRows) {
       const stages = row.stages ?? [];
       for (const st of stages) {
@@ -269,10 +312,15 @@ export default async function runRoutes(app) {
         const requests = stages.reduce((n, st) => n + st.requests, 0);
         const errors = stages.reduce((n, st) => n + st.errors, 0);
         const stability = last.latency_ms_p95 > 0 ? Math.min(1, first.latency_ms_p95 / last.latency_ms_p95) : 1;
-        loadScores.push((requests ? 1 - errors / requests : 1) * stability);
+        const list = loadScores.get(row.model) ?? [];
+        list.push((requests ? 1 - errors / requests : 1) * stability);
+        loadScores.set(row.model, list);
       }
     }
-    radar.load_score = loadScores.length ? loadScores.reduce((a, b) => a + b, 0) / loadScores.length : null;
+    for (const m of profiles) {
+      const list = loadScores.get(m.model) ?? [];
+      m.load_score = list.length ? list.reduce((a, b) => a + b, 0) / list.length : null;
+    }
 
     return {
       scope: s.scope === 'all' ? 'global' : s.scope,
@@ -287,12 +335,11 @@ export default async function runRoutes(app) {
       trend,
       byType,
       perfByModel,
-      models,
+      profiles,
       recentFailures,
       byUser,
       thinking,
       quality,
-      radar,
       loadPoints,
       selection: { models: access.selModels, endpoints: access.selEndpoints, isDefault: !access.selected },
     };

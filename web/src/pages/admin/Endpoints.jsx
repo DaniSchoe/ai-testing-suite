@@ -64,7 +64,6 @@ export default function Endpoints() {
             <tr>
               <th>Name</th>
               <th>Art</th>
-              <th>URL</th>
               <th>Modelle</th>
               <th>Veröffentlicht</th>
               <th>Verbindung</th>
@@ -97,9 +96,6 @@ export default function Endpoints() {
                   </td>
                   <td>
                     <KindBadge kind={e.kind} flavor={e.llm_flavor} />
-                  </td>
-                  <td style={{ wordBreak: 'break-all', maxWidth: 240 }}>
-                    <code>{e.base_url}</code>
                   </td>
                   <td className="sub">
                     {e.kind === 'mcp' ? (
@@ -139,7 +135,7 @@ export default function Endpoints() {
             })}
             {endpoints.data?.length === 0 && (
               <tr>
-                <td colSpan={7} className="empty">
+                <td colSpan={6} className="empty">
                   Noch keine Endpoints. Lege dein LiteLLM-Gateway oder einen vLLM-Server an.
                 </td>
               </tr>

@@ -1,19 +1,10 @@
-import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowDown, ArrowUp, TrendingDown } from 'lucide-react';
+import { Fragment, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ChevronDown, ChevronRight, ListFilter, TrendingDown } from 'lucide-react';
+import FilterDialog from '../components/FilterDialog.jsx';
 import { fmt, ScopePicker, scopeLabel, scopeParams, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
 
-const COLUMNS = [
-  ['started_at', 'Gestartet'],
-  ['test_name', 'Test'],
-  ['type', 'Testart'],
-  ['model', 'Modell'],
-  ['status', 'Status'],
-  ['score', 'Score', 'num'],
-  ['duration_ms', 'Dauer', 'num'],
-];
-
-// Wichtigste Kennzahl je Testart für die Tabellenspalte.
+// Wichtigste Kennzahl je Testart für die Ergebniszeile.
 function keyMetric(r) {
   const m = r.metrics ?? {};
   switch (r.type) {
@@ -31,35 +22,38 @@ function keyMetric(r) {
       return `${m.models_healthy}/${m.models_expected} Modelle ok`;
     case 'thinking':
       return `Genauigkeit ${m.accuracy_gain >= 0 ? '+' : ''}${fmt.num((m.accuracy_gain ?? 0) * 100, 0)} Pkt. · ${fmt.num(m.token_factor)}× Tokens`;
-    case 'comparison':
-      return `Bestes Ergebnis: ${m.best ?? m.best_model ?? '–'}`;
     default:
       return m.cases !== undefined ? `${m.passed}/${m.cases} Fälle` : '';
   }
 }
 
+const csv = (v) => (v ? v.split(',').filter(Boolean) : []);
+
+// Historie: Testläufe als Bündel, aufklappbar zu den einzelnen Tests.
+// Filter (Team/Nutzer, Endpoints und Modelle, Zeitraum) lassen sich über die URL vom Dashboard übernehmen.
 export default function History() {
-  const navigate = useNavigate();
   const user = useUser();
   const [params, setParams] = useSearchParams();
-  const [tab, setTab] = useState('results');
+  const [open, setOpen] = useState(() => new Set());
+  const [filtering, setFiltering] = useState(false);
   const scope = params.get('scope') ?? 'me'; // 'me' | 'all' | 'team:<id>'
-  const teams = useApi(scope.startsWith('team:') ? '/api/teams' : null);
-  const sort = params.get('sort') ?? 'started_at';
-  const dir = params.get('dir') ?? 'desc';
+  const selection = { models: csv(params.get('models')), endpoints: csv(params.get('endpoints')) };
+  const selectedCount = selection.models.length + selection.endpoints.length;
   const page = Number(params.get('page') ?? 1);
+  const teams = useApi(scope.startsWith('team:') ? '/api/teams' : null);
+  const filters = useApi('/api/dashboard/filters');
   const query = new URLSearchParams({
     ...scopeParams(scope),
-    sort,
-    dir,
     page: String(page),
-    pageSize: '25',
-    type: params.get('type') ?? '',
+    pageSize: '20',
     status: params.get('status') ?? '',
+    type: params.get('type') ?? '',
     search: params.get('search') ?? '',
+    days: params.get('days') ?? '',
+    models: params.get('models') ?? '',
+    endpoints: params.get('endpoints') ?? '',
   });
-  const results = useApi(tab === 'results' ? `/api/results?${query}` : null, { interval: 10000 });
-  const runs = useApi(tab === 'runs' ? `/api/runs?${new URLSearchParams({ ...scopeParams(scope), limit: '100' })}` : null, { interval: 5000 });
+  const history = useApi(`/api/history?${query}`, { interval: 10000 });
 
   function update(patch) {
     const next = new URLSearchParams(params);
@@ -67,132 +61,71 @@ export default function History() {
     if (!('page' in patch)) next.delete('page');
     setParams(next, { replace: true });
   }
+  const toggle = (id) =>
+    setOpen((s) => {
+      const next = new Set(s);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
-  function sortBy(key) {
-    update({ sort: key, dir: sort === key && dir === 'desc' ? 'asc' : 'desc' });
-  }
-
-  const totalPages = results.data ? Math.max(1, Math.ceil(results.data.total / results.data.pageSize)) : 1;
+  const totalPages = history.data ? Math.max(1, Math.ceil(history.data.total / history.data.pageSize)) : 1;
+  const runs = history.data?.runs ?? [];
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>{scope === 'me' ? 'Meine Tests' : scope === 'all' ? 'Alle Tests' : scopeLabel(scope, user, teams.data ?? [])}</h1>
-          <p>Jede Testausführung mit Ergebnis, Kennzahlen und Verlauf. Klick öffnet den Lauf mit Logs.</p>
+          <h1>Historie</h1>
+          <p>
+            {scopeLabel(scope, user, teams.data ?? [])}. Jeder Testlauf mit den enthaltenen Tests; ein Klick auf einen Test öffnet die Details.
+          </p>
         </div>
         <div className="btn-row">
-          <div className="segmented">
-            <button className={tab === 'results' ? 'active' : ''} onClick={() => setTab('results')}>
-              Testergebnisse
-            </button>
-            <button className={tab === 'runs' ? 'active' : ''} onClick={() => setTab('runs')}>
-              Läufe
-            </button>
-          </div>
           <ScopePicker value={scope} onChange={(v) => update({ scope: v })} />
+          <button className={`btn${selectedCount ? ' primary' : ''}`} onClick={() => setFiltering(true)}>
+            <ListFilter size={15} /> {selectedCount ? `${selection.endpoints.length} Endpoints, ${selection.models.length} Modelle` : 'Modelle und Endpoints'}
+          </button>
         </div>
       </div>
 
-      {tab === 'results' && (
-        <div className="card">
-          <div className="toolbar">
-            <input placeholder="Suche nach Test, Modell, Endpoint" defaultValue={params.get('search') ?? ''} onKeyDown={(e) => e.key === 'Enter' && update({ search: e.target.value })} />
-            <select value={params.get('type') ?? ''} onChange={(e) => update({ type: e.target.value })} aria-label="Testart">
-              <option value="">Alle Testarten</option>
-              {Object.entries(TYPE_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select value={params.get('status') ?? ''} onChange={(e) => update({ status: e.target.value })} aria-label="Status">
-              <option value="">Alle Status</option>
-              <option value="passed">Bestanden</option>
-              <option value="failed">Fehlgeschlagen</option>
-              <option value="error">Fehler</option>
-              <option value="running">Läuft</option>
-            </select>
-            <span className="sub" style={{ marginLeft: 'auto' }}>
-              {results.data?.total ?? 0} Einträge
-            </span>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  {COLUMNS.map(([key, label, cls]) => (
-                    <th key={key} className={`sortable ${cls ?? ''}`} onClick={() => sortBy(key)} aria-sort={sort === key ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                      {label} {sort === key && (dir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
-                    </th>
-                  ))}
-                  <th>Kennzahl</th>
-                  {scope !== 'me' && <th>Nutzer</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {(results.data?.rows ?? []).map((r) => (
-                  <tr key={r.id} className="clickable" onClick={() => navigate(`/runs/${r.run_id}#${r.id}`)}>
-                    <td className="sub" style={{ whiteSpace: 'nowrap' }}>
-                      {fmt.date(r.started_at)}
-                    </td>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>{r.test_name}</div>
-                      <div className="sub">
-                        {r.endpoint_name}
-                        {r.api_key_name ? ` · Key ${r.api_key_name}` : ''}
-                        {r.trigger === 'schedule' ? ' · geplant' : ''}
-                      </div>
-                    </td>
-                    <td>{TYPE_LABELS[r.type] ?? r.type}</td>
-                    <td>{r.model ?? '–'}</td>
-                    <td>
-                      <StatusBadge status={r.status} />
-                      {r.regression && (
-                        <span className="badge warn" style={{ marginLeft: 4 }} title="Schlechter als die letzte bestandene Ausführung">
-                          <TrendingDown size={12} /> Regression
-                        </span>
-                      )}
-                    </td>
-                    <td className="num">{fmt.pct(r.score)}</td>
-                    <td className="num">{fmt.ms(r.duration_ms)}</td>
-                    <td className="sub">{r.error ? <span style={{ color: 'var(--bad)' }}>{r.error.slice(0, 80)}</span> : keyMetric(r)}</td>
-                    {scope !== 'me' && <td>{r.user_name ?? 'Zeitplan'}</td>}
-                  </tr>
-                ))}
-                {results.data?.rows?.length === 0 && (
-                  <tr>
-                    <td colSpan={9} className="empty">
-                      Keine Testausführungen gefunden
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <div className="toolbar" style={{ borderTop: '1px solid var(--border)', borderBottom: 0, justifyContent: 'flex-end' }}>
-            <button className="btn sm" disabled={page <= 1} onClick={() => update({ page: String(page - 1) })}>
-              Zurück
-            </button>
-            <span className="sub">
-              Seite {page} von {totalPages}
-            </span>
-            <button className="btn sm" disabled={page >= totalPages} onClick={() => update({ page: String(page + 1) })}>
-              Weiter
-            </button>
-          </div>
+      <div className="card">
+        <div className="toolbar">
+          <input placeholder="Suche nach Lauf, Test, Modell, Endpoint" defaultValue={params.get('search') ?? ''} onKeyDown={(e) => e.key === 'Enter' && update({ search: e.target.value })} />
+          <select value={params.get('days') ?? ''} onChange={(e) => update({ days: e.target.value })} aria-label="Zeitraum">
+            <option value="">Gesamter Zeitraum</option>
+            <option value="7">Letzte 7 Tage</option>
+            <option value="30">Letzte 30 Tage</option>
+            <option value="90">Letzte 90 Tage</option>
+          </select>
+          <select value={params.get('type') ?? ''} onChange={(e) => update({ type: e.target.value })} aria-label="Testart">
+            <option value="">Alle Testarten</option>
+            {Object.entries(TYPE_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+          <select value={params.get('status') ?? ''} onChange={(e) => update({ status: e.target.value })} aria-label="Status">
+            <option value="">Alle Status</option>
+            <option value="passed">Bestanden</option>
+            <option value="failed">Fehlgeschlagen</option>
+            <option value="error">Fehler</option>
+            <option value="running">Läuft</option>
+          </select>
+          <span className="sub" style={{ marginLeft: 'auto' }}>
+            {history.data?.total ?? 0} Läufe
+          </span>
         </div>
-      )}
-
-      {tab === 'runs' && (
-        <div className="card table-wrap">
+        <div className="table-wrap">
           <table>
             <thead>
               <tr>
+                <th style={{ width: 32 }} />
                 <th>Gestartet</th>
                 <th>Lauf</th>
                 <th>Auslöser</th>
                 <th>Status</th>
+                <th className="num">Tests</th>
                 <th className="num">Bestanden</th>
                 <th className="num">Fehlgeschlagen</th>
                 <th className="num">Dauer</th>
@@ -200,25 +133,111 @@ export default function History() {
               </tr>
             </thead>
             <tbody>
-              {(runs.data ?? []).map((r) => (
-                <tr key={r.id} className="clickable" onClick={() => navigate(`/runs/${r.id}`)}>
-                  <td className="sub">{fmt.date(r.created_at)}</td>
-                  <td style={{ fontWeight: 600 }}>{r.label}</td>
-                  <td>{{ manual: 'Manuell', schedule: 'Zeitplan', api: 'API' }[r.trigger]}</td>
-                  <td>
-                    <StatusBadge status={r.status} />
+              {runs.map((run) => {
+                const expanded = open.has(run.id);
+                return (
+                  <Fragment key={run.id}>
+                    <tr className="clickable" onClick={() => toggle(run.id)} aria-expanded={expanded}>
+                      <td>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</td>
+                      <td className="sub" style={{ whiteSpace: 'nowrap' }}>
+                        {fmt.date(run.created_at)}
+                      </td>
+                      <td style={{ fontWeight: 600 }}>
+                        <Link to={`/runs/${run.id}`} onClick={(e) => e.stopPropagation()}>
+                          {run.label}
+                        </Link>
+                      </td>
+                      <td>{{ manual: 'Manuell', schedule: 'Zeitplan', api: 'API' }[run.trigger] ?? run.trigger}</td>
+                      <td>
+                        <StatusBadge status={run.status} />
+                      </td>
+                      <td className="num">{run.total}</td>
+                      <td className="num" style={{ color: run.passed ? 'var(--ok, #1a9b5f)' : undefined }}>
+                        {run.passed}
+                      </td>
+                      <td className="num" style={{ color: run.failed + run.errored ? 'var(--bad, #dc2626)' : undefined }}>
+                        {run.failed + run.errored}
+                      </td>
+                      <td className="num">{run.finished_at && run.started_at ? fmt.ms(new Date(run.finished_at) - new Date(run.started_at)) : '–'}</td>
+                      {scope !== 'me' && <td>{run.user_name ?? 'Zeitplan'}</td>}
+                    </tr>
+                    {expanded &&
+                      run.results.map((r) => (
+                        <tr key={r.id} style={{ background: 'var(--surface-hover)' }}>
+                          <td />
+                          <td className="sub" style={{ whiteSpace: 'nowrap' }}>
+                            {fmt.date(r.started_at)}
+                          </td>
+                          <td colSpan={2}>
+                            <Link to={`/runs/${run.id}#${r.id}`} style={{ fontWeight: 600 }}>
+                              {r.test_name}
+                            </Link>
+                            <div className="sub">
+                              {TYPE_LABELS[r.type] ?? r.type} · {r.endpoint_name}
+                              {r.model ? ` · ${r.model_alias ?? r.model}` : ''}
+                              {r.api_key_name ? ` · Key ${r.api_key_name}` : ''}
+                            </div>
+                          </td>
+                          <td>
+                            <StatusBadge status={r.status} />
+                            {r.regression && (
+                              <span className="badge warn" style={{ marginLeft: 4 }} title="Schlechter als die letzte bestandene Ausführung">
+                                <TrendingDown size={12} /> Regression
+                              </span>
+                            )}
+                          </td>
+                          <td className="num">{fmt.pct(r.score)}</td>
+                          <td className="sub" colSpan={2}>
+                            {r.error ? <span style={{ color: 'var(--bad)' }}>{r.error.slice(0, 100)}</span> : keyMetric(r)}
+                          </td>
+                          <td className="num">{fmt.ms(r.duration_ms)}</td>
+                          {scope !== 'me' && <td />}
+                        </tr>
+                      ))}
+                    {expanded && run.results.length === 0 && (
+                      <tr>
+                        <td />
+                        <td colSpan={9} className="sub">
+                          Noch keine Testergebnisse
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+              {runs.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="empty">
+                    Keine Testläufe gefunden
                   </td>
-                  <td className="num">
-                    {r.passed}/{r.total}
-                  </td>
-                  <td className="num">{r.failed + r.errored}</td>
-                  <td className="num">{r.finished_at && r.started_at ? fmt.ms(new Date(r.finished_at) - new Date(r.started_at)) : '–'}</td>
-                  {scope !== 'me' && <td>{r.user_name ?? 'Zeitplan'}</td>}
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
+        <div className="toolbar" style={{ borderTop: '1px solid var(--border)', borderBottom: 0, justifyContent: 'flex-end' }}>
+          <button className="btn sm" disabled={page <= 1} onClick={() => update({ page: String(page - 1) })}>
+            Zurück
+          </button>
+          <span className="sub">
+            Seite {page} von {totalPages}
+          </span>
+          <button className="btn sm" disabled={page >= totalPages} onClick={() => update({ page: String(page + 1) })}>
+            Weiter
+          </button>
+        </div>
+      </div>
+      {filtering && (
+        <FilterDialog
+          filters={filters.data ?? []}
+          selection={selection}
+          canDev={user.is_admin}
+          onClose={() => setFiltering(false)}
+          onApply={(next) => {
+            update({ models: next.models.join(','), endpoints: next.endpoints.join(',') });
+            setFiltering(false);
+          }}
+        />
       )}
     </>
   );
