@@ -29,7 +29,7 @@ export default function Suites() {
           <h1>Testläufe bündeln</h1>
           <p>Mehrere Tests zu einer Suite zusammenfassen, z. B. für einen nächtlichen Gesamtlauf.</p>
         </div>
-        {can(user, 'tester') && (
+        {can(user, 'tests.manage') && (
           <button className="btn primary" onClick={() => setEditing({})}>
             <Plus size={15} /> Neue Suite
           </button>
@@ -62,19 +62,23 @@ export default function Suites() {
                   {s.test_ids.length > 6 && <span className="sub"> +{s.test_ids.length - 6}</span>}
                 </td>
                 <td className="num">
-                  {can(user, 'tester') && (
-                    <span className="btn-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                  <span className="btn-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                    {can(user, 'runs.start') && (
                       <button className="btn sm" onClick={() => run(s)} disabled={!s.test_ids.length}>
                         <Play size={13} /> Starten
                       </button>
-                      <button className="btn sm ghost" onClick={() => setEditing(s)} aria-label="Bearbeiten">
-                        <Pencil size={14} />
-                      </button>
-                      <button className="btn sm ghost danger" onClick={() => remove(s)} aria-label="Löschen">
-                        <Trash2 size={14} />
-                      </button>
-                    </span>
-                  )}
+                    )}
+                    {can(user, 'tests.manage') && (
+                      <>
+                        <button className="btn sm ghost" onClick={() => setEditing(s)} aria-label="Bearbeiten">
+                          <Pencil size={14} />
+                        </button>
+                        <button className="btn sm ghost danger" onClick={() => remove(s)} aria-label="Löschen">
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    )}
+                  </span>
                 </td>
               </tr>
             ))}

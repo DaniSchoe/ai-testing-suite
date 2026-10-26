@@ -1,6 +1,7 @@
 // Worker: führt Testläufe aus der Queue aus und startet geplante Läufe.
 // Läuft in Kubernetes als eigenes Deployment (skalierbar), lokal optional im Web-Prozess (RUN_WORKER=true).
 import { fileURLToPath } from 'node:url';
+import { hasPermission, loadUser } from './auth.js';
 import { config } from './config.js';
 import { one, query, pool } from './db.js';
 import { migrate } from './migrate.js';
@@ -31,6 +32,12 @@ export async function startWorker(logger = console) {
   await boss.work(QUEUES.scheduled, async ([job]) => {
     const schedule = await one('select * from schedules where id = $1 and enabled', [job.data.scheduleId]);
     if (!schedule) return;
+    // Zeitpläne laufen mit den Rechten ihres Besitzers: gesperrt oder ohne runs.start = kein Lauf.
+    const owner = schedule.owner_id ? await loadUser(schedule.owner_id) : null;
+    if (owner && !hasPermission(owner, 'runs.start')) {
+      logger.warn(`Zeitplan ${schedule.name} übersprungen: Besitzer gesperrt oder ohne Berechtigung runs.start`);
+      return;
+    }
     await createRun({
       kind: schedule.target_kind === 'test' ? 'single' : schedule.target_kind,
       trigger: 'schedule',

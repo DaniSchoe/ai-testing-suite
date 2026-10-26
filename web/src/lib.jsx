@@ -44,9 +44,55 @@ export function useApi(path, { interval } = {}) {
 
 export const UserContext = createContext(null);
 export const useUser = () => useContext(UserContext);
-const RANK = { viewer: 1, tester: 2, admin: 3 };
-export function can(user, role) {
-  return (user?.roles ?? []).some((r) => (RANK[r] ?? 0) >= RANK[role]);
+// Berechtigungen kommen vom Server (/api/me), z. B. can(user, 'runs.start').
+export function can(user, permission) {
+  return Boolean(user?.permissions?.includes(permission));
+}
+
+// Umfang für Dashboard und Ergebnisse: 'all' (alle Nutzer), 'me' oder 'team:<id>'.
+// Ohne results.view_all stehen nur "Nur ich" und die eigenen Teams zur Wahl.
+export function ScopePicker({ value, onChange }) {
+  const user = useUser();
+  const viewAll = can(user, 'results.view_all');
+  const allTeams = useApi(viewAll ? '/api/teams' : null);
+  const teams = viewAll ? (allTeams.data ?? []) : (user.teams ?? []);
+  const teamId = value.startsWith('team:') ? value.slice(5) : '';
+  return (
+    <>
+      <div className="segmented" role="tablist" aria-label="Umfang">
+        {viewAll && (
+          <button className={value === 'all' ? 'active' : ''} onClick={() => onChange('all')}>
+            Alle Nutzer
+          </button>
+        )}
+        <button className={value === 'me' ? 'active' : ''} onClick={() => onChange('me')}>
+          Nur ich
+        </button>
+      </div>
+      {teams.length > 0 && (
+        <select className="inline" value={teamId} onChange={(e) => onChange(e.target.value ? `team:${e.target.value}` : 'me')} aria-label="Team">
+          <option value="">Team wählen…</option>
+          {teams.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      )}
+    </>
+  );
+}
+
+export function scopeParams(value) {
+  return value.startsWith('team:') ? { scope: 'team', teamId: value.slice(5) } : { scope: value };
+}
+
+export function scopeLabel(value, user, teams = []) {
+  if (value === 'me') return 'Deine eigenen Testläufe';
+  if (value === 'all') return 'Auswertung über alle Nutzer';
+  const id = value.slice(5);
+  const team = [...(user.teams ?? []), ...teams].find((t) => t.id === id);
+  return `Testläufe von Team ${team?.name ?? ''}`.trim();
 }
 
 // Theme: 'light' | 'dark' | 'system', gespeichert pro Browser.

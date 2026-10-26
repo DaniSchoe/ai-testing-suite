@@ -13,9 +13,11 @@ import {
   Network,
   Boxes,
   Search,
+  ShieldCheck,
   Sun,
   Table2,
   Users,
+  UsersRound,
 } from 'lucide-react';
 import { api, can, initials, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
@@ -28,8 +30,37 @@ import Endpoints from './pages/admin/Endpoints.jsx';
 import Personas from './pages/admin/Personas.jsx';
 import UsersPage from './pages/admin/Users.jsx';
 import Models from './pages/admin/Models.jsx';
+import Roles from './pages/admin/Roles.jsx';
+import Teams from './pages/admin/Teams.jsx';
 
-const ROLE_LABEL = { admin: 'Administrator', tester: 'Tester', viewer: 'Betrachter' };
+const ADMIN_NAV = [
+  ['endpoints.manage', '/admin/endpoints', Network, 'Endpoints'],
+  ['endpoints.manage', '/admin/models', Boxes, 'Modellkatalog'],
+  ['personas.manage', '/admin/personas', KeyRound, 'Test-Personas'],
+  ['users.manage', '/admin/users', Users, 'Benutzer'],
+  ['teams.manage', '/admin/teams', UsersRound, 'Teams'],
+  ['roles.manage', '/admin/roles', ShieldCheck, 'Rollen'],
+];
+
+// Angemeldet, aber (noch) ohne Berechtigung: Admin muss eine Rolle vergeben oder das Konto entsperren.
+function NoAccess({ user }) {
+  return (
+    <div style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: 16 }}>
+      <div className="card" style={{ maxWidth: 460, padding: 28 }}>
+        <h1 style={{ marginTop: 0, fontSize: 20 }}>{user.disabled ? 'Konto gesperrt' : 'Noch kein Zugriff'}</h1>
+        <p style={{ color: 'var(--text-2)' }}>
+          Du bist als <strong>{user.email ?? user.username}</strong> angemeldet.{' '}
+          {user.disabled
+            ? 'Dein Konto wurde von einem Administrator gesperrt.'
+            : 'Ein Administrator muss dir in der AI Testing Suite zuerst eine Rolle zuweisen.'}
+        </p>
+        <a className="btn" href="/auth/logout">
+          <LogOut size={15} /> Abmelden
+        </a>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -39,7 +70,7 @@ export default function App() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   // Aktive Läufe als Zähler in der Navigation (wie "Meine Aufgaben" in der Vorlage).
-  const active = useApi(user ? '/api/runs?scope=me&limit=50' : null, { interval: 10000 });
+  const active = useApi(can(user, 'suite.view') ? '/api/runs?scope=me&limit=50' : null, { interval: 10000 });
   const activeCount = (active.data ?? []).filter((r) => r.status === 'running' || r.status === 'queued').length;
 
   useEffect(() => {
@@ -48,8 +79,10 @@ export default function App() {
   useEffect(() => setNavOpen(false), [location.pathname]);
 
   if (!user) return null;
+  if (!can(user, 'suite.view')) return <NoAccess user={user} />;
   const name = user.display_name ?? user.username;
-  const topRole = ['admin', 'tester', 'viewer'].find((r) => user.roles.includes(r));
+  const roleLabel = user.env_admin ? 'Administrator' : user.roles.map((r) => r.name).join(', ') || 'Ohne Rolle';
+  const adminNav = ADMIN_NAV.filter(([permission]) => can(user, permission));
 
   return (
     <UserContext.Provider value={user}>
@@ -77,22 +110,15 @@ export default function App() {
               {activeCount > 0 && <span className="count">{activeCount}</span>}
             </NavLink>
           </nav>
-          {can(user, 'admin') && (
+          {adminNav.length > 0 && (
             <>
               <div className="nav-section">Administrator</div>
               <nav className="nav">
-                <NavLink to="/admin/endpoints">
-                  <Network size={18} /> Endpoints
-                </NavLink>
-                <NavLink to="/admin/models">
-                  <Boxes size={18} /> Modellkatalog
-                </NavLink>
-                <NavLink to="/admin/personas">
-                  <KeyRound size={18} /> Test-Personas
-                </NavLink>
-                <NavLink to="/admin/users">
-                  <Users size={18} /> Benutzer
-                </NavLink>
+                {adminNav.map(([, to, Icon, label]) => (
+                  <NavLink key={to} to={to}>
+                    <Icon size={18} /> {label}
+                  </NavLink>
+                ))}
               </nav>
             </>
           )}
@@ -112,7 +138,7 @@ export default function App() {
               <div className="avatar">{initials(name)}</div>
               <div>
                 <div className="name">{name}</div>
-                <div className="role">{ROLE_LABEL[topRole] ?? 'Ohne Rolle'}</div>
+                <div className="role">{roleLabel}</div>
               </div>
               <a href="/auth/logout" title="Abmelden" aria-label="Abmelden">
                 <LogOut size={18} />
@@ -150,6 +176,8 @@ export default function App() {
               <Route path="/admin/models" element={<Models />} />
               <Route path="/admin/personas" element={<Personas />} />
               <Route path="/admin/users" element={<UsersPage />} />
+              <Route path="/admin/teams" element={<Teams />} />
+              <Route path="/admin/roles" element={<Roles />} />
               <Route path="*" element={<div className="empty">Seite nicht gefunden</div>} />
             </Routes>
           </main>

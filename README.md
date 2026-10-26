@@ -6,7 +6,8 @@ MCP-Freigaben, Rate-Limits und Tool-Calling, protokolliert jeden Lauf und zeigt 
 Entwicklung im Dashboard.
 
 - **Node.js** (Fastify) und **PostgreSQL**, Job-Queue und Zeitpläne ebenfalls in Postgres (pg-boss)
-- **Keycloak-Login** (OIDC) mit Rollen und **Test-Personas** für userspezifische Freigabetests
+- **Keycloak-Login** (OIDC); **Rollen, Berechtigungen und Teams** werden in der App gepflegt
+- **Test-Personas** für userspezifische Freigabetests
 - **Admin-Panel** für Endpoints (LiteLLM, mehrere vLLM-Endpunkte, MCP) und Personas
 - **Modellkatalog**: Modelle werden automatisch von LiteLLM und jedem vLLM-Endpunkt abgefragt,
   unterschiedliche Namen desselben Modells werden per Alias zusammengeführt
@@ -42,7 +43,7 @@ docker compose up --build
 ```
 
 Keycloak importiert den Realm `ai-testing` aus `deploy/keycloak/realm-ai-testing.json` mit den
-Usern `admin/admin` (suite-admin), `tester/tester`, `viewer/viewer` und dem Persona-User
+Usern `admin/admin` (über `ADMIN_EMAILS` Admin), `tester/tester`, `viewer/viewer` und dem Persona-User
 `persona-team-a`. Die App läuft auf http://localhost:8080, die Keycloak-Konsole auf http://keycloak:8081.
 
 ## Kubernetes
@@ -56,6 +57,7 @@ helm install ai-testing deploy/helm/ai-testing-suite \
   --set publicUrl=https://ai-testing.example.com \
   --set ingress.host=ai-testing.example.com \
   --set oidc.issuerUrl=https://keycloak.example.com/realms/ai-testing \
+  --set 'adminEmails={admin@example.com}' \
   --set secrets.oidcClientSecret=... \
   --set secrets.oidcPersonaClientSecret=...
 ```
@@ -77,8 +79,19 @@ Das Image wird von der CI bei jedem Merge nach `main` als `ghcr.io/danischoe/ai-
 1. Client `ai-testing-suite`: confidential, Standard Flow, PKCE S256, Redirect-URI `<publicUrl>/auth/callback`,
    Post-Logout-Redirect `<publicUrl>`.
 2. Client `ai-testing-personas`: confidential, nur Direct Access Grants (für Test-Personas).
-3. Realm-Rollen `suite-admin`, `suite-tester`, `suite-viewer` anlegen und Usern zuweisen.
-   Ohne Rolle erhalten User `DEFAULT_ROLE` (Standard `viewer`).
+3. Keine Rollen in Keycloak nötig. Keycloak liefert nur die Identität (inkl. bestätigter E-Mail).
+
+### Rollen, Berechtigungen und Teams
+
+- **Admins per E-Mail**: `ADMIN_EMAILS` (Helm: `adminEmails`) listet Keycloak-E-Mails, die immer
+  vollen Zugriff haben. Zählt nur, wenn Keycloak die E-Mail als bestätigt meldet (`email_verified`).
+- **Rollen** vergibt ein Admin unter *Administrator > Benutzer*. Neue User erhalten beim ersten Login
+  die Standardrolle (anfangs *Betrachter*). User lassen sich vorab per E-Mail anlegen.
+- **Berechtigungen je Rolle** legst du unter *Administrator > Rollen* in einer Matrix fest. Mitgeliefert
+  sind *Administrator* (immer alles), *Tester* und *Betrachter*; weitere Rollen sind frei definierbar.
+- **Teams** unter *Administrator > Teams*. Dashboard, "Meine Tests" und Läufe lassen sich nach Team
+  filtern. Teammitglieder sehen die Läufe ihres Teams auch ohne "Alle Ergebnisse sehen".
+- Niemand kann mehr Rechte vergeben, als er selbst hat; gesperrte User verlieren sofort den Zugriff.
 
 ## Konfiguration
 
@@ -90,7 +103,7 @@ Das Image wird von der CI bei jedem Merge nach `main` als `ghcr.io/danischoe/ai-
 | `AUTH_MODE` | `oidc` (Standard) oder `dev` (lokal ohne Keycloak) |
 | `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Login-Client |
 | `OIDC_PERSONA_CLIENT_ID`, `OIDC_PERSONA_CLIENT_SECRET` | Client für Test-Personas |
-| `ROLE_ADMIN`, `ROLE_TESTER`, `ROLE_VIEWER`, `DEFAULT_ROLE` | Rollen-Mapping |
+| `ADMIN_EMAILS` | Kommagetrennte Keycloak-E-Mails mit Admin-Zugriff (im Dev-Modus `dev@localhost`) |
 | `RUN_WORKER` | Worker im Web-Prozess mitlaufen lassen (lokal `true`, in Kubernetes `false`) |
 | `WORKER_CONCURRENCY` | parallele Läufe pro Worker |
 | `MIGRATE_ON_START` | Migrationen beim Start ausführen (Standard `true`) |

@@ -1,5 +1,5 @@
 // Testdefinitionen, Suiten (gebündelte Läufe) und Schedules.
-import { hasRole, requireRole } from '../auth.js';
+import { hasPermission, requirePermission } from '../auth.js';
 import { many, one, query, tx } from '../db.js';
 import { removeSchedule, syncSchedule } from '../queue.js';
 import { describeTypes, testTypes } from '../testtypes/index.js';
@@ -11,8 +11,9 @@ function badRequest(message) {
 const CRON = /^(\S+\s+){4}\S+$/;
 
 export default async function testRoutes(app) {
-  const viewer = { preHandler: requireRole('viewer') };
-  const tester = { preHandler: requireRole('tester') };
+  const viewer = { preHandler: requirePermission('suite.view') };
+  const editor = { preHandler: requirePermission('tests.manage') };
+  const scheduler = { preHandler: requirePermission('schedules.manage') };
 
   app.get('/api/test-types', viewer, async () => describeTypes());
 
@@ -55,7 +56,7 @@ export default async function testRoutes(app) {
     if (b.config && typeof b.config !== 'object') throw badRequest('Konfiguration muss ein Objekt sein');
   }
 
-  app.post('/api/tests', tester, async (request) => {
+  app.post('/api/tests', editor, async (request) => {
     const b = request.body ?? {};
     validateTest(b);
     return one(
@@ -65,7 +66,7 @@ export default async function testRoutes(app) {
     );
   });
 
-  app.put('/api/tests/:id', tester, async (request, reply) => {
+  app.put('/api/tests/:id', editor, async (request, reply) => {
     const b = request.body ?? {};
     validateTest(b);
     const row = await one(
@@ -77,7 +78,7 @@ export default async function testRoutes(app) {
     return row;
   });
 
-  app.delete('/api/tests/:id', tester, async (request) => {
+  app.delete('/api/tests/:id', editor, async (request) => {
     await query('delete from test_definitions where id = $1', [request.params.id]);
     return { ok: true };
   });
@@ -98,7 +99,7 @@ export default async function testRoutes(app) {
     }
   }
 
-  app.post('/api/suites', tester, async (request) => {
+  app.post('/api/suites', editor, async (request) => {
     const b = request.body ?? {};
     if (!b.name?.trim()) throw badRequest('Name fehlt');
     return tx(async (client) => {
@@ -111,7 +112,7 @@ export default async function testRoutes(app) {
     });
   });
 
-  app.put('/api/suites/:id', tester, async (request) => {
+  app.put('/api/suites/:id', editor, async (request) => {
     const b = request.body ?? {};
     if (!b.name?.trim()) throw badRequest('Name fehlt');
     return tx(async (client) => {
@@ -125,7 +126,7 @@ export default async function testRoutes(app) {
     });
   });
 
-  app.delete('/api/suites/:id', tester, async (request) => {
+  app.delete('/api/suites/:id', editor, async (request) => {
     await query('delete from suites where id = $1', [request.params.id]);
     return { ok: true };
   });
@@ -150,7 +151,7 @@ export default async function testRoutes(app) {
     if (!['test', 'suite', 'all'].includes(b.target_kind)) throw badRequest('Ungültiges Ziel');
   }
 
-  app.post('/api/schedules', tester, async (request) => {
+  app.post('/api/schedules', scheduler, async (request) => {
     const b = request.body ?? {};
     validateSchedule(b);
     const row = await one(
@@ -171,12 +172,12 @@ export default async function testRoutes(app) {
     return row;
   });
 
-  app.put('/api/schedules/:id', tester, async (request, reply) => {
+  app.put('/api/schedules/:id', scheduler, async (request, reply) => {
     const b = request.body ?? {};
     validateSchedule(b);
     const existing = await one('select owner_id from schedules where id = $1', [request.params.id]);
     if (!existing) return reply.code(404).send({ error: 'Schedule nicht gefunden' });
-    if (existing.owner_id !== request.user.id && !hasRole(request.user, 'admin')) {
+    if (existing.owner_id !== request.user.id && !hasPermission(request.user, 'runs.manage_all')) {
       return reply.code(403).send({ error: 'Nur Besitzer oder Admin dürfen den Schedule ändern' });
     }
     const row = await one(
@@ -197,7 +198,11 @@ export default async function testRoutes(app) {
     return row;
   });
 
-  app.delete('/api/schedules/:id', tester, async (request) => {
+  app.delete('/api/schedules/:id', scheduler, async (request, reply) => {
+    const existing = await one('select owner_id from schedules where id = $1', [request.params.id]);
+    if (existing && existing.owner_id !== request.user.id && !hasPermission(request.user, 'runs.manage_all')) {
+      return reply.code(403).send({ error: 'Nur Besitzer oder Admin dürfen den Schedule löschen' });
+    }
     await query('delete from schedules where id = $1', [request.params.id]);
     await removeSchedule(request.params.id);
     return { ok: true };

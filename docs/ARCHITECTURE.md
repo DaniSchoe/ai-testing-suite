@@ -28,10 +28,33 @@ Postgres ist die einzige Abhängigkeit: Daten, Sessions und die Job-Queue samt C
 ## Login und Rollen
 
 - Authorization Code Flow mit PKCE gegen Keycloak (`openid-client`). Session-Cookie, httpOnly.
-- Rollen aus `realm_access.roles` bzw. Client-Rollen werden abgebildet auf:
-  - `admin` (`suite-admin`): Endpoints, Personas, Benutzerübersicht
-  - `tester` (`suite-tester`): Tests, Suiten, Zeitpläne anlegen und ausführen
-  - `viewer` (`suite-viewer`): Dashboard und Ergebnisse ansehen
+  Keycloak liefert nur die Identität (`sub`, Name, E-Mail, `email_verified`).
+- Rollen, Berechtigungen und Teams liegen in Postgres (`roles`, `user_roles`, `teams`, `team_members`)
+  und werden im Admin-Bereich gepflegt. Effektive Berechtigungen = Vereinigung aller Rollen eines Users,
+  bei jedem Request neu geladen (Änderungen und Sperren wirken sofort).
+- `ADMIN_EMAILS`: Diese E-Mails sind immer Admin (nur bei bestätigter E-Mail), damit sich niemand
+  aussperren kann. Ohne `ADMIN_EMAILS` muss mindestens ein aktiver User die Rolle Administrator behalten.
+- Erster Login: bekannter `sub` → User aktualisieren; sonst vorab angelegter User mit gleicher bestätigter
+  E-Mail → übernehmen; sonst neu anlegen mit der Standardrolle.
+- Rechteausweitung ist ausgeschlossen: Rollen und Berechtigungen lassen sich nur vergeben, wenn man sie
+  selbst hat; die Rolle Administrator vergeben nur Admins.
+
+| Berechtigung | Erlaubt |
+|---|---|
+| `suite.view` | Anwendung nutzen: Dashboard, Tests, Endpoints, eigene Ergebnisse |
+| `results.view_all` | globales Dashboard und Ergebnisse aller User |
+| `tests.manage` | Tests und Suiten pflegen |
+| `runs.start` | Läufe starten, eigene abbrechen |
+| `schedules.manage` | eigene Zeitpläne pflegen |
+| `runs.manage_all` | Läufe und Zeitpläne anderer User abbrechen/ändern |
+| `endpoints.manage` | Endpoints und Modellkatalog |
+| `personas.manage` | Test-Personas |
+| `users.manage` | User anlegen, sperren, Rollen und Teams zuweisen |
+| `teams.manage` | Teams und Mitglieder |
+| `roles.manage` | Rollen und ihre Berechtigungen |
+
+Sichtbarkeit: eigene Läufe immer, Läufe von Mitgliedern gemeinsamer Teams immer, alle anderen nur mit
+`results.view_all`. Zeitpläne laufen mit den Rechten ihres Besitzers (gesperrt oder ohne `runs.start` = kein Lauf).
 - Jeder Lauf gehört dem User, der ihn gestartet hat (bzw. dem Besitzer des Zeitplans). Daraus
   entstehen die nutzerspezifischen Auswertungen und die Seite "Meine Tests".
 
@@ -104,7 +127,9 @@ letzten bestandenen Ausführung derselben Testdefinition verglichen (Standardtol
 
 | Tabelle | Inhalt |
 |---|---|
-| `users` | aus Keycloak übernommen (sub, Name, Rollen, letzter Login) |
+| `users` | aus Keycloak übernommen (sub, Name, E-Mail, letzter Login), gesperrt ja/nein; vorab angelegte User ohne sub |
+| `roles`, `user_roles` | Rollen mit Berechtigungen, Zuordnung zu Usern |
+| `teams`, `team_members` | Teams und Mitglieder |
 | `endpoints` | LiteLLM/vLLM/MCP mit URL, optional verschlüsseltem Key, Discovery-Status |
 | `endpoint_models` | abgefragte Modelle je Endpoint mit Alias und Verfügbarkeit |
 | `personas` | Test-Identitäten mit verschlüsseltem Secret |

@@ -28,13 +28,10 @@ export const config = {
     personaClientId: env.OIDC_PERSONA_CLIENT_ID ?? 'ai-testing-personas',
     personaClientSecret: env.OIDC_PERSONA_CLIENT_SECRET,
     allowInsecure: env.OIDC_ALLOW_INSECURE === 'true', // nur für lokales http-Keycloak
-    // Rollen aus Keycloak: realm_access.roles und resource_access[clientId].roles
-    roleMap: {
-      admin: env.ROLE_ADMIN ?? 'suite-admin',
-      tester: env.ROLE_TESTER ?? 'suite-tester',
-      viewer: env.ROLE_VIEWER ?? 'suite-viewer',
-    },
-    // Ohne passende Rolle bekommt ein User diese Rolle (leer = kein Zugriff).
-    defaultRole: env.DEFAULT_ROLE ?? 'viewer',
+    // Diese E-Mail-Adressen (kommagetrennt) sind immer Admin. Rollen werden sonst in der App vergeben.
+    adminEmails: (env.ADMIN_EMAILS ?? (authMode === 'dev' ? 'dev@localhost' : ''))
+      .split(/[\s,;]+/)
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
   },
 };

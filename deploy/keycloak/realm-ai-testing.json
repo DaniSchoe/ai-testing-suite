@@ -3,26 +3,6 @@
   "enabled": true,
   "displayName": "AI Testing Suite",
   "sslRequired": "external",
-  "roles": {
-    "realm": [
-      {
-        "name": "suite-admin",
-        "description": "Admin der Testing Suite (Endpoints, Personas)"
-      },
-      {
-        "name": "suite-tester",
-        "description": "Darf Tests anlegen und ausführen"
-      },
-      {
-        "name": "suite-viewer",
-        "description": "Darf Ergebnisse ansehen"
-      },
-      {
-        "name": "persona-team-a",
-        "description": "Beispiel-Gruppe für Freigabetests"
-      }
-    ]
-  },
   "clients": [
     {
       "clientId": "ai-testing-suite",
@@ -64,9 +44,6 @@
       "emailVerified": true,
       "firstName": "Ada",
       "lastName": "Admin",
-      "realmRoles": [
-        "suite-admin"
-      ],
       "credentials": [
         {
           "type": "password",
@@ -82,9 +59,6 @@
       "emailVerified": true,
       "firstName": "Tom",
       "lastName": "Tester",
-      "realmRoles": [
-        "suite-tester"
-      ],
       "credentials": [
         {
           "type": "password",
@@ -100,9 +74,6 @@
       "emailVerified": true,
       "firstName": "Vera",
       "lastName": "Viewer",
-      "realmRoles": [
-        "suite-viewer"
-      ],
       "credentials": [
         {
           "type": "password",

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowDown, ArrowUp, TrendingDown } from 'lucide-react';
-import { fmt, StatusBadge, TYPE_LABELS, useApi } from '../lib.jsx';
+import { fmt, ScopePicker, scopeLabel, scopeParams, StatusBadge, TYPE_LABELS, useApi, useUser } from '../lib.jsx';
 
 const COLUMNS = [
   ['started_at', 'Gestartet'],
@@ -40,14 +40,16 @@ function keyMetric(r) {
 
 export default function History() {
   const navigate = useNavigate();
+  const user = useUser();
   const [params, setParams] = useSearchParams();
   const [tab, setTab] = useState('results');
-  const scope = params.get('scope') ?? 'me';
+  const scope = params.get('scope') ?? 'me'; // 'me' | 'all' | 'team:<id>'
+  const teams = useApi(scope.startsWith('team:') ? '/api/teams' : null);
   const sort = params.get('sort') ?? 'started_at';
   const dir = params.get('dir') ?? 'desc';
   const page = Number(params.get('page') ?? 1);
   const query = new URLSearchParams({
-    scope,
+    ...scopeParams(scope),
     sort,
     dir,
     page: String(page),
@@ -57,7 +59,7 @@ export default function History() {
     search: params.get('search') ?? '',
   });
   const results = useApi(tab === 'results' ? `/api/results?${query}` : null, { interval: 10000 });
-  const runs = useApi(tab === 'runs' ? `/api/runs?scope=${scope}&limit=100` : null, { interval: 5000 });
+  const runs = useApi(tab === 'runs' ? `/api/runs?${new URLSearchParams({ ...scopeParams(scope), limit: '100' })}` : null, { interval: 5000 });
 
   function update(patch) {
     const next = new URLSearchParams(params);
@@ -76,7 +78,7 @@ export default function History() {
     <>
       <div className="page-head">
         <div>
-          <h1>{scope === 'me' ? 'Meine Tests' : 'Alle Tests'}</h1>
+          <h1>{scope === 'me' ? 'Meine Tests' : scope === 'all' ? 'Alle Tests' : scopeLabel(scope, user, teams.data ?? [])}</h1>
           <p>Jede Testausführung mit Ergebnis, Kennzahlen und Verlauf. Klick öffnet den Lauf mit Logs.</p>
         </div>
         <div className="btn-row">
@@ -88,14 +90,7 @@ export default function History() {
               Läufe
             </button>
           </div>
-          <div className="segmented">
-            <button className={scope === 'me' ? 'active' : ''} onClick={() => update({ scope: 'me' })}>
-              Nur ich
-            </button>
-            <button className={scope === 'all' ? 'active' : ''} onClick={() => update({ scope: 'all' })}>
-              Alle Nutzer
-            </button>
-          </div>
+          <ScopePicker value={scope} onChange={(v) => update({ scope: v })} />
         </div>
       </div>
 
@@ -132,7 +127,7 @@ export default function History() {
                     </th>
                   ))}
                   <th>Kennzahl</th>
-                  {scope === 'all' && <th>Nutzer</th>}
+                  {scope !== 'me' && <th>Nutzer</th>}
                 </tr>
               </thead>
               <tbody>
@@ -162,7 +157,7 @@ export default function History() {
                     <td className="num">{fmt.pct(r.score)}</td>
                     <td className="num">{fmt.ms(r.duration_ms)}</td>
                     <td className="sub">{r.error ? <span style={{ color: 'var(--bad)' }}>{r.error.slice(0, 80)}</span> : keyMetric(r)}</td>
-                    {scope === 'all' && <td>{r.user_name ?? 'Zeitplan'}</td>}
+                    {scope !== 'me' && <td>{r.user_name ?? 'Zeitplan'}</td>}
                   </tr>
                 ))}
                 {results.data?.rows?.length === 0 && (
@@ -201,7 +196,7 @@ export default function History() {
                 <th className="num">Bestanden</th>
                 <th className="num">Fehlgeschlagen</th>
                 <th className="num">Dauer</th>
-                {scope === 'all' && <th>Nutzer</th>}
+                {scope !== 'me' && <th>Nutzer</th>}
               </tr>
             </thead>
             <tbody>
@@ -218,7 +213,7 @@ export default function History() {
                   </td>
                   <td className="num">{r.failed + r.errored}</td>
                   <td className="num">{r.finished_at && r.started_at ? fmt.ms(new Date(r.finished_at) - new Date(r.started_at)) : '–'}</td>
-                  {scope === 'all' && <td>{r.user_name ?? 'Zeitplan'}</td>}
+                  {scope !== 'me' && <td>{r.user_name ?? 'Zeitplan'}</td>}
                 </tr>
               ))}
             </tbody>

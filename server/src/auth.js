@@ -1,11 +1,11 @@
-// Login über Keycloak (OIDC Authorization Code + PKCE) und Rollenprüfung.
+// Login über Keycloak (OIDC Authorization Code + PKCE) und Berechtigungsprüfung.
+// Keycloak liefert nur die Identität; Rollen, Berechtigungen und Teams pflegt die Anwendung.
 import * as oidc from 'openid-client';
 import fastifyCookie from '@fastify/cookie';
 import fastifySession from '@fastify/session';
 import { config } from './config.js';
 import { one, query } from './db.js';
-
-const ROLE_RANK = { viewer: 1, tester: 2, admin: 3 };
+import { effectivePermissions, hasPermission, isEnvAdmin } from './permissions.js';
 
 // Session-Store in Postgres, damit mehrere Web-Pods sich Sessions teilen.
 class PgSessionStore {
@@ -43,48 +43,69 @@ async function getOidcConfig() {
   return oidcConfig;
 }
 
-function decodeJwtPayload(token) {
-  try {
-    return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
-  } catch {
-    return {};
-  }
-}
-
-// Keycloak-Rollen (Realm- und Client-Rollen) auf Suite-Rollen abbilden.
-export function mapRoles(claims) {
-  const kcRoles = new Set([
-    ...(claims.realm_access?.roles ?? []),
-    ...(claims.resource_access?.[config.auth.clientId]?.roles ?? []),
-    ...(Array.isArray(claims.roles) ? claims.roles : []),
-  ]);
-  const roles = Object.entries(config.auth.roleMap)
-    .filter(([, kcRole]) => kcRoles.has(kcRole))
-    .map(([role]) => role);
-  if (roles.length === 0 && config.auth.defaultRole) roles.push(config.auth.defaultRole);
-  return roles;
-}
-
-async function upsertUser({ sub, username, email, displayName, roles }) {
-  return one(
-    `insert into users (sub, username, email, display_name, roles, last_login_at)
-     values ($1, $2, $3, $4, $5, now())
-     on conflict (sub) do update set username = excluded.username, email = excluded.email,
-       display_name = excluded.display_name, roles = excluded.roles, last_login_at = now()
-     returning *`,
-    [sub, username, email, displayName, roles],
+// Login übernehmen: bekannter User (sub), vorab angelegter User (bestätigte E-Mail) oder neuer User.
+export async function upsertUser({ sub, username, email, emailVerified, displayName }) {
+  const known = await one(
+    `update users set username = $2, email = $3, email_verified = $4, display_name = $5, last_login_at = now()
+     where sub = $1 returning id`,
+    [sub, username, email ?? null, Boolean(emailVerified), displayName ?? null],
   );
+  if (known) return known;
+  if (email && emailVerified) {
+    const pending = await one(
+      `update users set sub = $1, username = $2, email = $3, email_verified = true, display_name = coalesce(display_name, $4),
+         last_login_at = now()
+       where sub is null and lower(email) = lower($3) returning id`,
+      [sub, username, email, displayName ?? null],
+    );
+    if (pending) return pending;
+  }
+  const created = await one(
+    `insert into users (sub, username, email, email_verified, display_name, last_login_at)
+     values ($1, $2, $3, $4, $5, now()) returning id`,
+    [sub, username, email ?? null, Boolean(emailVerified), displayName ?? null],
+  );
+  await query('insert into user_roles (user_id, role_id) select $1, id from roles where is_default on conflict do nothing', [created.id]);
+  return created;
 }
 
-export function hasRole(user, role) {
-  return (user?.roles ?? []).some((r) => (ROLE_RANK[r] ?? 0) >= ROLE_RANK[role]);
+// User samt Rollen, Teams und effektiven Berechtigungen laden.
+export async function loadUser(id) {
+  const row = await one(
+    `select u.*,
+       coalesce((select json_agg(json_build_object('id', r.id, 'key', r.key, 'name', r.name) order by r.name)
+                 from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = u.id), '[]') as roles,
+       coalesce((select array_agg(distinct p) from user_roles ur join roles r on r.id = ur.role_id
+                 cross join unnest(r.permissions) as p where ur.user_id = u.id), '{}') as role_permissions,
+       exists (select 1 from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = u.id and r.key = 'admin') as has_admin_role,
+       coalesce((select json_agg(json_build_object('id', t.id, 'name', t.name) order by t.name)
+                 from team_members tm join teams t on t.id = tm.team_id where tm.user_id = u.id), '[]') as teams
+     from users u where u.id = $1`,
+    [id],
+  );
+  if (!row) return null;
+  const envAdmin = isEnvAdmin(row, config.auth.adminEmails);
+  const { role_permissions, has_admin_role, ...user } = row;
+  return {
+    ...user,
+    env_admin: envAdmin,
+    is_admin: envAdmin || has_admin_role,
+    // Admins per Umgebungsvariable lassen sich nicht aussperren.
+    disabled: user.disabled && !envAdmin,
+    permissions: user.disabled && !envAdmin ? [] : effectivePermissions({ rolePermissions: role_permissions, hasAdminRole: has_admin_role, envAdmin }),
+  };
 }
 
-// preHandler-Factory: requireRole('tester') etc.
-export function requireRole(role) {
+export { hasPermission };
+
+// preHandler-Factory: requirePermission('tests.manage') etc.
+export function requirePermission(permission) {
   return async (request, reply) => {
     if (!request.user) return reply.code(401).send({ error: 'Nicht angemeldet' });
-    if (!hasRole(request.user, role)) return reply.code(403).send({ error: `Rolle "${role}" erforderlich` });
+    if (request.user.disabled) return reply.code(403).send({ error: 'Konto gesperrt' });
+    if (!hasPermission(request.user, permission)) {
+      return reply.code(403).send({ error: `Berechtigung "${permission}" erforderlich` });
+    }
   };
 }
 
@@ -106,17 +127,19 @@ export async function authPlugin(app) {
   app.decorateRequest('user', null);
   app.addHook('preHandler', async (request) => {
     const userId = request.session.get('userId');
-    if (userId) request.user = await one('select * from users where id = $1', [userId]);
+    if (userId) request.user = await loadUser(userId);
   });
 
   app.get('/auth/login', async (request, reply) => {
     if (config.auth.mode === 'dev') {
+      // Lokal ohne Keycloak: dev-admin (in ADMIN_EMAILS) oder ?as=<name> für weitere Test-User.
+      const name = /^[a-z0-9-]{1,32}$/.test(request.query.as ?? '') ? request.query.as : 'dev-admin';
       const user = await upsertUser({
-        sub: 'dev-admin',
-        username: 'dev-admin',
-        email: 'dev@localhost',
-        displayName: 'Dev Admin',
-        roles: ['admin'],
+        sub: name === 'dev-admin' ? name : `dev-${name}`,
+        username: name,
+        email: name === 'dev-admin' ? 'dev@localhost' : `${name}@localhost`,
+        emailVerified: true,
+        displayName: name === 'dev-admin' ? 'Dev Admin' : name,
       });
       request.session.set('userId', user.id);
       return reply.redirect('/');
@@ -143,13 +166,13 @@ export async function authPlugin(app) {
       pkceCodeVerifier: pending.verifier,
       expectedState: pending.state,
     });
-    const claims = { ...tokens.claims(), ...decodeJwtPayload(tokens.access_token) };
+    const claims = tokens.claims();
     const user = await upsertUser({
       sub: claims.sub,
       username: claims.preferred_username ?? claims.sub,
       email: claims.email,
+      emailVerified: claims.email_verified === true,
       displayName: claims.name ?? claims.preferred_username,
-      roles: mapRoles(claims),
     });
     request.session.set('oidc', undefined);
     request.session.set('userId', user.id);
