@@ -2,25 +2,21 @@
 
 Cloud-native Testing Suite für KI-Plattformen auf Kubernetes: LiteLLM-Gateway, vLLM-Server und
 MCP-Server. Prüft Performance, Last, Qualität, Coding, OCR, Security/DLP, Berechtigungen,
-MCP-Freigaben und Tool-Calling, protokolliert jeden Lauf und zeigt die historische
-Entwicklung im Dashboard.
+MCP-Freigaben und Tool-Calling und macht die Ergebnisse belastbar: feste Versionen, Schwellwerte,
+Baseline-Vergleich, Nachweise mit Hash, Findings, Prüfberichte und ein Dashboard in drei Ebenen.
 
 - **Node.js** (Fastify) und **PostgreSQL**, Job-Queue und Zeitpläne ebenfalls in Postgres (pg-boss)
-- **Keycloak-Login** (OIDC); **Rollen, Berechtigungen und Teams** werden in der App gepflegt
-- **API-Key-Sammlung**: Keys privat, pro Team, global oder einzelnen Usern zugeordnet; Endpoints und Tests wählen nur einen Key aus der Liste
-- **Admin-Panel** für Endpoints (AI Proxy, LLM-Endpoint OpenAI-compatible/Claude, MCP) mit Maintainer, Dev/Prod und Veröffentlichung
-- **Modellkatalog**: Modelle werden automatisch von LiteLLM und jedem vLLM-Endpunkt abgefragt,
-  unterschiedliche Namen desselben Modells werden per Alias zusammengeführt
-- **Thinking vs. Non-Thinking**: Genauigkeit, Token-Verbrauch, Latenz und Schlüssigkeit im Vergleich
-- **Test-Builder**: ein Test kombiniert beliebige Testarten mit Endpoint, mehreren Modellen und API-Key und läuft sofort, einmalig geplant oder regelmäßig; Veröffentlichung für dich, Teams oder alle
-- **Marketplace**: Tests entdecken (Filter nach Testart, privat/öffentlich, Sortierung, Namenssuche), Detailseite, Merkliste; Herausgeber können verlangen, dass andere mit ihrem eigenen API-Key ausführen
-- **Zeitpläne** als Kalender mit geplanten und bisherigen Läufen
-- Dashboard **global, pro Team oder nutzerspezifisch** mit Filter für Modelle und Endpoints (Standard nur Prod, Dev gezielt für Administratoren, Mehrfachauswahl wird summiert), Gauge für Genauigkeit/Qualität, Lastdiagramm (Antwortzeit × parallele Anfragen) und Netzdiagramm je Modell, Detailtabelle zum Modellprofil und Kacheln für das jeweils beste Modell; Modelldetailseite als Beta-Platzhalter
-- **Historie**: Testläufe als aufklappbare Bündel mit bestanden/fehlgeschlagen, Filter nach Team, Endpoint und Modell (vom Dashboard übernommen)
-- **KI-Analyse** nach jedem Lauf (Modell im Modellkatalog wählbar), Testarten Qualität (fünf Stufen), Coding und OCR (Rechnung und Prüfbericht als Bild)
-- **Plattform**: interaktiver Cluster-Builder (GPUs, NVLink, Inferenzserver, AI-Gateway) mit geschätztem VRAM, Bandbreite, passenden Modellen, Nutzerkapazität und Verhalten unter Last; Live-Metriken (DCGM, vLLM, LiteLLM) und Schätzung gegen Lasttest-Messung
-- **Hell-, Dunkel- und System-Modus**
-- **Helm-Chart** für Kubernetes
+- **Keycloak-Login** (OIDC); **Mandanten**, Rollen, Berechtigungen und Teams werden in der App gepflegt
+- **Ziele**: Plattformen (Dev/Prod) mit Gateway, Modell-Servern und MCP-Servern, Topologie, Status, Kill-Switch, Souveränitätszielen und Sizing
+- **Datensätze**: versionierte Fälle, Dokumente und Bilder mit Hash, Sprache und Sensitivität (Angriffs-Payloads nur mit eigener Berechtigung)
+- **Testkatalog**: versionierte Vorlagen und Prüfpakete (Entwurf → Prüfung → Veröffentlicht → Veraltet), Vier-Augen-Freigabe, zweite Stufe für Security-Vorlagen, Import/Export als YAML/JSON, Zuordnung zu AIC4, OWASP LLM Top 10 und SOV
+- **Prüfungen** verbinden Ziel, Vorlagen in fester Version, Modelle mit Pfad (direkt/Gateway), Schwellwerte, Wiederholungen, Baseline, A/B-Vergleich, Gate und Zeitplan
+- **Läufe** mit Ergebnisklassen (bestanden, Qualitätsabweichung, Sicherheitsbefund, technischer Fehler, nicht anwendbar), Snapshot der Plattform, Nachweisen mit Kettenhash und KI-Analyse
+- **Freigaben** für Prod-Läufe und Lasttests nach dem Vier-Augen-Prinzip mit Zeitfenster, Laufzahl und Lastgrenzen; Kill-Switch sperrt eine Plattform sofort
+- **Findings** mit Schwere, Status, Verantwortlichem und Nachtest; **Berichte** mit Freigabe und Export
+- **Dashboard** Portfolio → Plattform → Modell mit Scorecard (Konfidenzintervalle), Eignungsprofilen, OWASP-Heatmap, Trend mit Änderungsmarkern und Souveränität (SEAL)
+- **CLI und Gate** für CI/CD mit Service-Token; Exit-Code 0 bestanden, 1 nicht bestanden
+- **Hell-, Dunkel- und System-Modus**, **Helm-Chart** für Kubernetes
 
 Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
@@ -34,8 +30,9 @@ npm run build --prefix web
 
 cd server
 node tools/mock-llm.js &            # Mock-Gateway auf :4000 (OpenAI-API + MCP)
-AUTH_MODE=dev node tools/seed.js    # Demo-Endpoints (LiteLLM, vLLM, MCP), API-Keys, 14 Beispieltests
+AUTH_MODE=dev node tools/seed.js    # Dev- und Prod-Plattform (LiteLLM, vLLM, MCP), API-Keys, acht Beispielprüfungen
 AUTH_MODE=dev npm start             # http://localhost:8080, Login als Dev-Admin
+node tools/e2e-check.js             # End-to-End-Prüfung gegen den laufenden Server und den Mock
 ```
 
 Frontend-Entwicklung mit Hot Reload: `npm run dev --prefix web` (Port 5173, API wird an 8080 weitergeleitet).
@@ -90,16 +87,17 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
    Post-Logout-Redirect `<publicUrl>`.
 2. Keine Rollen in Keycloak nötig. Keycloak liefert nur die Identität (inkl. bestätigter E-Mail).
 
-### Rollen, Berechtigungen und Teams
+### Mandanten, Rollen und Teams
 
+- **Mandanten** trennen Plattformen, Datensätze, Vorlagen (eigene), Prüfungen, Zugangsdaten, Läufe, Findings und Berichte. Offizielle Vorlagen und Datensätze gelten für alle. Der Mandant wird oben gewählt (Header `X-Tenant-Id`); bestehende Daten liegen im Mandanten „Standard“.
 - **Admins per E-Mail**: `ADMIN_EMAILS` (Helm: `adminEmails`) listet Keycloak-E-Mails, die immer
   vollen Zugriff haben. Zählt nur, wenn Keycloak die E-Mail als bestätigt meldet (`email_verified`).
-- **Rollen** vergibt ein Admin unter *Administrator > Benutzer*. Neue User erhalten beim ersten Login
-  die Standardrolle (anfangs *Betrachter*). User lassen sich vorab per E-Mail anlegen.
-- **Berechtigungen je Rolle** legst du unter *Administrator > Rollen* in einer Matrix fest. Mitgeliefert
-  sind *Administrator* (immer alles), *Tester* und *Betrachter*; weitere Rollen sind frei definierbar.
-- **Teams** unter *Administrator > Teams*. Dashboard, "Meine Tests" und Läufe lassen sich nach Team
-  filtern. Teammitglieder sehen die Läufe ihres Teams auch ohne "Alle Ergebnisse sehen".
+- **Rollen** sind global definiert und werden je Mandant vergeben (*Verwaltung › Mitglieder & Teams*). Mitgeliefert:
+  *Administrator*, *Engagement Lead* (Prod-Freigaben, Berichte, Findings, Mitglieder), *Test Engineer*,
+  *Red Teamer* (sieht Angriffs-Payloads), *Reviewer* (gibt Vorlagen, Pakete und Berichte frei), *Kunden-Viewer*
+  (nur Plattform- und Berichtsebene) und *Service Account* (CI/CD). Weitere Rollen sind frei definierbar.
+- **Vier-Augen-Prinzip** gilt für Katalogfreigaben, Prod-Läufe und Berichte: Wer einreicht oder beantragt, entscheidet nicht – auch nicht in einem Ein-Personen-Setup.
+- **Service-Tokens** (`sat_…`, *Verwaltung › Zugangsdaten*) gelten für einen Mandanten und dürfen Prüfungen starten und Ergebnisse lesen.
 - Niemand kann mehr Rechte vergeben, als er selbst hat; gesperrte User verlieren sofort den Zugriff.
 
 ## Konfiguration
@@ -118,44 +116,42 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
 | `WORKER_CONCURRENCY` | parallele Läufe pro Worker |
 | `MIGRATE_ON_START` | Migrationen beim Start ausführen (Standard `true`) |
 | `MODEL_SYNC_CRON` | wie oft der Worker die Modelle aller Endpoints abfragt (Standard `*/15 * * * *`) |
+| `RETENTION_CRON` | wann Nachweise nach Ablauf der Aufbewahrung bereinigt werden (Standard `17 3 * * *`; Fristen unter *Administration › Systemeinstellungen*) |
 
-## Eigene Tests
+## Prüfungen und Vorlagen
 
-Tests entstehen im Test-Builder: Endpoint und Modelle wählen, Testarten ankreuzen (zu jeder Art gibt es eine
-Beschreibungsseite unter `/test-types/<art>`), Ausführung festlegen. Pro Testart und Modell entsteht ein
-Einzeltest. Die Konfiguration jeder Testart ist JSON, wird mit sinnvollen Standardwerten vorbefüllt und ist
-über den Experten-Modus editierbar. Beispiel für einen Berechtigungstest:
+Der Weg zu einem belastbaren Ergebnis, am Beispiel OCR:
+
+1. **Datensatz** hochladen (*Katalog › Datensätze*): Dokumente als Bilder und eine CSV/JSONL mit den erwarteten Feldern samt Typ (Zahl mit Toleranz, Datum, IBAN, Wahrheitswert, Stichwörter, exakt).
+2. **Vorlage** anlegen (*Katalog › Vorlagen & Pakete*): Testart OCR, Datensatz in fester Version, Voraussetzung „Vision“, Gewichte je Feld. Ein Reviewer gibt sie frei.
+3. **Prüfung** anlegen (*Prüfen › Prüfungen*): Plattform, Vorlage, Modelle, Schwellwerte (z. B. `score >= 0.9`), Wiederholungen, Zeitplan.
+4. **Lauf** starten. Modelle ohne Vision gelten als „nicht anwendbar“, nicht als Fehler. Das Ergebnis geht gegen die Schwellwerte und die Baseline; der Bericht entsteht automatisch.
+
+Ein **Testlauf** direkt aus dem Katalog (auch für Entwürfe) zählt nicht in Läufen oder Dashboard.
+
+Die Konfiguration einer Vorlage (`config`, `scoring`, `params`) ist JSON mit sinnvollen Standardwerten; ohne Datensatz nutzt die Testart ihre eingebauten Fälle. Beispiel für einen Berechtigungstest:
 
 ```json
 {
   "cases": [
     { "apiKey": "team-a", "model": "gpt-oss-120b", "expect": "allow" },
-    { "apiKey": "team-a", "model": "llama-3.3-70b", "expect": "deny" },
     { "apiKey": "team-a", "method": "GET", "path": "/key/list", "expect": "deny" },
     { "apiKey": null, "model": "gpt-oss-120b", "expect": "deny", "name": "Ohne Credentials" }
   ]
 }
 ```
 
-`apiKey` nennt einen Key aus der API-Key-Sammlung (Einstellungen > API-Keys) per Namen.
+`apiKey` nennt einen Key aus den Zugangsdaten per Namen. Schwellwerte sind Regeln wie `{ "metric": "latency_ms_p95", "op": "<", "value": 8000 }`; für Zugriffstests gilt immer: ein falsch erlaubter Zugriff ist ein Befund.
 
-Thinking-Test für ein Qwen3-Modell auf vLLM; für gpt-oss oder über LiteLLM stattdessen
-`reasoning_effort` in den Varianten setzen:
+Der OCR-Test braucht ein Modell mit Bildverarbeitung; die mitgelieferten Dokumente liegen in `server/fixtures/ocr` und lassen sich mit `python3 tools/generate-ocr-docs.py` neu erzeugen.
 
-```json
-{
-  "model": "qwen3-32b",
-  "judgeModel": "qwen3-32b",
-  "variants": [
-    { "name": "Thinking", "params": { "chat_template_kwargs": { "enable_thinking": true } } },
-    { "name": "Non-Thinking", "params": { "chat_template_kwargs": { "enable_thinking": false } } }
-  ]
-}
+## CI/CD
+
+```bash
+export SAT_URL=https://ai-testing.example.com SAT_TOKEN=sat_… SAT_TENANT=<mandant-id>
+node server/tools/cli.js run "Prod-Abnahme" --wait --junit ergebnis.xml   # Exit 0 bestanden, 1 Gate nicht bestanden
+node server/tools/cli.js gate <lauf-id>                                     # Gate eines vorhandenen Laufs
+node server/tools/cli.js audits                                             # sichtbare Prüfungen
 ```
 
-Qualität, Coding und OCR bringen eigene Standardaufgaben mit (`cases`, `tasks`, `documents`); eine leere Konfiguration
-nutzt immer den aktuellen Standard des Servers. Der OCR-Test braucht ein Modell mit Bildverarbeitung, die
-Dokumente liegen in `server/fixtures/ocr` und lassen sich mit `python3 tools/generate-ocr-docs.py` neu erzeugen.
-Der Lasttest zieht pro Anfrage einen Prompt aus `prompts` (Schwierigkeit `leicht`, `mittel`, `schwer`, Mischung über `mix`).
-
-Allgemeine Optionen für jeden Test: `timeoutS`, `regressionTolerance` (Standard 0.2), `failOnRegression`.
+Exit-Code 2 bedeutet Fehler (Verbindung, Token), 3 fehlende Freigabe oder gesperrte Plattform. Was die Pipeline scheitern lässt, legt die Prüfung als Gate fest (Sicherheitsbefund, technischer Fehler, Qualitätsabweichung, Regression).

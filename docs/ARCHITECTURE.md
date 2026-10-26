@@ -41,29 +41,42 @@ Postgres ist die einzige Abhängigkeit: Daten, Sessions und die Job-Queue samt C
 
 | Berechtigung | Erlaubt |
 |---|---|
-| `suite.view` | Anwendung nutzen: Dashboard, Tests, Endpoints, eigene Ergebnisse |
-| `results.view_all` | globales Dashboard und Ergebnisse aller User |
-| `tests.manage` | Tests und Suiten pflegen |
-| `runs.start` | Läufe starten, eigene abbrechen |
+| `suite.view` | Anwendung nutzen: Dashboard, Läufe, Findings, freigegebene Berichte |
+| `results.view_all` | Läufe und Ergebnisse aller Personen des Mandanten |
+| `tests.manage` | Datensätze, Vorlagen und Prüfungen pflegen |
+| `runs.start` | Läufe und Testläufe starten, eigene abbrechen |
 | `schedules.manage` | eigene Zeitpläne pflegen |
-| `runs.manage_all` | Läufe und Zeitpläne anderer User abbrechen/ändern |
-| `endpoints.manage` | Endpoints und Modellkatalog |
-| `users.manage` | User anlegen, sperren, Rollen und Teams zuweisen |
-| `teams.manage` | Teams und Mitglieder |
-| `roles.manage` | Rollen und ihre Berechtigungen |
+| `runs.manage_all` | Läufe und Zeitpläne anderer abbrechen/ändern |
+| `endpoints.manage` | Plattformen und Komponenten, Modellkatalog, Sizing, KI-Analyse-Modell |
+| `users.manage`, `teams.manage` | Mitglieder, Rollenvergabe (nur eigene Rechte), Teams, Service-Tokens |
+| `catalog.publish` | Vorlagen und Pakete im Review prüfen und veröffentlichen |
+| `security.payloads` | Angriffs-Datensätze, Prompts und Antworten aus Security-Tests sehen; zweite Freigabestufe für Security-Vorlagen |
+| `runs.prod` | Prod-Läufe und Lasttests freigeben, Plattform sperren (Kill-Switch) |
+| `reports.approve` | Prüfberichte freigeben, KI-Entwurf übernehmen |
+| `findings.manage` | Findings bearbeiten, zuweisen, Nachtest |
+| `roles.manage`, `tenants.manage`, `settings.manage`, `audit.view` | systemweit (nur Systemadministration) |
 
-Sichtbarkeit: eigene Läufe immer, Läufe von Mitgliedern gemeinsamer Teams immer, alle anderen nur mit
-`results.view_all`. Zeitpläne laufen mit den Rechten ihres Besitzers (gesperrt oder ohne `runs.start` = kein Lauf).
-- Jeder Lauf gehört dem User, der ihn gestartet hat (bzw. dem Besitzer des Zeitplans). Daraus
-  entstehen die nutzerspezifischen Auswertungen und die Seite "Meine Tests".
+Mitgelieferte Rollen: Administrator, Engagement Lead, Test Engineer, Red Teamer, Reviewer, Kunden-Viewer, Service Account.
+Rollen sind global definiert und werden je Mandant (`user_roles.tenant_id`) vergeben; Systemrechte gelten nur in Rollen
+ohne Mandantenbezug.
+
+Sichtbarkeit: Mit `results.view_all` sieht man alle Läufe des Mandanten, sonst eigene und die gemeinsamer Teams.
+Zeitpläne laufen mit den Rechten ihres Besitzers (gesperrt oder ohne `runs.start` = kein Lauf).
+
+### Mandanten
+
+Jede Anfrage gehört zu einem Mandanten (`X-Tenant-Id`, sonst der erste des Users; `user.tenant_id`). Plattformen, Komponenten,
+Datensätze und Vorlagen (eigene), Prüfungen, Zugangsdaten, Läufe, Findings, Berichte, Freigaben und Zeitpläne tragen `tenant_id`;
+alle Abfragen filtern darauf. Offizielle Vorlagen, Pakete, Datensätze und Kategorien haben `tenant_id is null` und sind für alle
+lesbar, aber schreibgeschützt. Die Umgebung (Dev/Prod/alle) ist eine Ansicht der Oberfläche (`?environment=`), keine Berechtigung.
 
 ### API-Keys
 
-Tests laufen mit API-Keys aus einer zentralen Sammlung (`api_keys`); Endpoints und Tests verweisen nur
+Prüfungen laufen mit API-Keys aus einer zentralen Sammlung (`api_keys`); Komponenten und Prüfungen verweisen nur
 darauf. Ein Key ist `user` (nur der Ersteller), `teams` (Mitglieder der Teams) oder `global`
 (Administratoren), zusätzlich lassen sich Keys einzelnen Usern zuordnen oder auf `admin_only` stellen.
 Normale User legen nur Keys für sich und ihre Teams an. Auflösung im Executor: Key des Laufs, dann Key
-des Tests, dann Key des Endpoints. In `access`- und `mcp`-Fällen wählt `apiKey` einen Key per Namen.
+der Prüfung, dann Key des Endpoints. In `access`- und `mcp`-Fällen wählt `apiKey` einen Key per Namen.
 
 LLM-Endpoints gibt es als OpenAI-compatible oder Claude (Anthropic Messages API, Übersetzung im Client).
 vLLM-Endpunkte brauchen keine Berechtigung; dort bleibt der API-Key leer.
@@ -79,66 +92,114 @@ LiteLLM und vLLM benennen dasselbe Modell unterschiedlich (z. B. `qwen3-32b` im 
 - Jeder Endpoint wird über `/v1/models` abgefragt: beim Anlegen/Speichern, beim Verbindungstest,
   per Button und alle 15 Minuten im Worker (`MODEL_SYNC_CRON`). Ergebnis ist die Tabelle
   `endpoint_models`. Nicht mehr gelistete Modelle bleiben mit `available = false` erhalten.
-- Im Admin-Bereich "Modellkatalog" bekommt jedes Modell manuell einen **Alias**. Gleicher Alias =
+- Im "Modellkatalog" bekommt jedes Modell manuell einen **Alias** sowie Metadaten (Lizenz, Anbieter, Herkunft, Open Weights, Revision, Quantisierung, Kontextlänge, Fähigkeiten wie Vision oder Tool-Calling). Gleicher Alias =
   gleiches Modell, egal über welchen Endpoint.
-- Tests dürfen Alias oder echten Namen angeben; der Runner setzt pro Endpoint den richtigen Namen
+- Prüfungen dürfen Alias oder echten Namen angeben; der Runner setzt pro Endpoint den richtigen Namen
   ein. Ergebnisse speichern beides (`model`, `model_alias`), das Dashboard gruppiert nach Alias.
 - Für Endpoints ohne `/v1/models` können Modelle manuell eingetragen werden.
 
-## Testtypen
+## Testarten, Vorlagen und Datensätze
 
-Jeder Typ ist ein Modul in `server/src/testtypes/` mit `{ type, label, description, defaults, run(ctx) }`.
-Neue Typen werden in `testtypes/index.js` registriert und erscheinen automatisch in der UI.
+Jede Testart ist ein Modul in `server/src/testtypes/` mit `{ type, label, run(ctx) }` und in `testtypes/index.js` registriert.
+Was geprüft wird, beschreibt eine **Vorlage** (`templates`, `template_versions`): Testart, Datensatz in fester Version, Voraussetzungen
+(`requires`: vision, tools, reasoning, mcp, json), Bewertung (`scoring`), vorgeschlagene Schwellwerte und Einsatzprofile (chat, coding, ocr, agent).
 
-| Typ | Prüft | Typische Kennzahlen |
+| Testart | Prüft | Typische Kennzahlen |
 |---|---|---|
 | `smoke` | Erreichbarkeit, `/v1/models`, Mini-Request je Modell | gesunde Modelle |
 | `performance` | Streaming mit fester Parallelität | TTFT p50/p95, Latenz p95, Tokens/s, Fehlerquote |
-| `load` | Stufen mit steigender Parallelität (Ramp-up); jede Anfrage zieht einen anderen Prompt aus einem Pool (leicht/mittel/schwer, Mischung `mix`) mit Zufallspräfix gegen Prefix-Caches | req/s, Tokens/s, Fehlerquote, p95 je Stufe und Schwierigkeit, gedrosselte Anfragen (429) |
-| `quality` | fünf Fragen von leicht bis extrem schwer (Logik, Textaufgabe, Code lesen, Wahrscheinlichkeit, Kombinatorik); Schlusszeile „Antwort: …“; Score nach Stufe gewichtet. Eigene Datensätze mit Regeln: contains, regex, JSON, Länge, PII, LLM-as-a-Judge | Score, höchste gelöste Stufe |
-| `coding` | zwei JavaScript-Aufgaben (einfach, komplex); der Code läuft in einem isolierten Kindprozess (`sandbox-runner.mjs`, Node-Berechtigungsmodell ohne Dateisystem/Kindprozesse, leerer vm-Kontext, leere Umgebung) gegen vorbereitete Tests | Score (komplexe Aufgabe zählt doppelt), Tests je Aufgabe |
-| `ocr` | zwei Dokumente als Bild (`server/fixtures/ocr`, erzeugt mit `tools/generate-ocr-docs.py`): Rechnung (Positionen aggregieren) und Prüfbericht mit Handschrift und zwei Unterschriften; Vision-Modell nötig | Score = Anteil richtig gelesener Felder |
-| `thinking` | dieselben Aufgaben mit und ohne Reasoning (Varianten frei konfigurierbar) | Genauigkeit, Ø Tokens und Reasoning-Tokens, Latenz, Tokens je richtige Antwort, Schlüssigkeit per Judge, Genauigkeitsgewinn pro 1.000 Zusatz-Tokens |
-| `security` | Prompt Injection, Jailbreak, schädliche Anfragen, DLP auf Ein- und Ausgabe | Pass-Rate je Kategorie, vom Gateway geblockt |
+| `load` | Stufen mit steigender Parallelität; jede Anfrage zieht einen anderen Prompt (leicht/mittel/schwer) mit Zufallspräfix gegen Prefix-Caches | req/s, Fehlerquote, p95 je Stufe, 429 |
+| `quality` | Fragen von leicht bis extrem schwer; Schlusszeile „Antwort: …“; Regeln: contains, regex, JSON, Länge, PII, LLM-as-a-Judge | Score, höchste gelöste Stufe |
+| `coding` | JavaScript-Aufgaben, Code läuft isoliert (`sandbox-runner.mjs`, Node-Berechtigungsmodell, leerer vm-Kontext) gegen Tests | Score |
+| `ocr` | Dokumente als Bild, Ground Truth mit typisierten Feldern (Zahl mit Toleranz, Datum, IBAN, Wahrheitswert, Stichwörter, exakt) und Feldgewichten; Vision nötig | Score je Feld |
+| `thinking` | dieselben Aufgaben mit und ohne Reasoning | Genauigkeit, Tokens, Latenz, Schlüssigkeit |
+| `security` | Prompt Injection, Jailbreak, schädliche Anfragen, DLP | Pass-Rate je Kategorie, vom Gateway geblockt |
 | `access` | API-Key X darf Modell/Route Y (nicht) nutzen | falsch erlaubt, falsch verweigert |
-| `mcp` | Tool-Katalog je API-Key, Tool-Aufrufe, verbotene Tools | geleakte Tools, Checks |
+| `mcp` | Tool-Katalog je API-Key, Tool-Aufrufe, verbotene Tools | geleakte Tools |
 | `structured` | Function Calling und JSON-Ausgaben | korrekt aufgerufene Tools |
 
-**Regression** ist kein eigener Typ, sondern läuft bei jedem Ergebnis mit: Kennzahlen werden mit der
-letzten bestandenen Ausführung derselben Testdefinition verglichen (Standardtoleranz 20 %,
-`regressionTolerance`). Mit `failOnRegression: true` schlägt der Test dann fehl.
+**Datensätze** (`datasets`, `dataset_versions`, `dataset_cases`, `dataset_files`) sind eigene versionierte Objekte (SemVer, Hash über
+Fälle und Dateien) mit Art, Sprache, Sensitivität (public, internal, customer, attack) und Mindestzahl Fälle. CSV, JSONL und JSON werden gegen
+ein Schema je Art geprüft (Trockenlauf `POST /api/datasets/validate`). Unter der Mindestzahl gilt das Ergebnis als „kleine Stichprobe“.
+Angriffs-Datensätze sind ohne `security.payloads` maskiert. Die Standardinhalte (Qualität, Coding, OCR, Security …) kommen als offizielle Datensätze mit dem Release.
 
-## Ausführung
+**Katalog-Lebenszyklus**: Entwurf → Prüfung → Veröffentlicht → Veraltet. Freigabe braucht `catalog.publish` und eine andere Person als die
+einreichende; Security-Vorlagen durchlaufen eine zweite Stufe (`security.payloads`, wieder eine andere Person). Veröffentlichte Versionen sind
+unveränderlich; Änderungen sind eine neue Version. Prüfungen übernehmen neuere Versionen nur ausdrücklich. Offizielle Inhalte liegen im Code
+(`catalogSync.js`) und werden beim Start per Hash abgeglichen. Export/Import als YAML oder JSON im Schema `ai-testing-suite/v1` (optional mit
+Datensätzen); Importiertes ist ein privater Entwurf. Kategorien (AIC4, OWASP LLM Top 10, SOV) hängen an Vorlagenversionen.
 
-- **Einzeln**, **Auswahl**, **Suite** (gebündelter Lauf) oder **alle aktiven Tests**: `POST /api/runs`
-  legt einen Lauf an und stellt ihn in die Queue.
-- **Zeitpläne**: Cron-Ausdruck mit Zeitzone, Ziel ist ein Test, eine Suite oder alle Tests. Die
-  Schedules werden in pg-boss gespiegelt; genau ein Worker erzeugt pro Termin den Lauf.
-- Tests eines Laufs laufen nacheinander, Läufe parallel (pro Worker `WORKER_CONCURRENCY`).
-- **Alle Tests, auch Lasttests, laufen in den Pods der Anwendung** (Worker-Deployment bzw. lokal im
-  Web-Prozess). Die Anwendung erzeugt keine Pods oder Jobs und braucht keine Kubernetes-API-Rechte.
-  Mehr Last = mehr Worker-Replicas oder höhere Ressourcen-Limits.
-- Abbruch über die UI; der Worker prüft zwischen den Tests. Timeout pro Test über `timeoutS`.
+## Prüfungen und Ausführung
+
+Eine **Prüfung** (`audits`) hat ein Ziel (Plattform), Positionen (Vorlagenversion mit Schwellwerten), Modelle mit Pfad (direkt, Gateway, beide),
+Wiederholungen, Regressionstoleranz, Baseline, Gate und optional einen Zeitplan. `plan.js` macht daraus **Atome** (`runs.plan`): Modus „each“
+(Modell × Pfad), „list“ (Smoke je Endpoint), „first“ (Zugriff über das Gateway), MCP je Endpoint; im Vergleichsmodus zwei Varianten A/B.
+Fehlen Voraussetzungen oder Endpoint, ist das Atom nicht anwendbar (Ergebnis `skipped`, Klasse `not_applicable`).
+
+- Läufe starten über `POST /api/audits/:id/run` (UI, Service-Token oder Zeitplan); Testläufe aus dem Katalog sind Entwürfe (`runs.is_draft`).
+- Der Worker lädt die Datensatzversion, führt jedes Atom (bei Wiederholungen mehrfach, Median plus Streuung) aus und wertet die Schwellwerte aus
+  (`evaluate.js`). Zugriffstests mit falsch erlaubtem Zugriff sind immer fehlgeschlagen.
+- **Ergebnisklassen**: bestanden, Qualitätsabweichung, Sicherheitsbefund (security/access/mcp), technischer Fehler, nicht anwendbar.
+- **Baseline**: ausdrücklich gesetzter Referenzlauf (oder der erste, wenn `baseline_auto`); Verschlechterungen über der Toleranz sind Regressionen.
+- Zu Beginn wird ein **Snapshot** der Plattform gespeichert (Komponentenversionen, Modelle, Routen) samt Änderungen seit dem letzten Lauf.
+- **Alle Tests, auch Lasttests, laufen in den Pods der Anwendung**. Die Anwendung erzeugt keine Pods und braucht keine Kubernetes-API-Rechte.
+- Zeitpläne (Cron oder einmalig) werden in pg-boss gespiegelt; ein Worker erzeugt pro Termin den Lauf mit den Rechten des Besitzers. Kann er nicht
+  starten (Freigabe fehlt, Plattform gesperrt), steht `schedule.skipped` im Audit-Log.
+
+**Freigaben**: Läufe gegen Prod-Plattformen und Lasttests brauchen eine gültige Freigabe (`approvals`): beantragt von der einen, entschieden von einer
+anderen Person mit `runs.prod`; mit Zeitfenster, erlaubter Laufzahl und Lastgrenzen (wirksam ist das Minimum aus Prüfung und Freigabe). Fehlt sie,
+antwortet der Start mit 409. **Kill-Switch**: Eine gesperrte Plattform (`platforms.locked`) startet nichts (423) und bricht laufende Läufe ab.
+
+**CI/CD**: `GET /api/runs/:id/gate` liefert bestanden/nicht bestanden gemäß dem Gate der Prüfung; `server/tools/cli.js` kapselt Start, Warten und
+Exit-Code. Service-Tokens (`sat_…`) sind je Mandant, nur Hash gespeichert, widerrufbar.
+
+## Nachweise, Findings und Berichte
+
+- **Nachweise** (`evidence`): Prompt, Antwort und Bewertung je Fall mit SHA-256; die Hashes eines Laufs bilden eine Kette (`runs.evidence_hash`),
+  `GET /api/runs/:id/evidence/verify` prüft sie. Aufbewahrung nach Sensitivität (Standard 365/180/90/30 Tage, einstellbar); danach werden Prompt und
+  Antwort gelöscht, Hash und Ergebnis bleiben. Angriffsinhalte sind ohne `security.payloads` maskiert.
+- **Findings** (`findings`): entstehen aus Sicherheitsbefunden, dedupliziert über einen Fingerprint (Vorlage, Modell, Pfad, Fall); Schwere, Zuordnung zu OWASP
+  LLM Top 10, Status (offen, in Bearbeitung, behoben, akzeptiert, Fehlalarm), Verantwortlicher, Verlauf. Ein **Nachtest** führt nur die betroffene Vorlage mit Modell und Pfad erneut aus
+  und setzt das Ergebnis am Finding.
+- **Berichte** (`reports`): entstehen aus dem Lauf (Gesamturteil, Ergebnisse je Vorlage mit Konfidenz, Findings, Zuordnung zu Rahmenwerken, Snapshot, Nachweishash).
+  Die Zusammenfassung ist redigierbar (Standardtext aus den Daten); der KI-Entwurf wird nur von einem Reviewer übernommen. Ablauf Entwurf → Prüfung → Freigegeben
+  mit anderer Person; Export als Markdown/HTML. Kunden-Viewer sehen nur freigegebene Berichte.
+
+## Dashboard
+
+Drei Ebenen: Portfolio → Plattform → Modell (`dashboard.js`, `/api/dashboard/*`). Es zählen nur Läufe von Prüfungen, keine Testläufe.
+Die **Scorecard** hat fünf Dimensionen (Qualität, Sicherheit, Performance, Effizienz, Souveränität) mit dokumentierter Normalisierung
+(`/api/dashboard/normalization`, Version 1): Fallzahlen werden gepoolt und mit Wilson-Intervall ausgewiesen, Perzentile über Rohproben
+(nie Mittel von Perzentilen), „geringe Aussagekraft“ bei kleinen Stichproben. **Eignungsprofile** (Chat, Coding, OCR, Agent) gewichten die
+Dimensionen; unter 60 % Abdeckung heißt das Ergebnis „zu wenig Daten“. Die OWASP-Heatmap trennt Blockaden durch das Gateway von Verweigerungen des Modells.
+**Souveränität**: je Ziel SOV-1 bis SOV-8 eine deklarierte Stufe SEAL-0 bis 4 an der Plattform; aus der Bestehensquote (≥95 % → 4, ≥80 % → 3, ≥60 % → 2, ≥30 % → 1) leitet das System eine gemessene Stufe ab; wirksam ist das Minimum.
+Die Kundenansicht blendet Rohdaten und Fehlermeldungen aus.
 
 ## Datenmodell
 
 | Tabelle | Inhalt |
 |---|---|
-| `users` | aus Keycloak übernommen (sub, Name, E-Mail, letzter Login), gesperrt ja/nein; vorab angelegte User ohne sub |
-| `roles`, `user_roles` | Rollen mit Berechtigungen, Zuordnung zu Usern |
+| `tenants` | Mandanten |
+| `users`, `roles`, `user_roles` | Personen (aus Keycloak), Rollen mit Berechtigungen, Zuordnung je Mandant |
 | `teams`, `team_members` | Teams und Mitglieder |
-| `endpoints` | LiteLLM/vLLM/MCP mit URL, optional verschlüsseltem Key, Discovery-Status |
-| `endpoint_models` | abgefragte Modelle je Endpoint mit Alias und Verfügbarkeit |
+| `service_tokens` | Tokens für CI/CD (Hash, Präfix, Ablauf, Widerruf) |
+| `platforms`, `platform_routes` | Ziele (Umgebung, Sperre, Souveränitätsziele) und Topologie Gateway → Backend |
+| `endpoints`, `endpoint_models` | Komponenten einer Plattform (AI Proxy, LLM, MCP) und abgefragte Modelle mit Alias und Metadaten |
 | `api_keys` | API-Key-Sammlung (verschlüsselt) mit Teams/Usern |
-| `tests`, `test_teams` | Test aus dem Test-Builder: Name, Beschreibung, Tags, Maintainer, Endpoint, Modelle, API-Key, Testarten mit Konfiguration, Veröffentlichung |
-| `test_watchlist` | Merkliste je User |
-| `test_definitions` | ausführbare Einzeltests (Testart × Modell), vom Test erzeugt (`build_id`) und bei jedem Speichern abgeglichen, damit IDs und Historie stabil bleiben |
-| `suites`, `suite_tests` | Altbestand, wird von der UI nicht mehr verwendet |
-| `schedules` | Cron oder einmaliger Zeitpunkt (`run_at`), Ziel (Test), Besitzer |
-| `runs` | ein Lauf: Art, Auslöser, User, Status, Zähler |
-| `results` | ein Ergebnis pro Test und Lauf: Status, Score, Kennzahlen, Details. Name, Typ, Endpoint und Modell sind denormalisiert, damit die Historie stabil bleibt. |
-| `run_logs` | Logzeilen pro Lauf bzw. Ergebnis |
-| `app_settings` | Einstellungen der Anwendung, z. B. `analysis_model` (Endpoint und Modell für die KI-Analyse) |
+| `datasets`, `dataset_versions`, `dataset_cases`, `dataset_files` | versionierte Datensätze |
+| `templates`, `template_versions`, `categories`, `template_version_categories` | Vorlagen mit Versionen und Rahmenwerks-Kategorien |
+| `packs`, `pack_versions` | Prüfpakete |
+| `audits`, `audit_teams` | Prüfungen |
+| `schedules` | Cron oder einmaliger Zeitpunkt je Prüfung |
+| `approvals` | Anträge und Freigaben für Prod und Last |
+| `runs` | ein Lauf: Plan, Status, Ergebnisklassen, Snapshot, Vergleich, Nachweiskette, Entwurf |
+| `results` | ein Ergebnis je Atom: Status, Ergebnisklasse, Score, Kennzahlen, Statistik, Details; Vorlage, Version, Modell, Pfad denormalisiert |
+| `evidence` | Nachweise mit Hash und Aufbewahrungsfrist |
+| `findings`, `finding_events` | Befunde mit Verlauf |
+| `reports` | Prüfberichte |
+| `run_logs` | Logzeilen je Lauf bzw. Ergebnis |
+| `audit_log` | Protokoll sicherheitsrelevanter Aktionen |
+| `app_settings` | Einstellungen, z. B. `analysis_model:<mandant>` und `retention` |
 
 ## KI-Analyse
 
@@ -150,9 +211,8 @@ nie scheitern; `POST /api/runs/:id/analysis` erzeugt die Analyse neu.
 
 ## Plattform
 
-Die Seite „Plattform“ (`web/src/pages/Platform.jsx`) beschreibt den Cluster: GPU-Typ und -Anzahl, NVLink, Inferenzserver
-(Tensor-Parallelität, `max_num_seqs`) und AI-Gateway. Die Konfiguration liegt in `platform_config` (eine Zeile, nur
-Administratoren ändern sie, alle mit `suite.view` lesen).
+Die Seite „Sizing“ (`web/src/pages/SizingView.jsx`, je Plattform) beschreibt den Cluster: GPU-Typ und -Anzahl, NVLink, Inferenzserver
+(Tensor-Parallelität, `max_num_seqs`) und AI-Gateway. Die Konfiguration liegt je Plattform in `platform_config` (`/api/platforms/:id/sizing`; nur `endpoints.manage` ändert sie, alle mit `suite.view` lesen).
 
 **Rechenmodell** (`web/src/platformModel.js`, alles Schätzungen): VRAM und Bandbreite sind Summen der Datenblattwerte;
 ein Modell passt, wenn Gewichte plus KV-Cache in den nutzbaren Speicher (`gpu_memory_utilization`) passen. Die
@@ -162,23 +222,9 @@ KV-Cache und `max_num_seqs` begrenzt; Nutzer ergeben sich aus Ziel-Tempo, Antwor
 Eigene Modelldaten (JSON) werden lokal im Browser gehalten.
 
 **Messung**: Je Komponente lassen sich Prometheus-Endpunkte hinterlegen (`platformMetrics.js`, DCGM-Namen laut
-NVIDIA-Doku, vLLM, LiteLLM). Die Seite zeigt Live-Werte (`/api/platform/live`, 5 s Cache). Der Lasttest fragt sie alle
-5 s ab und speichert Spitzen und Mittel in `results.details.platform`; `/api/platform/load-results` vergleicht sie mit
+NVIDIA-Doku, vLLM, LiteLLM). Die Seite zeigt Live-Werte (`/api/platforms/:id/sizing/live`, 5 s Cache). Der Lasttest fragt sie alle
+5 s ab und speichert Spitzen und Mittel in `results.details.platform`; `/api/platforms/:id/sizing/load-results` vergleicht sie mit
 der Schätzung. Metriknamen können je Version abweichen, fehlende Werte werden ausgeblendet.
-
-## Test-Builder
-
-Ein Test (`tests`) bündelt beliebig viele Testarten für einen Endpoint. Beim Speichern erzeugt
-`syncAtoms` je Testart und Modell einen Einzeltest (`test_definitions`), abhängig vom `modelMode` der
-Testart: `each` (ein Test je Modell, z. B. Performance), `list` (Modellliste in der Konfiguration, z. B.
-Smoke), `first` (erstes Modell, z. B. Zugriff) oder `none` (MCP). Ein Lauf vom Typ `build`
-führt alle Einzeltests des Tests aus. Zeitpläne eines Tests sind Cron-Ausdrücke oder ein einmaliger
-Zeitpunkt (pg-boss `startAfter`); die Zusammenfassung im Editor nennt nur Anzahl und geschätzte Laufzeit
-(Median früherer Ausführungen der Testart, sonst Richtwerte; `POST /api/builds/preview`); `/api/calendar` liefert daraus die kommenden Termine und die bisherigen
-Läufe. Sichtbar ist ein Test für Ersteller, Maintainer und Administratoren, nach dem Veröffentlichen
-zusätzlich für die gewählten Teams oder alle. Im Marketplace führen andere User veröffentlichte Tests aus;
-ist `requires_api_key` gesetzt, wählen sie einen eigenen Key (`runs.api_key_id`), der vor dem Key des Tests
-und des Endpoints gilt.
 
 ## Kubernetes
 
@@ -203,7 +249,6 @@ genügt die Service-URL (`http://vllm.<ns>.svc.cluster.local:8000`).
 ## Ausbaustufen
 
 - Lasttests über mehrere Worker-Pods verteilen (ein Lauf, mehrere Lastgeneratoren über die Queue).
-- Weitere Testtypen: Fallback/Routing in LiteLLM, Long-Context, Kosten-/Spend-Tracking,
-  Prompt-Caching, Embeddings/Reranker.
+- Weitere Testarten: Fallback/Routing in LiteLLM, Long-Context, Kosten-/Spend-Tracking, Prompt-Caching, Embeddings/Reranker.
 - Export der Kennzahlen nach Prometheus und Benachrichtigung bei Fehlschlägen (Teams/Slack/E-Mail).
-- Testdatensätze als eigene, versionierte Objekte statt in der Testkonfiguration.
+- Signierte Berichte und Nachweise (Zeitstempel durch Dritte).
