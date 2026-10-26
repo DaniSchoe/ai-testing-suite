@@ -1,5 +1,6 @@
 // Admin-Panel: Endpoints (AI Proxy, LLM-Endpoint, MCP) und Modellkatalog.
 import { requirePermission } from '../auth.js';
+import { logAudit } from '../audit.js';
 import { many, one, query, tx } from '../db.js';
 import { analyzeRun, getAnalysisSetting, setAnalysisSetting } from '../analysis.js';
 import { ENDPOINT_SELECT, endpointHeaders, llmClientFor, syncEndpointModels } from '../models.js';
@@ -7,7 +8,8 @@ import { hasPermission } from '../permissions.js';
 import { McpClient } from '../runner/clients.js';
 import { canSeePublished } from '../visibility.js';
 
-const KINDS = ['ai_proxy', 'llm', 'mcp'];
+const KINDS = ['ai_proxy', 'llm', 'mcp', 'vector_db', 'iam', 'observability'];
+const CAPABILITIES = ['vision', 'tools', 'reasoning', 'mcp', 'json', 'embeddings'];
 const FLAVORS = ['openai', 'claude'];
 const ENVIRONMENTS = ['dev', 'prod'];
 const VISIBILITIES = ['admins', 'teams', 'global'];
@@ -19,6 +21,7 @@ function badRequest(message, statusCode = 400) {
 function validateEndpoint(b) {
   if (!b.name?.trim()) throw badRequest('Name fehlt');
   if (!KINDS.includes(b.kind)) throw badRequest(`Art muss eine von ${KINDS.join(', ')} sein`);
+  if (!b.platform_id) throw badRequest('Plattform fehlt');
   if (b.kind === 'llm' && b.llm_flavor && !FLAVORS.includes(b.llm_flavor)) throw badRequest('Ungültige API-Art');
   if (b.environment && !ENVIRONMENTS.includes(b.environment)) throw badRequest('Umgebung muss dev oder prod sein');
   if (b.visibility && !VISIBILITIES.includes(b.visibility)) throw badRequest('Ungültige Veröffentlichung');
@@ -34,7 +37,7 @@ function validateEndpoint(b) {
 const flavorOf = (b) => (b.kind === 'llm' && b.llm_flavor === 'claude' ? 'claude' : 'openai');
 
 // Verbindungstest einer (auch noch nicht gespeicherten) Konfiguration: Modelle bzw. MCP-Tools abrufen.
-async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc }) {
+async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc, health_path }) {
   const e = { kind, llm_flavor: flavorOf({ kind, llm_flavor }), base_url, headers: headers ?? {}, api_key_enc: secretEnc };
   const t0 = performance.now();
   const latency = () => Math.round(performance.now() - t0);
@@ -45,6 +48,10 @@ async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc }
       const tools = await mcp.listTools();
       return { ok: true, latencyMs: latency(), server: info?.serverInfo, tools: tools.map((t) => t.name) };
     }
+    if (!['ai_proxy', 'llm'].includes(kind)) {
+      const res = await fetch(`${base_url.replace(/\/$/, '')}${health_path ?? ''}`, { headers: endpointHeaders(e), signal: AbortSignal.timeout(15_000) });
+      return res.ok ? { ok: true, latencyMs: latency(), models: [] } : { ok: false, latencyMs: latency(), error: `HTTP ${res.status}` };
+    }
     const models = await llmClientFor(e, { timeoutMs: 15_000 }).models();
     return { ok: true, latencyMs: latency(), models };
   } catch (err) {
@@ -53,10 +60,15 @@ async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc }
 }
 
 // Endpoints und Modelle mit Teams, Maintainer und Sichtbarkeit für den anfragenden User.
-export async function catalog(user) {
+export async function catalog(user, { platformId = null } = {}) {
   const [endpoints, models, endpointTeams, modelTeams, users] = await Promise.all([
-    many(`${ENDPOINT_SELECT} order by e.kind, e.name`),
-    many('select * from endpoint_models order by coalesce(alias, name)'),
+    many(
+      `select e.*, k.secret_enc as api_key_enc, k.name as api_key_name, p.name as platform_name, p.environment as platform_environment
+       from endpoints e left join api_keys k on k.id = e.api_key_id join platforms p on p.id = e.platform_id
+       where e.tenant_id = $1 and ($2::uuid is null or e.platform_id = $2) order by p.name, e.kind, e.name`,
+      [user.tenant_id, platformId],
+    ),
+    many('select m.* from endpoint_models m join endpoints e on e.id = m.endpoint_id where e.tenant_id = $1 order by coalesce(m.alias, m.name)', [user.tenant_id]),
     many('select * from endpoint_teams'),
     many('select * from model_teams'),
     many('select id, coalesce(display_name, username) as name from users'),
@@ -87,6 +99,8 @@ export async function catalog(user) {
   return out;
 }
 
+
+export { CAPABILITIES };
 
 export default async function adminRoutes(app) {
   const viewer = { preHandler: requirePermission('suite.view') };
@@ -119,12 +133,12 @@ export default async function adminRoutes(app) {
     }
   }
 
-  async function loadEndpoint(id) {
-    return one(`${ENDPOINT_SELECT} where e.id = $1`, [id]);
+  async function loadEndpoint(id, tenantId) {
+    return one(`${ENDPOINT_SELECT} where e.id = $1 and e.tenant_id = $2`, [id, tenantId]);
   }
 
   // --- Endpoints ---
-  app.get('/api/endpoints', viewer, async (request) => catalog(request.user));
+  app.get('/api/endpoints', viewer, async (request) => catalog(request.user, { platformId: request.query.platform_id ?? null }));
 
   // Verbindungstest vor dem Speichern (Neuanlage und Bearbeiten).
   app.post('/api/endpoints/test', endpointAdmin, async (request) => {
@@ -135,7 +149,7 @@ export default async function adminRoutes(app) {
     } catch {
       throw badRequest('Basis-URL ist ungültig');
     }
-    const key = b.api_key_id ? await one('select secret_enc from api_keys where id = $1', [b.api_key_id]) : null;
+    const key = b.api_key_id ? await one('select secret_enc from api_keys where id = $1 and tenant_id = $2', [b.api_key_id, request.user.tenant_id]) : null;
     return testConnection({ ...b, secretEnc: key?.secret_enc });
   });
 
@@ -144,7 +158,10 @@ export default async function adminRoutes(app) {
     validateEndpoint(b);
     const visibility = b.visibility ?? 'global';
     const teamIds = visibility === 'teams' ? [...new Set(b.teamIds ?? [])] : [];
-    if (b.api_key_id && !(await one('select 1 from api_keys where id = $1', [b.api_key_id]))) throw badRequest('API-Key existiert nicht');
+    const tenantId = request.user.tenant_id;
+    const platform = await one('select id, environment from platforms where id = $1 and tenant_id = $2', [b.platform_id, tenantId]);
+    if (!platform) throw badRequest('Plattform existiert nicht');
+    if (b.api_key_id && !(await one('select 1 from api_keys where id = $1 and tenant_id = $2', [b.api_key_id, tenantId]))) throw badRequest('API-Key existiert nicht');
     const values = [
       b.name.trim(),
       b.kind,
@@ -157,30 +174,33 @@ export default async function adminRoutes(app) {
       b.enabled ?? true,
       b.notes ?? null,
       b.maintainer_id || null,
-      b.environment ?? 'prod',
+      platform.environment,
       visibility,
+      b.platform_id,
+      b.health_path || null,
     ];
     const row = await tx(async (c) => {
       const { rows } = id
         ? await c.query(
             `update endpoints set name = $2, kind = $3, llm_flavor = $4, base_url = $5, api_key_id = $6, headers = $7,
                auto_discover = $8, default_model = $9, enabled = $10, notes = $11, maintainer_id = $12,
-               environment = $13, visibility = $14, updated_at = now()
-             where id = $1 returning id`,
-            [id, ...values],
+               environment = $13, visibility = $14, platform_id = $15, health_path = $16, updated_at = now()
+             where id = $1 and tenant_id = $17 returning id`,
+            [id, ...values, tenantId],
           )
         : await c.query(
             `insert into endpoints (name, kind, llm_flavor, base_url, api_key_id, headers, auto_discover, default_model, enabled,
-               notes, maintainer_id, environment, visibility, created_by)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning id`,
-            [...values, request.user.id],
+               notes, maintainer_id, environment, visibility, platform_id, health_path, created_by, tenant_id)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) returning id`,
+            [...values, request.user.id, tenantId],
           );
       if (!rows[0]) throw badRequest('Endpoint nicht gefunden', 404);
       await setEndpointTeams(c, rows[0].id, teamIds);
       return rows[0];
     });
     await saveManualModels(row.id, b.manual_models);
-    const endpoint = await loadEndpoint(row.id);
+    const endpoint = await loadEndpoint(row.id, tenantId);
+    await logAudit(request, id ? 'endpoint.update' : 'endpoint.create', 'endpoint', row.id, { name: b.name });
     // Nach dem Speichern die Modelle lesen; das Frontend zeigt das Ergebnis kurz als Popup.
     const discovered = await discover(endpoint);
     const full = (await catalog(request.user)).find((e) => e.id === row.id);
@@ -191,13 +211,14 @@ export default async function adminRoutes(app) {
   app.put('/api/endpoints/:id', endpointAdmin, async (request) => save(request, request.params.id));
 
   app.delete('/api/endpoints/:id', endpointAdmin, async (request) => {
-    await query('delete from endpoints where id = $1', [request.params.id]);
+    await query('delete from endpoints where id = $1 and tenant_id = $2', [request.params.id, request.user.tenant_id]);
+    await logAudit(request, 'endpoint.delete', 'endpoint', request.params.id);
     return { ok: true };
   });
 
   // Verbindungstest eines gespeicherten Endpoints; gleicht den Modellkatalog direkt mit ab.
   app.post('/api/endpoints/:id/check', endpointAdmin, async (request, reply) => {
-    const e = await loadEndpoint(request.params.id);
+    const e = await loadEndpoint(request.params.id, request.user.tenant_id);
     if (!e) return reply.code(404).send({ error: 'Endpoint nicht gefunden' });
     const result = await testConnection({ ...e, secretEnc: e.api_key_enc });
     if (result.ok && result.models) await syncEndpointModels(e).catch(() => {});
@@ -205,7 +226,7 @@ export default async function adminRoutes(app) {
   });
 
   app.post('/api/endpoints/:id/sync-models', endpointAdmin, async (request, reply) => {
-    const e = await loadEndpoint(request.params.id);
+    const e = await loadEndpoint(request.params.id, request.user.tenant_id);
     if (!e) return reply.code(404).send({ error: 'Endpoint nicht gefunden' });
     try {
       return { ok: true, models: await syncEndpointModels(e) };
@@ -216,17 +237,18 @@ export default async function adminRoutes(app) {
 
   // --- Modellkatalog ---
   // Modell für die KI-Analyse der Testläufe (eine Einstellung für die ganze Anwendung).
-  app.get('/api/settings/analysis', viewer, async () => (await getAnalysisSetting()) ?? { endpoint_id: null, model: null });
+  app.get('/api/settings/analysis', viewer, async (request) => (await getAnalysisSetting(request.user.tenant_id)) ?? { endpoint_id: null, model: null });
   app.put('/api/settings/analysis', endpointAdmin, async (request, reply) => {
     const { endpoint_id, model } = request.body ?? {};
     if (!endpoint_id && !model) {
-      await setAnalysisSetting(null, request.user.id);
+      await setAnalysisSetting(request.user.tenant_id, null, request.user.id);
       return { endpoint_id: null, model: null };
     }
-    const hit = await one('select 1 from endpoint_models m join endpoints e on e.id = m.endpoint_id where m.endpoint_id = $1 and m.name = $2 and e.kind <> $3', [endpoint_id, model, 'mcp']);
+    const hit = await one(`select 1 from endpoint_models m join endpoints e on e.id = m.endpoint_id
+      where m.endpoint_id = $1 and m.name = $2 and e.tenant_id = $3 and e.kind in ('ai_proxy', 'llm')`, [endpoint_id, model, request.user.tenant_id]);
     if (!hit) return reply.code(400).send({ error: 'Modell am Endpoint nicht gefunden' });
-    await setAnalysisSetting({ endpoint_id, model }, request.user.id);
-    return getAnalysisSetting();
+    await setAnalysisSetting(request.user.tenant_id, { endpoint_id, model }, request.user.id);
+    return getAnalysisSetting(request.user.tenant_id);
   });
 
   app.get('/api/models', viewer, async (request) => {
@@ -235,6 +257,8 @@ export default async function adminRoutes(app) {
       e.models.map((m) => ({
         ...m,
         endpoint_name: e.name,
+        platform_id: e.platform_id,
+        platform_name: e.platform_name,
         endpoint_kind: e.kind,
         endpoint_enabled: e.enabled,
         endpoint_environment: e.environment,
@@ -248,7 +272,10 @@ export default async function adminRoutes(app) {
   // Erlaubt für Administratoren und den Maintainer des Modells.
   app.put('/api/endpoint-models', viewer, async (request, reply) => {
     const b = request.body ?? {};
-    const existing = await one('select * from endpoint_models where endpoint_id = $1 and name = $2', [b.endpoint_id, b.name]);
+    const existing = await one(
+      `select m.* from endpoint_models m join endpoints e on e.id = m.endpoint_id where m.endpoint_id = $1 and m.name = $2 and e.tenant_id = $3`,
+      [b.endpoint_id, b.name, request.user.tenant_id],
+    );
     if (!existing) return reply.code(404).send({ error: 'Modell nicht gefunden' });
     const user = request.user;
     if (!(user.is_admin || canManage(user) || existing.maintainer_id === user.id)) {
@@ -260,11 +287,23 @@ export default async function adminRoutes(app) {
     if (!ENVIRONMENTS.includes(environment)) throw badRequest('Umgebung muss dev oder prod sein');
     const teamIds = visibility === 'teams' ? [...new Set(b.teamIds ?? [])] : [];
     if (visibility === 'teams' && !teamIds.length) throw badRequest('Mindestens ein Team auswählen');
+    // Metadaten: nur angegebene Felder ändern; leere Texte löschen den Wert.
+    const pick = (k) => (b[k] === undefined ? existing[k] : String(b[k] ?? '').trim() || null);
+    const capabilities = b.capabilities === undefined ? existing.capabilities : [...new Set(b.capabilities)].filter((c) => CAPABILITIES.includes(c));
     await tx(async (c) => {
       await c.query(
-        `update endpoint_models set alias = $3, maintainer_id = $4, environment = $5, visibility = $6
+        `update endpoint_models set alias = $3, maintainer_id = $4, environment = $5, visibility = $6,
+           license = $7, provider = $8, origin = $9, open_weights = $10, revision = $11, quantization = $12,
+           capabilities = $13, context_length = $14
          where endpoint_id = $1 and name = $2`,
-        [b.endpoint_id, b.name, b.alias?.trim() || null, b.maintainer_id === undefined ? existing.maintainer_id : b.maintainer_id || null, environment, visibility],
+        [
+          b.endpoint_id, b.name, b.alias?.trim() || null,
+          b.maintainer_id === undefined ? existing.maintainer_id : b.maintainer_id || null, environment, visibility,
+          pick('license'), pick('provider'), pick('origin'),
+          b.open_weights === undefined ? existing.open_weights : b.open_weights === null || b.open_weights === '' ? null : Boolean(b.open_weights),
+          pick('revision'), pick('quantization'),
+          capabilities, b.context_length === undefined ? existing.context_length : Number(b.context_length) || null,
+        ],
       );
       await c.query('delete from model_teams where endpoint_id = $1 and model_name = $2', [b.endpoint_id, b.name]);
       if (teamIds.length) await c.query('insert into model_teams select $1, $2, unnest($3::uuid[])', [b.endpoint_id, b.name, teamIds]);

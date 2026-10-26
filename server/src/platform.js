@@ -16,8 +16,9 @@ export const DEFAULT_PLATFORM = {
   metrics: { gpu: { urls: [], api_key_id: null }, inference: { urls: [], api_key_id: null }, gateway: { urls: [], api_key_id: null } },
 };
 
-export async function getPlatform() {
-  const row = await one('select config, updated_at from platform_config where id = 1');
+// Sizing-Konfiguration (Schätzung) einer Plattform samt Metrik-Endpunkten.
+export async function getPlatform(platformId) {
+  const row = await one('select config, updated_at from platform_sizing where platform_id = $1', [platformId]);
   const c = row?.config ?? {};
   return {
     config: {
@@ -31,17 +32,17 @@ export async function getPlatform() {
   };
 }
 
-export async function savePlatform(config, userId) {
+export async function savePlatform(platformId, config, userId) {
   await query(
-    `insert into platform_config (id, config, updated_by) values (1, $1, $2)
-     on conflict (id) do update set config = excluded.config, updated_at = now(), updated_by = excluded.updated_by`,
-    [JSON.stringify(config), userId ?? null],
+    `insert into platform_sizing (platform_id, config, updated_by) values ($1, $2, $3)
+     on conflict (platform_id) do update set config = excluded.config, updated_at = now(), updated_by = excluded.updated_by`,
+    [platformId, JSON.stringify(config), userId ?? null],
   );
 }
 
 // Metrik-Endpunkte mit aufgelöstem Authorization-Header (Key aus der API-Key-Sammlung, nur serverseitig entschlüsselt).
-export async function metricComponents() {
-  const { config } = await getPlatform();
+export async function metricComponents(platformId) {
+  const { config } = await getPlatform(platformId);
   const keys = await many('select id, secret_enc from api_keys');
   const byId = new Map(keys.map((k) => [k.id, k]));
   return Object.fromEntries(
@@ -52,6 +53,6 @@ export async function metricComponents() {
   );
 }
 
-export async function platformSampler(intervalMs) {
-  return createSampler(await metricComponents(), intervalMs);
+export async function platformSampler(platformId, intervalMs) {
+  return createSampler(await metricComponents(platformId), intervalMs);
 }

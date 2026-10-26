@@ -4,7 +4,8 @@ import * as oidc from 'openid-client';
 import fastifyCookie from '@fastify/cookie';
 import fastifySession from '@fastify/session';
 import { config } from './config.js';
-import { one, query } from './db.js';
+import { createHash } from 'node:crypto';
+import { many, one, query } from './db.js';
 import { effectivePermissions, hasPermission, isEnvAdmin } from './permissions.js';
 
 // Session-Store in Postgres, damit mehrere Web-Pods sich Sessions teilen.
@@ -79,36 +80,64 @@ export async function upsertUser({ sub, username, email, emailVerified, displayN
      values ($1, $2, $3, $4, $5, now()) returning id`,
     [sub, username, email ?? null, Boolean(emailVerified), displayName ?? null],
   );
-  await query('insert into user_roles (user_id, role_id) select $1, id from roles where is_default on conflict do nothing', [created.id]);
+  // Neue User erhalten die Standardrolle im Standard-Mandanten; weitere Mandanten vergibt ein Administrator.
+  await query(
+    `insert into user_roles (user_id, role_id, tenant_id)
+     select $1, r.id, t.id from roles r cross join tenants t where r.is_default and t.key = 'default'
+     on conflict do nothing`,
+    [created.id],
+  );
   return created;
 }
 
-// User samt Rollen, Teams und effektiven Berechtigungen laden.
-export async function loadUser(id) {
-  const row = await one(
-    `select u.*,
-       coalesce((select json_agg(json_build_object('id', r.id, 'key', r.key, 'name', r.name) order by r.name)
-                 from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = u.id), '[]') as roles,
-       coalesce((select array_agg(distinct p) from user_roles ur join roles r on r.id = ur.role_id
-                 cross join unnest(r.permissions) as p where ur.user_id = u.id), '{}') as role_permissions,
-       exists (select 1 from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = u.id and r.key = 'admin') as has_admin_role,
-       coalesce((select json_agg(json_build_object('id', t.id, 'name', t.name) order by t.name)
-                 from team_members tm join teams t on t.id = tm.team_id where tm.user_id = u.id), '[]') as teams
-     from users u where u.id = $1`,
-    [id],
-  );
+// User samt Rollen und Teams im gewählten Mandanten und den effektiven Berechtigungen laden.
+// Ohne (oder mit unzulässigem) Mandanten gilt der erste, auf den der User Zugriff hat.
+export async function loadUser(id, wantedTenantId = null) {
+  const row = await one('select * from users where id = $1', [id]);
   if (!row) return null;
   const envAdmin = isEnvAdmin(row, config.auth.adminEmails);
-  const { role_permissions, has_admin_role, ...user } = row;
+  const grants = await many(
+    `select ur.tenant_id, r.id as role_id, r.key, r.name, r.permissions
+     from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = $1`,
+    [id],
+  );
+  const globalAdmin = grants.some((g) => g.key === 'admin' && !g.tenant_id);
+  const systemAdmin = envAdmin || globalAdmin;
+  // Globale Nicht-Admin-Rollen (ohne Mandant) gelten in jedem Mandanten.
+  const everywhere = grants.some((g) => !g.tenant_id);
+  const allTenants = await many('select id, key, name from tenants order by name');
+  const tenants =
+    systemAdmin || everywhere ? allTenants : allTenants.filter((t) => grants.some((g) => g.tenant_id === t.id));
+  const tenant = tenants.find((t) => t.id === wantedTenantId) ?? tenants.find((t) => t.key === 'default') ?? tenants[0] ?? null;
+  const own = grants.filter((g) => tenant && (g.tenant_id === tenant.id || !g.tenant_id));
+  const teams = tenant
+    ? await many(
+        `select t.id, t.name from team_members tm join teams t on t.id = tm.team_id
+         where tm.user_id = $1 and t.tenant_id = $2 order by t.name`,
+        [id, tenant.id],
+      )
+    : [];
+  const rolePermissions = [...new Set(own.flatMap((g) => g.permissions))];
+  const tenantAdmin = own.some((g) => g.key === 'admin' && g.tenant_id === tenant?.id);
+  const disabled = row.disabled && !envAdmin;
   return {
-    ...user,
+    ...row,
+    roles: own.map((g) => ({ id: g.role_id, key: g.key, name: g.name })),
+    teams,
+    tenant,
+    tenant_id: tenant?.id ?? null,
+    tenants,
     env_admin: envAdmin,
-    is_admin: envAdmin || has_admin_role,
+    is_system_admin: systemAdmin,
+    // Administrator im aktuellen Mandanten: System-Administrator oder Admin-Rolle des Mandanten.
+    is_admin: systemAdmin || tenantAdmin,
     // Admins per Umgebungsvariable lassen sich nicht aussperren.
-    disabled: user.disabled && !envAdmin,
-    permissions: user.disabled && !envAdmin ? [] : effectivePermissions({ rolePermissions: role_permissions, hasAdminRole: has_admin_role, envAdmin }),
+    disabled,
+    permissions: disabled || !tenant ? [] : effectivePermissions({ rolePermissions, hasAdminRole: globalAdmin, tenantAdmin, envAdmin }),
   };
 }
+
+export const tokenHash = (token) => createHash('sha256').update(token).digest('hex');
 
 export { hasPermission };
 
@@ -140,8 +169,19 @@ export async function authPlugin(app) {
 
   app.decorateRequest('user', null);
   app.addHook('preHandler', async (request) => {
+    // Service-Token (CI/CD, CLI): Authorization: Bearer sat_…
+    const bearer = /^Bearer (sat_[\w-]+)$/.exec(request.headers.authorization ?? '')?.[1];
+    if (bearer) {
+      const token = await one(
+        `update service_tokens set last_used_at = now()
+         where token_hash = $1 and revoked_at is null and (expires_at is null or expires_at > now()) returning user_id, tenant_id`,
+        [tokenHash(bearer)],
+      );
+      if (token) request.user = await loadUser(token.user_id, token.tenant_id);
+      return;
+    }
     const userId = request.session.get('userId');
-    if (userId) request.user = await loadUser(userId);
+    if (userId) request.user = await loadUser(userId, request.headers['x-tenant-id'] || request.session.get('tenantId') || null);
   });
 
   app.get('/auth/login', async (request, reply) => {

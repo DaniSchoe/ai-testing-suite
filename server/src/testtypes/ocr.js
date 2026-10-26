@@ -1,97 +1,124 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { checkAll } from './assertions.js';
 import { avg } from '../runner/clients.js';
+import { matchTypedField } from './assertions.js';
 
-const DIR = fileURLToPath(new URL('../../fixtures/ocr/', import.meta.url));
-const IMAGE_NAME = /^[\w.-]+\.(png|jpe?g)$/i;
+const TYPE_HINT = { number: 'Zahl', bool: 'true oder false', date: 'Datum im Format YYYY-MM-DD', iban: 'IBAN', exact: 'Text', text: 'Text', keywords: 'Text' };
 
-// Zwei Dokumente (erzeugt mit tools/generate-ocr-docs.py; PDF und die an das Modell gesendete PNG-Seite liegen in fixtures/ocr).
-// Jedes Dokument hat mehrere Felder; der Score ist der Anteil richtig gelesener Felder.
-export const OCR_DOCUMENTS = [
-  {
-    name: 'Rechnung (strukturiert, PDF)',
-    image: 'rechnung.png',
-    prompt:
-      'Das Bild zeigt eine Rechnung über einen Einkauf. Werte die Positionen aus und rechne selbst nach. Antworte ausschließlich mit JSON in diesem Format: ' +
-      '{"rechnungsbetrag": <Bruttobetrag in Euro als Zahl>, "stueckzahl": <Summe aller Mengen über alle Positionen>, ' +
-      '"summe_7_prozent": <Summe der Gesamtpreise aller Positionen mit 7 % MwSt in Euro>, "teuerste_position": "<Artikelname der Position mit dem höchsten Gesamtpreis>"}',
-    expect: { rechnungsbetrag: 270.55, stueckzahl: 45, summe_7_prozent: 84.45, teuerste_position: { keywords: ['druckerpatrone'] } },
-  },
-  {
-    name: 'Prüfbericht (Handschrift und Unterschriften)',
-    image: 'pruefbericht.png',
-    prompt:
-      'Das Bild zeigt einen Prüfbericht. Unten gibt es zwei Unterschriftenfelder und einen handschriftlichen Hinweis. Antworte ausschließlich mit JSON in diesem Format: ' +
-      '{"unterschriften_vorhanden": <true, wenn beide Felder unterschrieben sind, sonst false>, "anzahl_unterschriften": <Zahl der tatsächlich vorhandenen Unterschriften>, ' +
-      '"handschriftlicher_hinweis": "<der handschriftliche Hinweis, wörtlich oder sinngemäß>"}',
-    expect: {
-      unterschriften_vorhanden: true,
-      anzahl_unterschriften: 2,
-      handschriftlicher_hinweis: { keywords: ['brems', 'links', '500', 'dicht'], min: 3 },
-    },
-  },
-];
+// JSON-Objekt aus einer Antwort lesen (auch aus einem Codeblock); null, wenn keines gültig ist.
+export function extractJson(text) {
+  try {
+    const parsed = JSON.parse(String(text).match(/\{[\s\S]*\}/)?.[0] ?? '');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Anweisung an das Modell: Aufgabe der Vorlage, Besonderheiten des Dokuments und das erwartete JSON-Format aus den Feldern der Ground Truth.
+export function buildPrompt(instruction, doc) {
+  const shape = Object.entries(doc.fields)
+    .map(([name, f]) => `"${name}": <${TYPE_HINT[f.type] ?? 'Text'}${f.hint ? `: ${f.hint}` : ''}>`)
+    .join(', ');
+  return `${instruction}${doc.prompt ? ` ${doc.prompt}` : ''}\nAntworte ausschließlich mit einem JSON-Objekt in diesem Format: {${shape}}`;
+}
+
+// Score und Aufschlüsselung je Feld; weights gewichtet einzelne Felder (Standard 1).
+export function scoreFields(doc, parsed, weights = {}) {
+  const fields = Object.entries(doc.fields).map(([name, spec]) => {
+    const got = parsed ? parsed[name] : undefined;
+    return { field: name, type: spec.type, ok: parsed ? matchTypedField(spec, got) : false, got: got ?? null, expected: spec.value, weight: Number(weights[name] ?? 1) };
+  });
+  const total = fields.reduce((n, f) => n + f.weight, 0);
+  const earned = fields.filter((f) => f.ok).reduce((n, f) => n + f.weight, 0);
+  return { fields, score: total ? earned / total : 0 };
+}
 
 export default {
   type: 'ocr',
   label: 'OCR',
   description:
-    'Liest zwei Dokumente als Bild: eine Rechnung (Positionen und Preise aggregieren) und einen Prüfbericht mit Handschrift und zwei Unterschriften. Benötigt ein Modell mit Bildverarbeitung (Vision).',
-  defaults: { model: '', minScore: 0.7, maxTokens: 2048, documents: OCR_DOCUMENTS },
+    'Liest Dokumente als Bild und vergleicht die extrahierten Felder mit der Ground Truth des Datensatzes (typisiert: Zahl mit Toleranz, Datum, IBAN, Wahrheitswert, Text). Benötigt ein Modell mit Bildverarbeitung (Vision).',
+  defaults: {
+    model: '',
+    maxTokens: 2048,
+    temperature: 0,
+    instruction: 'Extrahiere die Felder des abgebildeten Dokuments.',
+    // Feldgewichte, z. B. { netto: 2, iban: 2 }
+    weights: {},
+    // invalid_json: fail_case (Fall gilt als falsch) oder retry_once (einmal nachfragen)
+    invalidJson: 'fail_case',
+    documents: [],
+  },
   async run(ctx) {
+    const c = ctx.config;
     const model = ctx.model();
     const llm = ctx.llm();
     const cases = [];
-    for (const doc of ctx.config.documents) {
+    if (!c.documents?.length) throw new Error('Kein Dokumentdatensatz zugeordnet');
+    for (const doc of c.documents) {
       if (ctx.signal.aborted) break;
       try {
-        // Nur Dateien aus fixtures/ocr, damit eine bearbeitete Konfiguration keine beliebigen Dateien liest.
-        if (!IMAGE_NAME.test(doc.image)) throw new Error(`Ungültiger Bildname "${doc.image}"`);
-        const png = await readFile(path.join(DIR, doc.image));
-        const res = await llm.chat({
-          model,
-          temperature: ctx.config.temperature ?? 0,
-          max_tokens: ctx.config.maxTokens,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: doc.prompt },
-                { type: 'image_url', image_url: { url: `data:image/${/\.png$/i.test(doc.image) ? 'png' : 'jpeg'};base64,${png.toString('base64')}` } },
-              ],
-            },
-          ],
-        });
-        const verdict = await checkAll([{ type: 'json_match', expect: doc.expect }], res.content, ctx);
-        const fields = verdict.outcomes[0].fields ?? [];
+        if (!doc.dataUrl) throw new Error(`Datei "${doc.file}" ist kein Bild (PDF-Seiten als PNG hochladen)`);
+        const prompt = buildPrompt(c.instruction, doc);
+        const ask = (text) =>
+          llm.chat({
+            model,
+            temperature: c.temperature ?? 0,
+            max_tokens: c.maxTokens,
+            messages: [{ role: 'user', content: [{ type: 'text', text }, { type: 'image_url', image_url: { url: doc.dataUrl } }] }],
+          });
+        let res = await ask(prompt);
+        let parsed = extractJson(res.content);
+        let attempts = 1;
+        if (!parsed && c.invalidJson === 'retry_once') {
+          res = await ask(`${prompt}\nDeine letzte Antwort war kein gültiges JSON. Antworte jetzt nur mit dem JSON-Objekt.`);
+          parsed = extractJson(res.content);
+          attempts = 2;
+        }
+        const { fields, score } = scoreFields(doc, parsed, c.weights);
         cases.push({
           name: doc.name,
-          ok: verdict.ok,
+          category: doc.category,
+          ok: fields.every((f) => f.ok),
+          validJson: Boolean(parsed),
+          attempts,
           fields,
-          score: fields.length ? fields.filter((f) => f.ok).length / fields.length : 0,
-          notes: fields.map((f) => `${f.ok ? '✓' : '✕'} ${f.field}: ${JSON.stringify(f.got)}`),
+          score,
+          prompt,
+          notes: fields.map((f) => `${f.ok ? '✓' : '✕'} ${f.field}: erwartet ${JSON.stringify(f.expected)}, gelesen ${JSON.stringify(f.got)}`),
           latencyMs: Math.round(res.latencyMs),
-          answer: res.content.slice(0, 1200),
+          tokens: res.usage?.total_tokens ?? null,
+          response: res.content.slice(0, 1200),
         });
-        if (!verdict.ok) ctx.log('warn', `${doc.name}: ${verdict.outcomes[0].message}`, { fields });
+        if (!fields.every((f) => f.ok)) ctx.log('warn', `${doc.name}: Felder falsch oder fehlend: ${fields.filter((f) => !f.ok).map((f) => f.field).join(', ')}`);
       } catch (err) {
-        cases.push({ name: doc.name, ok: false, score: 0, fields: [], error: err.message });
+        cases.push({ name: doc.name, category: doc.category, ok: false, validJson: false, score: 0, fields: [], error: err.message });
       }
     }
-    const fields = cases.flatMap((c) => c.fields);
-    const score = fields.length ? fields.filter((f) => f.ok).length / fields.length : 0;
+    const fields = cases.flatMap((x) => x.fields);
+    const weightTotal = fields.reduce((n, f) => n + f.weight, 0);
+    const score = weightTotal ? fields.filter((f) => f.ok).reduce((n, f) => n + f.weight, 0) / weightTotal : 0;
+    const byType = {};
+    for (const f of fields) {
+      byType[f.type] ??= { ok: 0, total: 0 };
+      byType[f.type].total += 1;
+      if (f.ok) byType[f.type].ok += 1;
+    }
+    const answered = cases.filter((x) => !x.error);
     return {
-      status: score >= ctx.config.minScore ? 'passed' : 'failed',
+      // Ohne Schwellwerte in der Prüfung gilt ein Score von mindestens 0,7.
+      status: score >= (c.minScore ?? 0.7) ? 'passed' : 'failed',
       model,
       score,
       metrics: {
         cases: cases.length,
-        passed: cases.filter((c) => c.ok).length,
+        passed: cases.filter((x) => x.ok).length,
         fields_correct: fields.filter((f) => f.ok).length,
         fields_total: fields.length,
-        latency_ms_avg: avg(cases.filter((c) => c.latencyMs).map((c) => c.latencyMs)),
+        field_accuracy: score,
+        valid_json_rate: answered.length ? answered.filter((x) => x.validJson).length / answered.length : 0,
+        latency_ms_avg: avg(cases.filter((x) => x.latencyMs).map((x) => x.latencyMs)),
+        tokens_per_doc: avg(cases.filter((x) => x.tokens).map((x) => x.tokens)),
+        ...Object.fromEntries(Object.entries(byType).map(([t, v]) => [`accuracy:${t}`, v.ok / v.total])),
       },
       details: { cases },
     };

@@ -66,6 +66,7 @@ export async function runCases(ctx, model, cases, llm = ctx.llm()) {
         outcomes: verdict.outcomes,
         latencyMs: Math.round(res.latencyMs),
         tokens: res.usage?.total_tokens ?? null,
+        prompt: testCase.prompt,
         answer: res.content.slice(-600),
       });
     } catch (err) {
@@ -92,10 +93,12 @@ export default {
     minScore: 0.6,
     maxTokens: 4096,
     judgeModel: '',
-    cases: QUALITY_CASES,
+    // Fälle stammen aus dem Datensatz der Vorlage (siehe catalog/).
+    cases: [],
   },
   async run(ctx) {
     const model = ctx.model();
+    if (!ctx.config.cases?.length) throw new Error('Kein Datensatz zugeordnet');
     ctx.log('info', `${ctx.config.cases.length} Fälle gegen ${model}`);
     const { results, score, latencyAvg } = await runCases(ctx, model, ctx.config.cases);
     for (const r of results.filter((x) => !x.ok)) ctx.log('warn', `Fall nicht bestanden: ${r.name}`, r);

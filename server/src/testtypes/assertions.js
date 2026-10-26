@@ -36,6 +36,47 @@ export function toNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+const MONTHS = { januar: 1, februar: 2, märz: 3, maerz: 3, april: 4, mai: 5, juni: 6, juli: 7, august: 8, september: 9, oktober: 10, november: 11, dezember: 12 };
+
+// Datum aus ISO (2026-10-12), deutscher Schreibweise (12.10.2026, 12.10.26) oder "12. Oktober 2026" als ISO-Text lesen.
+export function toIsoDate(value) {
+  const s = String(value ?? '').trim();
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  let y;
+  let mo;
+  let d;
+  if (m) [y, mo, d] = [m[1], m[2], m[3]];
+  else if ((m = /^(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{2,4})$/.exec(s))) [d, mo, y] = [m[1], m[2], m[3].length === 2 ? `20${m[3]}` : m[3]];
+  else if ((m = /^(\d{1,2})\.?\s+([a-zäöü]+)\s+(\d{4})$/i.exec(s)) && MONTHS[m[2].toLowerCase()]) [d, mo, y] = [m[1], MONTHS[m[2].toLowerCase()], m[3]];
+  else return null;
+  return `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// Ein Feld gegen die Ground Truth prüfen. spec: { value, type: exact | text | number | date | iban | bool | keywords, tolerance, keywords, min }.
+export function matchTypedField(spec, got) {
+  if (got === undefined || got === null) return false;
+  switch (spec.type) {
+    case 'number': {
+      const n = toNumber(got);
+      return n !== null && Math.abs(n - Number(spec.value)) <= (spec.tolerance ?? 0.005);
+    }
+    case 'bool':
+      return got === spec.value || (typeof got === 'string' && /^(ja|true|yes|wahr)$/i.test(got.trim()) === spec.value);
+    case 'date':
+      return toIsoDate(got) !== null && toIsoDate(got) === toIsoDate(spec.value);
+    case 'iban':
+      return String(got).replace(/\s/g, '').toUpperCase() === String(spec.value).replace(/\s/g, '').toUpperCase();
+    case 'keywords': {
+      const words = spec.keywords?.length ? spec.keywords : [String(spec.value)];
+      return words.filter((k) => new RegExp(k, 'i').test(String(got))).length >= (spec.min ?? words.length);
+    }
+    case 'text':
+      return normalizeAnswer(String(got).replace(/[.,;:!?"']/g, '')) === normalizeAnswer(String(spec.value).replace(/[.,;:!?"']/g, ''));
+    default:
+      return normalizeAnswer(got) === normalizeAnswer(spec.value);
+  }
+}
+
 // Felder eines JSON-Objekts prüfen. assertion.expect: { feld: Zahl | true/false | Text | { keywords: [regex…], min } }.
 // Liefert zusätzlich fields: [{ field, ok, got, expected }], damit Tests Teilpunkte vergeben können.
 function jsonMatch(assertion, text) {

@@ -4,24 +4,25 @@ import { many, one, query } from './db.js';
 import { briefResult } from './analysisBrief.js';
 import { ENDPOINT_SELECT, llmClientFor, resolveModel } from './models.js';
 
-const SETTING = 'analysis_model';
+// Das Analysemodell ist je Mandant festgelegt; Ergebnisse eines Mandanten gehen nie an das Modell eines anderen.
+const settingKey = (tenantId) => `analysis_model:${tenantId}`;
 
-export async function getAnalysisSetting() {
-  const row = await one('select value from app_settings where key = $1', [SETTING]);
+export async function getAnalysisSetting(tenantId) {
+  const row = await one('select value from app_settings where key = $1', [settingKey(tenantId)]);
   if (!row?.value?.endpoint_id || !row.value.model) return null;
   const endpoint = await one('select id, name from endpoints where id = $1', [row.value.endpoint_id]);
   return endpoint ? { endpoint_id: endpoint.id, endpoint_name: endpoint.name, model: row.value.model } : null;
 }
 
-export async function setAnalysisSetting(value, userId) {
+export async function setAnalysisSetting(tenantId, value, userId) {
   if (!value) {
-    await query('delete from app_settings where key = $1', [SETTING]);
+    await query('delete from app_settings where key = $1', [settingKey(tenantId)]);
     return;
   }
   await query(
     `insert into app_settings (key, value, updated_by) values ($1, $2, $3)
      on conflict (key) do update set value = excluded.value, updated_at = now(), updated_by = excluded.updated_by`,
-    [SETTING, JSON.stringify({ endpoint_id: value.endpoint_id, model: value.model }), userId ?? null],
+    [settingKey(tenantId), JSON.stringify({ endpoint_id: value.endpoint_id, model: value.model }), userId ?? null],
   );
 }
 
@@ -37,7 +38,8 @@ Hinweise: Qualitätsfragen sind von Stufe 1 (leicht) bis 5 (extrem schwer) gewic
 
 // Analyse für einen beendeten Lauf erzeugen und speichern. Gibt den Status zurück.
 export async function analyzeRun(runId, log = console) {
-  const setting = await getAnalysisSetting();
+  const tenantId = (await one('select tenant_id from runs where id = $1', [runId]))?.tenant_id;
+  const setting = tenantId ? await getAnalysisSetting(tenantId) : null;
   if (!setting) {
     await query(`update runs set analysis_status = 'skipped', analysis = null where id = $1`, [runId]);
     return 'skipped';

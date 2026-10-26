@@ -1,4 +1,23 @@
 // Function Calling & strukturierte Ausgabe: wichtig für Agenten und MCP-Nutzung über das Modell.
+export const TOOL_CASES = [
+  {
+    name: 'Wetter-Tool',
+    prompt: 'Wie ist das Wetter in Hamburg?',
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'get_weather',
+          description: 'Aktuelles Wetter für eine Stadt',
+          parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+        },
+      },
+    ],
+    expectTool: 'get_weather',
+    expectArgs: { city: 'Hamburg' },
+  },
+];
+
 export default {
   type: 'structured',
   label: 'Tool-Calling / JSON',
@@ -6,29 +25,13 @@ export default {
   defaults: {
     model: '',
     minScore: 0.8,
-    cases: [
-      {
-        name: 'Wetter-Tool',
-        prompt: 'Wie ist das Wetter in Hamburg?',
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: 'get_weather',
-              description: 'Aktuelles Wetter für eine Stadt',
-              parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
-            },
-          },
-        ],
-        expectTool: 'get_weather',
-        expectArgs: { city: 'Hamburg' },
-      },
-    ],
+    cases: [],
   },
   async run(ctx) {
     const llm = ctx.llm();
     const model = ctx.model();
     const outcomes = [];
+    if (!ctx.config.cases?.length) throw new Error('Kein Datensatz zugeordnet');
     for (const tc of ctx.config.cases) {
       try {
         const res = await llm.chat({
@@ -69,7 +72,7 @@ export default {
             notes.push('Antwort ist kein JSON');
           }
         }
-        outcomes.push({ name: tc.name, ok, notes, toolCalls: res.toolCalls, latencyMs: Math.round(res.latencyMs) });
+        outcomes.push({ name: tc.name, ok, notes, toolCalls: res.toolCalls, prompt: tc.prompt, response: res.content || JSON.stringify(res.toolCalls), latencyMs: Math.round(res.latencyMs) });
       } catch (err) {
         outcomes.push({ name: tc.name, ok: false, error: err.message });
       }

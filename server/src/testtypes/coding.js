@@ -87,11 +87,12 @@ export default {
   label: 'Coding',
   description:
     'Das Modell löst eine einfache und eine komplexe Programmieraufgabe (JavaScript). Der Code läuft isoliert gegen vorbereitete Tests; Score = Anteil bestandener Tests, die komplexe Aufgabe zählt doppelt.',
-  defaults: { model: '', minScore: 0.7, maxTokens: 4096, tasks: CODING_TASKS },
+  defaults: { model: '', minScore: 0.7, maxTokens: 4096, tasks: [] },
   async run(ctx) {
     const model = ctx.model();
     const llm = ctx.llm();
     const tasks = [];
+    if (!ctx.config.tasks?.length) throw new Error('Kein Datensatz zugeordnet');
     for (const task of ctx.config.tasks) {
       if (ctx.signal.aborted) break;
       try {
@@ -115,6 +116,7 @@ export default {
           tests: outcomes.length,
           score: outcomes.length ? passed / outcomes.length : 0,
           latencyMs: Math.round(res.latencyMs),
+          prompt: task.prompt,
           failures: outcomes.filter((o) => !o.ok).slice(0, 5),
           code: code.slice(0, 4000),
         });
@@ -142,6 +144,8 @@ export default {
           name: t.name,
           ok: t.ok,
           error: t.error,
+          prompt: t.prompt,
+          response: t.code,
           notes: [`${t.passed}/${t.tests} Tests`, ...(t.failures ?? []).map((f) => `${f.name}: ${f.error ?? `erhielt ${JSON.stringify(f.got)}`}`)],
         })),
         tasks,

@@ -1,13 +1,13 @@
-// Plattform-Seite: Konfiguration, Live-Metriken der Komponenten und Messwerte aus Lasttests.
+// Sizing einer Plattform: Konfiguration (Schätzung), Live-Metriken der Komponenten und Messwerte aus Lasttests.
 import { requirePermission } from '../auth.js';
+import { logAudit } from '../audit.js';
 import { decrypt } from '../crypto.js';
 import { many, one } from '../db.js';
-import { dashboardAccess, resultFilter } from '../dashboardFilter.js';
 import { getPlatform, metricComponents, savePlatform } from '../platform.js';
 import { collectAll, collectComponent, COMPONENTS } from '../platformMetrics.js';
 
 const bad = (message) => Object.assign(new Error(message), { statusCode: 400 });
-let liveCache = { at: 0, data: null };
+const liveCache = new Map();
 
 // Nur http(s)-URLs; die Konfiguration darf nur ein Administrator ändern (wie Endpoints).
 function cleanUrls(urls) {
@@ -47,15 +47,26 @@ function cleanWorkload(w) {
   };
 }
 
-export default async function platformRoutes(app) {
+export default async function sizingRoutes(app) {
   const viewer = { preHandler: requirePermission('suite.view') };
   const admin = { preHandler: requirePermission('endpoints.manage') };
 
-  app.get('/api/platform', viewer, async () => getPlatform());
+  // Plattform des Mandanten laden; fremde Plattformen sind unsichtbar.
+  async function platformOf(request) {
+    const p = await one('select id, name, environment from platforms where id = $1 and tenant_id = $2', [request.params.id, request.user.tenant_id]);
+    if (!p) throw Object.assign(new Error('Plattform nicht gefunden'), { statusCode: 404 });
+    return p;
+  }
 
-  app.put('/api/platform', admin, async (request) => {
+  app.get('/api/platforms/:id/sizing', viewer, async (request) => {
+    const p = await platformOf(request);
+    return { ...(await getPlatform(p.id)), platform: p };
+  });
+
+  app.put('/api/platforms/:id/sizing', admin, async (request) => {
+    const p = await platformOf(request);
     const b = request.body ?? {};
-    const current = (await getPlatform()).config;
+    const current = (await getPlatform(p.id)).config;
     const num = (v, min, max, name) => {
       const n = Number(v);
       if (!Number.isFinite(n) || n < min || n > max) throw bad(`${name} muss zwischen ${min} und ${max} liegen`);
@@ -89,18 +100,20 @@ export default async function platformRoutes(app) {
         COMPONENTS.map((k) => [k, { urls: cleanUrls((b.metrics ?? current.metrics)[k]?.urls), api_key_id: (b.metrics ?? current.metrics)[k]?.api_key_id || null }]),
       ),
     };
-    await savePlatform(config, request.user.id);
-    liveCache = { at: 0, data: null };
-    return getPlatform();
+    await savePlatform(p.id, config, request.user.id);
+    liveCache.delete(p.id);
+    await logAudit(request, 'sizing.update', 'platform', p.id);
+    return { ...(await getPlatform(p.id)), platform: p };
   });
 
   // Metrik-Endpunkt ausprobieren, bevor er gespeichert wird.
-  app.post('/api/platform/metrics/test', admin, async (request) => {
+  app.post('/api/platforms/:id/sizing/metrics-test', admin, async (request) => {
+    await platformOf(request);
     const { component, urls, api_key_id } = request.body ?? {};
     if (!COMPONENTS.includes(component)) throw bad('Unbekannte Komponente');
     let authorization;
     if (api_key_id) {
-      const key = await one('select secret_enc from api_keys where id = $1', [api_key_id]);
+      const key = await one('select secret_enc from api_keys where id = $1 and tenant_id = $2', [api_key_id, request.user.tenant_id]);
       if (key) authorization = `Bearer ${decrypt(key.secret_enc)}`;
     }
     const res = await collectComponent(component, { urls: cleanUrls(urls), authorization });
@@ -108,25 +121,27 @@ export default async function platformRoutes(app) {
   });
 
   // Aktuelle Werte aller konfigurierten Komponenten (kurz zwischengespeichert, damit viele Browser den Exporter nicht fluten).
-  app.get('/api/platform/live', viewer, async () => {
-    if (Date.now() - liveCache.at < 5000 && liveCache.data) return liveCache.data;
-    const data = { at: new Date().toISOString(), components: await collectAll(await metricComponents()) };
-    liveCache = { at: Date.now(), data };
+  app.get('/api/platforms/:id/sizing/live', viewer, async (request) => {
+    const p = await platformOf(request);
+    const hit = liveCache.get(p.id);
+    if (hit && Date.now() - hit.at < 5000) return hit.data;
+    const data = { at: new Date().toISOString(), components: await collectAll(await metricComponents(p.id)) };
+    liveCache.set(p.id, { at: Date.now(), data });
     return data;
   });
 
   // Neueste Lasttests je Modell samt Plattformmessung, für den Vergleich Schätzung gegen Messung.
-  app.get('/api/platform/load-results', viewer, async (request) => {
-    const access = await dashboardAccess(request.user, {});
-    const filter = resultFilter(access, 1);
+  app.get('/api/platforms/:id/sizing/load-results', viewer, async (request) => {
+    const p = await platformOf(request);
     return many(
       `select distinct on (coalesce(res.model_alias, res.model)) res.id, res.run_id, res.endpoint_name,
          coalesce(res.model_alias, res.model) as model, res.finished_at, res.metrics, res.details->'stages' as stages,
          res.details->'platform'->'summary' as platform
-       from results res
-       where res.type = 'load' and res.status <> 'error' and res.finished_at is not null and res.model is not null and ${filter.sql}
+       from results res join runs r on r.id = res.run_id
+       where res.type = 'load' and res.status <> 'error' and res.finished_at is not null and res.model is not null
+         and r.tenant_id = $1 and r.platform_id = $2
        order by coalesce(res.model_alias, res.model), res.finished_at desc`,
-      filter.params,
+      [request.user.tenant_id, p.id],
     );
   });
 }

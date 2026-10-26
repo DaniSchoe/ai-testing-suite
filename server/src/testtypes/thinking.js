@@ -33,6 +33,37 @@ async function judgeReasoning(ctx, judgeModel, testCase, res) {
   }
 }
 
+export const THINKING_CASES = [
+  {
+    name: 'Schläger und Ball',
+    prompt:
+      'Ein Schläger und ein Ball kosten zusammen 1,10 €. Der Schläger kostet 1 € mehr als der Ball. Wie viel kostet der Ball in Cent? Schließe mit "Antwort: <Zahl>".',
+    assert: [{ type: 'regex', value: 'Antwort:\\s*5\\b' }],
+  },
+  {
+    name: 'Maschinen',
+    prompt:
+      '5 Maschinen brauchen 5 Minuten für 5 Teile. Wie viele Minuten brauchen 100 Maschinen für 100 Teile? Schließe mit "Antwort: <Zahl>".',
+    assert: [{ type: 'regex', value: 'Antwort:\\s*5\\b' }],
+  },
+  {
+    name: 'Reihenfolge',
+    prompt:
+      'Anna ist älter als Ben. Ben ist älter als Carla. Dana ist jünger als Carla. Wer ist die zweitjüngste Person? Schließe mit "Antwort: <Name>".',
+    assert: [{ type: 'regex', value: 'Antwort:\\s*Carla' }],
+  },
+  {
+    name: 'Primzahlen',
+    prompt: 'Wie viele Primzahlen liegen zwischen 30 und 50? Schließe mit "Antwort: <Zahl>".',
+    assert: [{ type: 'regex', value: 'Antwort:\\s*5\\b' }],
+  },
+  {
+    name: 'Fahrzeit',
+    prompt: 'Ein Zug fährt um 9:40 Uhr ab und ist 2 Stunden 35 Minuten unterwegs. Wann kommt er an? Schließe mit "Antwort: HH:MM".',
+    assert: [{ type: 'regex', value: 'Antwort:\\s*12:15' }],
+  },
+];
+
 export default {
   type: 'thinking',
   label: 'Thinking vs. Non-Thinking',
@@ -49,42 +80,14 @@ export default {
     judgeModel: '',
     minAccuracy: 0,
     expectThinkingBetter: false,
-    cases: [
-      {
-        name: 'Schläger und Ball',
-        prompt:
-          'Ein Schläger und ein Ball kosten zusammen 1,10 €. Der Schläger kostet 1 € mehr als der Ball. Wie viel kostet der Ball in Cent? Schließe mit "Antwort: <Zahl>".',
-        assert: [{ type: 'regex', value: 'Antwort:\\s*5\\b' }],
-      },
-      {
-        name: 'Maschinen',
-        prompt:
-          '5 Maschinen brauchen 5 Minuten für 5 Teile. Wie viele Minuten brauchen 100 Maschinen für 100 Teile? Schließe mit "Antwort: <Zahl>".',
-        assert: [{ type: 'regex', value: 'Antwort:\\s*5\\b' }],
-      },
-      {
-        name: 'Reihenfolge',
-        prompt:
-          'Anna ist älter als Ben. Ben ist älter als Carla. Dana ist jünger als Carla. Wer ist die zweitjüngste Person? Schließe mit "Antwort: <Name>".',
-        assert: [{ type: 'regex', value: 'Antwort:\\s*Carla' }],
-      },
-      {
-        name: 'Primzahlen',
-        prompt: 'Wie viele Primzahlen liegen zwischen 30 und 50? Schließe mit "Antwort: <Zahl>".',
-        assert: [{ type: 'regex', value: 'Antwort:\\s*5\\b' }],
-      },
-      {
-        name: 'Fahrzeit',
-        prompt: 'Ein Zug fährt um 9:40 Uhr ab und ist 2 Stunden 35 Minuten unterwegs. Wann kommt er an? Schließe mit "Antwort: HH:MM".',
-        assert: [{ type: 'regex', value: 'Antwort:\\s*12:15' }],
-      },
-    ],
+    cases: [],
   },
   async run(ctx) {
     const c = ctx.config;
     const model = ctx.model();
     const llm = ctx.llm();
     const variants = [];
+    if (!c.cases?.length) throw new Error('Kein Datensatz zugeordnet');
 
     for (const variant of c.variants) {
       ctx.log('info', `Variante ${variant.name}: ${c.cases.length} Aufgaben`);
@@ -111,6 +114,7 @@ export default {
             reasoningTokens,
             reasoningEstimated: res.reasoningTokens === null && Boolean(res.reasoning),
             judge: c.judgeModel ? await judgeReasoning(ctx, ctx.resolveModel(c.judgeModel), testCase, res) : null,
+            prompt: testCase.prompt,
             answer: res.content.slice(0, 1000),
             reasoning: res.reasoning.slice(0, 2000),
           });

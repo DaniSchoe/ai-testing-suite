@@ -1,5 +1,5 @@
 import { avg, percentile } from '../runner/clients.js';
-import { checkThresholds } from './performance.js';
+import { capSamples, checkThresholds } from './performance.js';
 
 // Prompts unterschiedlicher Schwierigkeit: kurze Wissensfragen, Erklärungen und aufwendige Aufgaben mit langer Ausgabe.
 // Gleiche Anfragen würden von Prefix-Caches und Batching begünstigt und die Last unrealistisch niedrig erscheinen lassen.
@@ -45,7 +45,8 @@ export default {
     'Stufenweise steigende Parallelität mit wechselnden Prompts unterschiedlicher Schwierigkeit; misst Durchsatz, Fehlerquote, p95 und gedrosselte Anfragen (HTTP 429) je Stufe.',
   defaults: {
     model: '',
-    prompts: LOAD_PROMPTS,
+    // Prompt-Pool aus dem Datensatz der Vorlage
+    prompts: [],
     mix: DEFAULT_MIX,
     uniquePrefix: true,
     stages: [
@@ -53,12 +54,13 @@ export default {
       { durationS: 20, concurrency: 20 },
       { durationS: 20, concurrency: 50 },
     ],
-    thresholds: { error_rate: { max: 0.02 }, latency_ms_p95: { max: 30000 } },
+    thresholds: {},
   },
   async run(ctx) {
     const c = ctx.config;
     const model = ctx.model();
     const llm = ctx.llm();
+    if (!c.prompt && !c.prompts?.length) throw new Error('Kein Prompt-Datensatz zugeordnet');
     const stages = [];
     const allLatencies = [];
     let allErrors = 0;
@@ -141,6 +143,6 @@ export default {
     const violations = checkThresholds(metrics, c.thresholds);
     // Plattformmetriken während der Last (nur wenn Metrik-Endpunkte konfiguriert sind).
     const platform = sampler?.configured.length ? await sampler.stop() : null;
-    return { status: violations.length ? 'failed' : 'passed', model, metrics, details: { stages, violations, ...(platform ? { platform } : {}) } };
+    return { status: violations.length ? 'failed' : 'passed', model, metrics, details: { stages, violations, samples: { latency_ms: capSamples(allLatencies) }, ...(platform ? { platform } : {}) } };
   },
 };

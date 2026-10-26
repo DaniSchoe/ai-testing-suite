@@ -97,10 +97,15 @@ export class LlmClient {
     return { status: res.status, ok: res.ok, headers: res.headers, json, text };
   }
 
-  async models() {
+  // Rohe Modellliste (vLLM liefert hier auch root und max_model_len).
+  async modelList() {
     const res = await this.request('GET', this.flavor === 'claude' ? '/v1/models?limit=1000' : '/v1/models');
     if (!res.ok) throw new HttpError(res.status, res.text);
-    return (res.json?.data ?? []).map((m) => m.id);
+    return res.json?.data ?? [];
+  }
+
+  async models() {
+    return (await this.modelList()).map((m) => m.id);
   }
 
   async chat(body, extraHeaders) {

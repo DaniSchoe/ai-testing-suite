@@ -10,7 +10,8 @@ import accessRoutes from './routes/access.js';
 import apiKeyRoutes from './routes/apikeys.js';
 import adminRoutes from './routes/admin.js';
 import buildRoutes from './routes/builds.js';
-import platformRoutes from './routes/platform.js';
+import platformRoutes from './routes/platforms.js';
+import sizingRoutes from './routes/sizing.js';
 import runRoutes from './routes/runs.js';
 import testRoutes from './routes/tests.js';
 
@@ -49,8 +50,11 @@ export async function buildApp() {
 
   app.get('/api/me', async (request, reply) => {
     if (!request.user) return reply.code(401).send({ error: 'Nicht angemeldet', loginUrl: '/auth/login' });
-    const { id, username, email, display_name, roles, teams, permissions, is_admin, env_admin, disabled } = request.user;
-    return { id, username, email, display_name, roles, teams, permissions, is_admin, env_admin, disabled, authMode: config.auth.mode, version: config.appVersion };
+    const { id, username, email, display_name, roles, teams, permissions, is_admin, is_system_admin, env_admin, disabled, tenant, tenants } = request.user;
+    return {
+      id, username, email, display_name, roles, teams, permissions, is_admin, is_system_admin, env_admin, disabled,
+      tenant, tenants, authMode: config.auth.mode, version: config.appVersion,
+    };
   });
 
   await app.register(adminRoutes);
@@ -60,6 +64,7 @@ export async function buildApp() {
   await app.register(buildRoutes);
   await app.register(runRoutes);
   await app.register(platformRoutes);
+  await app.register(sizingRoutes);
 
   // Gebautes Frontend ausliefern; unbekannte Pfade gehen an die SPA.
   if (existsSync(publicDir)) {

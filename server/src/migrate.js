@@ -1,8 +1,11 @@
-// Führt alle noch nicht angewendeten SQL-Dateien aus migrations/ in Reihenfolge aus.
+// Führt alle noch nicht angewendeten SQL- und JS-Dateien (Datenmigrationen mit export up(client)) aus migrations/ in Reihenfolge aus
+// und gleicht danach die mitgelieferten Katalogeinhalte (Vorlagen, Pakete, Datensätze) ab.
 // Läuft in Kubernetes als Helm-Hook-Job vor jedem Upgrade.
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { syncOfficialCatalog } from './catalogSync.js';
 import { pool } from './db.js';
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
@@ -16,13 +19,13 @@ export async function migrate(log = console) {
       name text primary key, applied_at timestamptz not null default now())`);
     const { rows } = await client.query('select name from schema_migrations');
     const applied = new Set(rows.map((r) => r.name));
-    const files = (await readdir(dir)).filter((f) => f.endsWith('.sql')).sort();
+    const files = (await readdir(dir)).filter((f) => f.endsWith('.sql') || f.endsWith('.js')).sort();
     for (const file of files) {
       if (applied.has(file)) continue;
-      const sql = await readFile(path.join(dir, file), 'utf8');
       await client.query('begin');
       try {
-        await client.query(sql);
+        if (file.endsWith('.js')) await (await import(pathToFileURL(path.join(dir, file)).href)).up(client, { log });
+        else await client.query(await readFile(path.join(dir, file), 'utf8'));
         await client.query('insert into schema_migrations (name) values ($1)', [file]);
         await client.query('commit');
         log.info(`Migration angewendet: ${file}`);
@@ -30,6 +33,15 @@ export async function migrate(log = console) {
         await client.query('rollback');
         throw new Error(`Migration ${file} fehlgeschlagen: ${err.message}`);
       }
+    }
+    // Mitgelieferte Inhalte (idempotent) bei jedem Start abgleichen.
+    await client.query('begin');
+    try {
+      await syncOfficialCatalog(client);
+      await client.query('commit');
+    } catch (err) {
+      await client.query('rollback');
+      throw new Error(`Katalogabgleich fehlgeschlagen: ${err.message}`);
     }
   } finally {
     await client.query('select pg_advisory_unlock(727274)').catch(() => {});

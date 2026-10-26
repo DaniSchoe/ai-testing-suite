@@ -1,8 +1,10 @@
-// Benutzer, Rollen und Teams. Rollen und Berechtigungen werden hier gepflegt, nicht in Keycloak.
+// Mandanten, Mitglieder, Rollen und Teams. Rollen sind global definiert und werden je Mandant vergeben;
+// Rollen und Berechtigungen werden hier gepflegt, nicht in Keycloak.
 import { hasPermission, requirePermission } from '../auth.js';
+import { logAudit } from '../audit.js';
 import { config } from '../config.js';
 import { many, one, query, tx } from '../db.js';
-import { isEnvAdmin, PERMISSION_KEYS, PERMISSIONS } from '../permissions.js';
+import { isEnvAdmin, PERMISSION_KEYS, PERMISSIONS, SYSTEM_PERMISSIONS } from '../permissions.js';
 
 function badRequest(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode });
@@ -25,44 +27,90 @@ function assertCanGrant(actor, role) {
   if (missing.length) throw badRequest(`Rolle "${role.name}" enthält Berechtigungen, die du selbst nicht hast: ${missing.join(', ')}`, 403);
 }
 
-// Ohne ADMIN_EMAILS muss mindestens ein aktiver User die Rolle Administrator behalten.
-async function assertAdminRemains(c) {
+// Ohne ADMIN_EMAILS muss mindestens ein aktiver System-Administrator bleiben.
+async function assertSystemAdminRemains(c) {
   if (config.auth.adminEmails.length) return;
   const { rows } = await c.query(
     `select count(*)::int as n from users u join user_roles ur on ur.user_id = u.id join roles r on r.id = ur.role_id
-     where r.key = 'admin' and not u.disabled`,
+     where r.key = 'admin' and ur.tenant_id is null and not u.disabled`,
   );
-  if (rows[0].n === 0) throw badRequest('Mindestens ein aktiver Administrator muss bleiben (oder ADMIN_EMAILS setzen)');
+  if (rows[0].n === 0) throw badRequest('Mindestens ein aktiver System-Administrator muss bleiben (oder ADMIN_EMAILS setzen)');
 }
 
-const USER_SELECT = `
+// Mitglieder eines Mandanten mit ihren Rollen und Teams in diesem Mandanten.
+const MEMBER_SELECT = `
   select u.id, u.sub, u.username, u.email, u.email_verified, u.display_name, u.disabled, u.created_at, u.last_login_at,
     coalesce((select json_agg(json_build_object('id', r.id, 'key', r.key, 'name', r.name) order by r.name)
-              from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = u.id), '[]') as roles,
+              from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = u.id and ur.tenant_id = $1), '[]') as roles,
     coalesce((select json_agg(json_build_object('id', t.id, 'name', t.name) order by t.name)
-              from team_members tm join teams t on t.id = tm.team_id where tm.user_id = u.id), '[]') as teams,
-    (select count(*)::int from runs r where r.user_id = u.id) as runs,
-    (select max(created_at) from runs r where r.user_id = u.id) as last_run_at
-  from users u`;
+              from team_members tm join teams t on t.id = tm.team_id where tm.user_id = u.id and t.tenant_id = $1), '[]') as teams,
+    (select count(*)::int from runs r where r.user_id = u.id and r.tenant_id = $1) as runs,
+    (select max(created_at) from runs r where r.user_id = u.id and r.tenant_id = $1) as last_run_at
+  from users u
+  where exists (select 1 from user_roles ur where ur.user_id = u.id and ur.tenant_id = $1)`;
 
 function publicUser(u) {
-  return { ...u, pending: !u.sub, env_admin: isEnvAdmin(u, config.auth.adminEmails) };
+  return { ...u, pending: !u.sub, env_admin: isEnvAdmin(u, config.auth.adminEmails), service: Boolean(u.sub?.startsWith('service:')) };
 }
 
 export default async function accessRoutes(app) {
   const viewer = { preHandler: requirePermission('suite.view') };
-  const userAdmin = { preHandler: requirePermission('users.manage') };
+  const memberAdmin = { preHandler: requirePermission('users.manage') };
   const roleAdmin = { preHandler: requirePermission('roles.manage') };
   const teamAdmin = { preHandler: requirePermission('teams.manage') };
+  const tenantAdmin = { preHandler: requirePermission('tenants.manage') };
 
-  // Namen aller User, z. B. zur Auswahl eines Maintainers. Keine E-Mails.
-  app.get('/api/user-directory', viewer, async () =>
-    many(`select id, coalesce(display_name, username, email) as name from users where sub is not null and not disabled order by 2`),
+  // Namen der Mitglieder des Mandanten, z. B. zur Auswahl eines Maintainers oder Owners. Keine E-Mails.
+  app.get('/api/user-directory', viewer, async (request) =>
+    many(
+      `select u.id, coalesce(u.display_name, u.username, u.email) as name from users u
+       where u.sub is not null and not u.disabled and exists (select 1 from user_roles ur where ur.user_id = u.id and ur.tenant_id = $1)
+       order by 2`,
+      [request.user.tenant_id],
+    ),
   );
 
-  app.get('/api/permissions', { preHandler: requireAny('roles.manage', 'users.manage') }, async () => PERMISSIONS);
+  app.get('/api/permissions', { preHandler: requireAny('roles.manage', 'users.manage') }, async () =>
+    PERMISSIONS.map((p) => ({ ...p, system: SYSTEM_PERMISSIONS.includes(p.key) })),
+  );
 
-  // --- Rollen ---
+  // --- Mandanten ---
+  app.get('/api/tenants', viewer, async (request) => {
+    if (request.user.is_system_admin && hasPermission(request.user, 'tenants.manage')) {
+      return many(
+        `select t.*, (select count(*)::int from platforms p where p.tenant_id = t.id) as platforms,
+           (select count(distinct ur.user_id)::int from user_roles ur where ur.tenant_id = t.id) as members
+         from tenants t order by t.name`,
+      );
+    }
+    return request.user.tenants;
+  });
+
+  async function saveTenant(request, id) {
+    const b = request.body ?? {};
+    if (!b.name?.trim()) throw badRequest('Name fehlt');
+    const key = (b.key ?? b.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+    if (!key) throw badRequest('Kürzel fehlt');
+    const row = id
+      ? await one('update tenants set name = $2, description = $3 where id = $1 returning *', [id, b.name.trim(), b.description ?? null])
+      : await one('insert into tenants (key, name, description) values ($1, $2, $3) returning *', [key, b.name.trim(), b.description ?? null]);
+    if (!row) throw badRequest('Mandant nicht gefunden', 404);
+    await logAudit(request, id ? 'tenant.update' : 'tenant.create', 'tenant', row.id, { name: row.name });
+    return row;
+  }
+
+  app.post('/api/tenants', tenantAdmin, async (request) => saveTenant(request, null));
+  app.put('/api/tenants/:id', tenantAdmin, async (request) => saveTenant(request, request.params.id));
+  app.delete('/api/tenants/:id', tenantAdmin, async (request) => {
+    const t = await one('select key from tenants where id = $1', [request.params.id]);
+    if (!t) return { ok: true };
+    if (t.key === 'default') throw badRequest('Der Standard-Mandant kann nicht gelöscht werden');
+    await query('delete from tenants where id = $1', [request.params.id]);
+    await logAudit(request, 'tenant.delete', 'tenant', request.params.id);
+    return { ok: true };
+  });
+
+  // --- Rollen (global definiert) ---
   app.get('/api/roles', { preHandler: requireAny('roles.manage', 'users.manage') }, async () => {
     const rows = await many(
       `select r.*, (select count(*)::int from user_roles ur where ur.role_id = r.id) as users
@@ -81,7 +129,7 @@ export default async function accessRoutes(app) {
     if (id && !existing) throw badRequest('Rolle nicht gefunden', 404);
     const isAdminRole = existing?.key === 'admin';
     if (!isAdminRole) assertCanGrant(request.user, { name: b.name, permissions });
-    return tx(async (c) => {
+    const role = await tx(async (c) => {
       if (b.is_default) await c.query('update roles set is_default = false where is_default');
       const { rows } = id
         ? await c.query(
@@ -96,6 +144,8 @@ export default async function accessRoutes(app) {
           );
       return rows[0];
     });
+    await logAudit(request, id ? 'role.update' : 'role.create', 'role', role.id, { name: role.name, permissions });
+    return role;
   }
 
   app.post('/api/roles', roleAdmin, async (request) => saveRole(request, null));
@@ -104,101 +154,148 @@ export default async function accessRoutes(app) {
     const role = await one('select key from roles where id = $1', [request.params.id]);
     if (role?.key === 'admin') throw badRequest('Die Rolle Administrator kann nicht gelöscht werden');
     await query('delete from roles where id = $1', [request.params.id]);
+    await logAudit(request, 'role.delete', 'role', request.params.id);
     return { ok: true };
   });
 
-  // --- Benutzer ---
-  app.get('/api/users', { preHandler: requireAny('users.manage', 'teams.manage') }, async () =>
-    (await many(`${USER_SELECT} order by u.last_login_at desc nulls last, u.email`)).map(publicUser),
+  // --- Mitglieder des Mandanten ---
+  app.get('/api/members', { preHandler: requireAny('users.manage', 'teams.manage') }, async (request) =>
+    (await many(`${MEMBER_SELECT} order by u.last_login_at desc nulls last, u.email`, [request.user.tenant_id])).map(publicUser),
   );
 
-  async function setUserRoles(c, actor, userId, roleIds) {
+  // Rollen des Users im aktuellen Mandanten setzen. Wer eine Rolle nicht vergeben darf, darf sie auch nicht entziehen.
+  async function setMemberRoles(c, actor, userId, tenantId, roleIds) {
     const roles = (await c.query('select * from roles where id = any($1)', [roleIds])).rows;
-    const current = (await c.query('select r.* from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = $1', [userId])).rows;
+    const current = (
+      await c.query('select r.* from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = $1 and ur.tenant_id = $2', [userId, tenantId])
+    ).rows;
     const wanted = new Set(roles.map((r) => r.id));
-    // Hinzufügen und Entfernen prüfen: wer eine Rolle nicht vergeben darf, darf sie auch nicht entziehen.
     for (const r of roles.filter((r) => !current.some((x) => x.id === r.id))) assertCanGrant(actor, r);
     for (const r of current.filter((r) => !wanted.has(r.id))) assertCanGrant(actor, r);
-    await c.query('delete from user_roles where user_id = $1 and not (role_id = any($2))', [userId, [...wanted]]);
-    await c.query(
-      'insert into user_roles (user_id, role_id) select $1, unnest($2::uuid[]) on conflict do nothing',
-      [userId, [...wanted]],
-    );
+    await c.query('delete from user_roles where user_id = $1 and tenant_id = $2 and not (role_id = any($3))', [userId, tenantId, [...wanted]]);
+    await c.query('insert into user_roles (user_id, role_id, tenant_id) select $1, unnest($3::uuid[]), $2 on conflict do nothing', [
+      userId,
+      tenantId,
+      [...wanted],
+    ]);
   }
 
-  // Vorab anlegen: Rollen und Teams gelten ab dem ersten Login mit dieser (bestätigten) E-Mail.
-  app.post('/api/users', userAdmin, async (request) => {
+  async function setMemberTeams(c, userId, tenantId, teamIds) {
+    const own = (await c.query('select id from teams where tenant_id = $1 and id = any($2::uuid[])', [tenantId, teamIds])).rows.map((r) => r.id);
+    await c.query(
+      `delete from team_members tm using teams t where tm.team_id = t.id and t.tenant_id = $2 and tm.user_id = $1 and not (tm.team_id = any($3::uuid[]))`,
+      [userId, tenantId, own],
+    );
+    await c.query('insert into team_members (team_id, user_id) select unnest($2::uuid[]), $1 on conflict do nothing', [userId, own]);
+  }
+
+  // Mitglied hinzufügen: legt den User vorab an (Rollen gelten ab dem ersten Login mit dieser bestätigten E-Mail) oder nimmt einen bestehenden auf.
+  app.post('/api/members', memberAdmin, async (request) => {
     const b = request.body ?? {};
     const email = b.email?.trim().toLowerCase();
     if (!email || !/^[^\s@]+@[^\s@]+$/.test(email)) throw badRequest('Gültige E-Mail-Adresse fehlt');
-    if (await one('select 1 from users where lower(email) = $1', [email])) throw badRequest('Ein User mit dieser E-Mail existiert bereits');
+    const tenantId = request.user.tenant_id;
     const id = await tx(async (c) => {
-      const { rows } = await c.query(
-        `insert into users (username, email, display_name) values ($1, $1, $2) returning id`,
-        [email, b.display_name?.trim() || null],
-      );
-      const userId = rows[0].id;
-      const roleIds = b.roleIds ?? (await c.query('select id from roles where is_default')).rows.map((r) => r.id);
-      await setUserRoles(c, request.user, userId, roleIds);
-      if (b.teamIds?.length) {
-        await c.query('insert into team_members (team_id, user_id) select unnest($2::uuid[]), $1', [userId, b.teamIds]);
+      let user = (await c.query('select id from users where lower(email) = $1', [email])).rows[0];
+      if (!user) {
+        user = (await c.query(`insert into users (username, email, display_name) values ($1, $1, $2) returning id`, [email, b.display_name?.trim() || null])).rows[0];
       }
-      return userId;
+      const roleIds = b.roleIds ?? (await c.query('select id from roles where is_default')).rows.map((r) => r.id);
+      await setMemberRoles(c, request.user, user.id, tenantId, roleIds);
+      if (b.teamIds?.length) await setMemberTeams(c, user.id, tenantId, b.teamIds);
+      return user.id;
     });
-    return publicUser(await one(`${USER_SELECT} where u.id = $1`, [id]));
+    await logAudit(request, 'member.add', 'user', id, { email });
+    return publicUser(await one(`${MEMBER_SELECT} and u.id = $2`, [tenantId, id]));
   });
 
-  app.put('/api/users/:id', userAdmin, async (request) => {
+  app.put('/api/members/:id', memberAdmin, async (request) => {
     const b = request.body ?? {};
     const userId = request.params.id;
-    if (!(await one('select 1 from users where id = $1', [userId]))) throw badRequest('Benutzer nicht gefunden', 404);
-    if (userId === request.user.id && b.disabled) throw badRequest('Du kannst dich nicht selbst sperren');
+    const tenantId = request.user.tenant_id;
+    if (!(await one(`${MEMBER_SELECT} and u.id = $2`, [tenantId, userId]))) throw badRequest('Mitglied nicht gefunden', 404);
     await tx(async (c) => {
-      if (b.roleIds) await setUserRoles(c, request.user, userId, b.roleIds);
-      if (b.disabled !== undefined) await c.query('update users set disabled = $2 where id = $1', [userId, Boolean(b.disabled)]);
+      if (b.roleIds) await setMemberRoles(c, request.user, userId, tenantId, b.roleIds);
       if (b.display_name !== undefined) await c.query('update users set display_name = $2 where id = $1', [userId, b.display_name?.trim() || null]);
-      if (b.teamIds) {
-        await c.query('delete from team_members where user_id = $1 and not (team_id = any($2::uuid[]))', [userId, b.teamIds]);
-        await c.query('insert into team_members (team_id, user_id) select unnest($2::uuid[]), $1 on conflict do nothing', [userId, b.teamIds]);
-      }
-      await assertAdminRemains(c);
+      if (b.teamIds) await setMemberTeams(c, userId, tenantId, b.teamIds);
     });
-    return publicUser(await one(`${USER_SELECT} where u.id = $1`, [userId]));
+    await logAudit(request, 'member.update', 'user', userId, { roleIds: b.roleIds, teamIds: b.teamIds });
+    return publicUser(await one(`${MEMBER_SELECT} and u.id = $2`, [tenantId, userId]));
   });
 
-  // Nur vorab angelegte User löschen; angemeldete User werden gesperrt, damit ihre Historie bleibt.
-  app.delete('/api/users/:id', userAdmin, async (request) => {
-    const user = await one('select sub from users where id = $1', [request.params.id]);
-    if (user?.sub) throw badRequest('Angemeldete Benutzer können nur gesperrt werden');
-    await query('delete from users where id = $1 and sub is null', [request.params.id]);
+  // Aus dem Mandanten entfernen (Rollen und Teams dieses Mandanten); der User selbst bleibt erhalten.
+  app.delete('/api/members/:id', memberAdmin, async (request) => {
+    const userId = request.params.id;
+    if (userId === request.user.id) throw badRequest('Du kannst dich nicht selbst entfernen');
+    const tenantId = request.user.tenant_id;
+    await tx(async (c) => {
+      const roles = (await c.query('select r.* from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = $1 and ur.tenant_id = $2', [userId, tenantId])).rows;
+      for (const r of roles) assertCanGrant(request.user, r);
+      await c.query('delete from user_roles where user_id = $1 and tenant_id = $2', [userId, tenantId]);
+      await c.query('delete from team_members tm using teams t where tm.team_id = t.id and t.tenant_id = $2 and tm.user_id = $1', [userId, tenantId]);
+    });
+    await logAudit(request, 'member.remove', 'user', userId);
     return { ok: true };
   });
 
-  // --- Teams ---
-  app.get('/api/teams', viewer, async () =>
+  // --- Alle Benutzer und System-Administratoren (global) ---
+  app.get('/api/users', roleAdmin, async () =>
+    many(
+      `select u.id, u.sub, u.username, u.email, u.display_name, u.disabled, u.last_login_at,
+         exists (select 1 from user_roles ur join roles r on r.id = ur.role_id where ur.user_id = u.id and r.key = 'admin' and ur.tenant_id is null) as system_admin,
+         coalesce((select json_agg(json_build_object('tenant', t.name, 'role', r.name) order by t.name, r.name)
+                   from user_roles ur join roles r on r.id = ur.role_id join tenants t on t.id = ur.tenant_id where ur.user_id = u.id), '[]') as grants
+       from users u where u.sub is null or u.sub not like 'service:%' order by u.last_login_at desc nulls last, u.email`,
+    ),
+  );
+
+  app.put('/api/users/:id', roleAdmin, async (request) => {
+    const b = request.body ?? {};
+    const userId = request.params.id;
+    if (!(await one('select 1 from users where id = $1', [userId]))) throw badRequest('Benutzer nicht gefunden', 404);
+    if (userId === request.user.id && (b.disabled || b.system_admin === false)) throw badRequest('Du kannst dir die eigenen Rechte nicht entziehen');
+    await tx(async (c) => {
+      if (b.disabled !== undefined) await c.query('update users set disabled = $2 where id = $1', [userId, Boolean(b.disabled)]);
+      if (b.system_admin !== undefined) {
+        if (b.system_admin) {
+          await c.query(
+            `insert into user_roles (user_id, role_id, tenant_id) select $1, id, null from roles where key = 'admin' on conflict do nothing`,
+            [userId],
+          );
+        } else {
+          await c.query(`delete from user_roles ur using roles r where ur.role_id = r.id and r.key = 'admin' and ur.tenant_id is null and ur.user_id = $1`, [userId]);
+        }
+      }
+      await assertSystemAdminRemains(c);
+    });
+    await logAudit(request, 'user.update', 'user', userId, b);
+    return { ok: true };
+  });
+
+  // --- Teams (je Mandant) ---
+  app.get('/api/teams', viewer, async (request) =>
     many(
       `select t.*,
          coalesce((select json_agg(json_build_object('id', u.id, 'display_name', u.display_name, 'username', u.username, 'email', u.email)
                    order by coalesce(u.display_name, u.username))
                    from team_members tm join users u on u.id = tm.user_id where tm.team_id = t.id), '[]') as members
-       from teams t order by t.name`,
+       from teams t where t.tenant_id = $1 order by t.name`,
+      [request.user.tenant_id],
     ),
   );
 
   async function saveTeam(request, id) {
     const b = request.body ?? {};
     if (!b.name?.trim()) throw badRequest('Name fehlt');
+    const tenantId = request.user.tenant_id;
     return tx(async (c) => {
       const { rows } = id
-        ? await c.query('update teams set name = $2, description = $3 where id = $1 returning *', [id, b.name.trim(), b.description ?? null])
-        : await c.query('insert into teams (name, description) values ($1, $2) returning *', [b.name.trim(), b.description ?? null]);
+        ? await c.query('update teams set name = $2, description = $3 where id = $1 and tenant_id = $4 returning *', [id, b.name.trim(), b.description ?? null, tenantId])
+        : await c.query('insert into teams (name, description, tenant_id) values ($1, $2, $3) returning *', [b.name.trim(), b.description ?? null, tenantId]);
       if (!rows[0]) throw badRequest('Team nicht gefunden', 404);
       if (b.memberIds) {
         await c.query('delete from team_members where team_id = $1 and not (user_id = any($2::uuid[]))', [rows[0].id, b.memberIds]);
-        await c.query('insert into team_members (team_id, user_id) select $1, unnest($2::uuid[]) on conflict do nothing', [
-          rows[0].id,
-          b.memberIds,
-        ]);
+        await c.query('insert into team_members (team_id, user_id) select $1, unnest($2::uuid[]) on conflict do nothing', [rows[0].id, b.memberIds]);
       }
       return rows[0];
     });
@@ -207,7 +304,7 @@ export default async function accessRoutes(app) {
   app.post('/api/teams', teamAdmin, async (request) => saveTeam(request, null));
   app.put('/api/teams/:id', teamAdmin, async (request) => saveTeam(request, request.params.id));
   app.delete('/api/teams/:id', teamAdmin, async (request) => {
-    await query('delete from teams where id = $1', [request.params.id]);
+    await query('delete from teams where id = $1 and tenant_id = $2', [request.params.id, request.user.tenant_id]);
     return { ok: true };
   });
 }

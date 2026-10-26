@@ -1,7 +1,7 @@
 import { avg, percentile } from '../runner/clients.js';
 
 // Führt `count` Streaming-Requests mit gegebener Parallelität aus und misst Latenzen.
-export async function measureStreaming(ctx, { model, prompt, maxTokens, count, concurrency }) {
+export async function measureStreaming(ctx, { model, prompt, prompts, maxTokens, count, concurrency }) {
   const samples = [];
   const errors = [];
   let next = 0;
@@ -9,9 +9,11 @@ export async function measureStreaming(ctx, { model, prompt, maxTokens, count, c
   async function worker() {
     while (next < count && !ctx.signal.aborted) {
       next += 1;
+      // Mit Prompt-Pool (Datensatz) reihum, sonst immer derselbe Prompt.
+      const item = prompts?.length ? prompts[(next - 1) % prompts.length] : { prompt, maxTokens };
       try {
         samples.push(
-          await llm.chatStream({ model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
+          await llm.chatStream({ model, max_tokens: item.maxTokens ?? maxTokens, messages: [{ role: 'user', content: item.prompt }] }),
         );
       } catch (err) {
         errors.push(err.status ? `HTTP ${err.status}` : err.message);
@@ -62,6 +64,14 @@ function round(v) {
   return Math.round(v * 100) / 100;
 }
 
+// Rohwerte begrenzen (gleichmäßig ausdünnen), damit Ergebnisse klein bleiben.
+export function capSamples(values, max = 1000) {
+  const v = values.filter((x) => typeof x === 'number').map((x) => Math.round(x * 10) / 10);
+  if (v.length <= max) return v;
+  const step = v.length / max;
+  return Array.from({ length: max }, (_, i) => v[Math.floor(i * step)]);
+}
+
 export default {
   type: 'performance',
   label: 'Performance',
@@ -72,15 +82,19 @@ export default {
     maxTokens: 128,
     requests: 20,
     concurrency: 4,
-    thresholds: { ttft_ms_p95: { max: 1500 }, error_rate: { max: 0.05 } },
+    // Optionaler Prompt-Pool aus einem Datensatz; ohne Pool gilt "prompt".
+    prompts: [],
+    // Schwellwerte legt die Prüfung fest; ohne Angabe wird nur gemessen.
+    thresholds: {},
   },
   async run(ctx) {
     const c = ctx.config;
     const model = ctx.model();
     ctx.log('info', `Starte ${c.requests} Requests mit Parallelität ${c.concurrency} gegen ${model}`);
-    const { metrics, errors } = await measureStreaming(ctx, {
+    const { metrics, errors, samples } = await measureStreaming(ctx, {
       model,
       prompt: c.prompt,
+      prompts: c.prompts,
       maxTokens: c.maxTokens,
       count: c.requests,
       concurrency: c.concurrency,
@@ -91,7 +105,8 @@ export default {
       status: violations.length ? 'failed' : 'passed',
       model,
       metrics,
-      details: { violations },
+      // Rohwerte für Perzentile über mehrere Läufe (Dashboard) statt gemittelter Perzentile.
+      details: { violations, samples: { ttft_ms: capSamples(samples.map((x) => x.ttftMs)), latency_ms: capSamples(samples.map((x) => x.totalMs)) } },
     };
   },
 };

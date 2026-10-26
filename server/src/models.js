@@ -7,6 +7,16 @@ import { LlmClient } from './runner/clients.js';
 export const ENDPOINT_SELECT = `select e.*, k.secret_enc as api_key_enc, k.name as api_key_name
   from endpoints e left join api_keys k on k.id = e.api_key_id`;
 
+// Erste Annahme zu den Fähigkeiten eines neu entdeckten Modells anhand des Namens. Administratoren korrigieren sie im Modellkatalog.
+export function guessCapabilities(name) {
+  const caps = [];
+  if (/embed|rerank|whisper|tts/i.test(name)) return /embed/i.test(name) ? ['embeddings'] : [];
+  caps.push('tools', 'json');
+  if (/(vl|vision|llava|pixtral|gpt-4o|gpt-4\.1|gpt-5|claude|gemini|gemma-?3|qwen.*vl|internvl|minicpm-v)/i.test(name)) caps.push('vision');
+  if (/(think|reason|\br1\b|qwq|\bo[134]\b|qwen3|gpt-oss)/i.test(name)) caps.push('reasoning');
+  return caps;
+}
+
 // Auth-Header je nach API-Art: OpenAI-kompatibel (Bearer) oder Claude (x-api-key).
 export function authHeaders(flavor, secret) {
   if (!secret) return {};
@@ -29,15 +39,21 @@ export async function listEndpointModels(endpointId) {
 // /v1/models abfragen und den Katalog abgleichen. Nicht mehr gelistete Modelle bleiben mit
 // available = false erhalten, damit Aliase und Historie nicht verloren gehen.
 export async function syncEndpointModels(endpoint) {
-  if (endpoint.kind === 'mcp') return [];
+  if (!['ai_proxy', 'llm'].includes(endpoint.kind)) return [];
   try {
-    const names = await llmClientFor(endpoint, { timeoutMs: 15_000 }).models();
+    const list = await llmClientFor(endpoint, { timeoutMs: 15_000 }).modelList();
+    const names = list.map((m) => m.id);
     await query(
-      `insert into endpoint_models (endpoint_id, name, source, available, last_seen_at)
-       select $1, unnest($2::text[]), 'discovered', true, now()
+      `insert into endpoint_models (endpoint_id, name, source, available, last_seen_at, capabilities)
+       select $1, x.name, 'discovered', true, now(), x.caps from jsonb_to_recordset($2::jsonb) as x(name text, caps text[])
        on conflict (endpoint_id, name) do update set available = true, last_seen_at = now()`,
-      [endpoint.id, names],
+      [endpoint.id, JSON.stringify(names.map((name) => ({ name, caps: guessCapabilities(name) })))],
     );
+    // Rohdaten des Servers (z. B. vLLM: root, max_model_len) für Snapshot und Katalog merken.
+    for (const m of list) {
+      const info = { root: m.root ?? null, max_model_len: m.max_model_len ?? null, owned_by: m.owned_by ?? null };
+      await query('update endpoint_models set info = $3 where endpoint_id = $1 and name = $2', [endpoint.id, m.id, JSON.stringify(info)]);
+    }
     await query(
       `update endpoint_models set available = false
        where endpoint_id = $1 and source = 'discovered' and not (name = any($2::text[]))`,
@@ -52,7 +68,7 @@ export async function syncEndpointModels(endpoint) {
 }
 
 export async function syncAllModels(log = console) {
-  const endpoints = await many(`${ENDPOINT_SELECT} where e.enabled and e.auto_discover and e.kind <> 'mcp'`);
+  const endpoints = await many(`${ENDPOINT_SELECT} where e.enabled and e.auto_discover and e.kind in ('ai_proxy', 'llm')`);
   for (const e of endpoints) {
     try {
       const names = await syncEndpointModels(e);
