@@ -18,6 +18,7 @@ Entwicklung im Dashboard.
 - Dashboard **global, pro Team oder nutzerspezifisch** mit Filter für Modelle und Endpoints (Standard nur Prod, Dev gezielt für Administratoren, Mehrfachauswahl wird summiert), Gauge für Genauigkeit/Qualität, Lastdiagramm (Antwortzeit × parallele Anfragen) und Netzdiagramm je Modell, Detailtabelle zum Modellprofil und Kacheln für das jeweils beste Modell; Modelldetailseite als Beta-Platzhalter
 - **Historie**: Testläufe als aufklappbare Bündel mit bestanden/fehlgeschlagen, Filter nach Team, Endpoint und Modell (vom Dashboard übernommen)
 - **KI-Analyse** nach jedem Lauf (Modell im Modellkatalog wählbar), Testarten Qualität (fünf Stufen), Coding und OCR (Rechnung und Prüfbericht als Bild)
+- **Plattform**: interaktiver Cluster-Builder (GPUs, NVLink, Inferenzserver, AI-Gateway) mit geschätztem VRAM, Bandbreite, passenden Modellen, Nutzerkapazität und Verhalten unter Last; Live-Metriken (DCGM, vLLM, LiteLLM) und Schätzung gegen Lasttest-Messung
 - **Hell-, Dunkel- und System-Modus**
 - **Helm-Chart** für Kubernetes
 

@@ -87,4 +87,14 @@ const byModel = await dash(admin, `&models=${encodeURIComponent(model)}`);
 assert.ok(byModel.kpis.results > 0 && byModel.kpis.results <= full.kpis.results);
 assert.ok(byModel.profiles.every((m) => m.model === model), 'Tabelle zeigt nur das gewählte Modell');
 step('Mehrfachauswahl wird summiert');
+
+// Plattform: Konfiguration, Live-Metriken, Validierung und Messung aus dem Lasttest.
+const plat = (await admin('/api/platform')).data;
+assert.ok(plat.config.cluster.gpu_count >= 1 && plat.config.metrics.gpu.urls.length > 0, 'Plattformkonfiguration mit Metrik-Endpunkten');
+const live = (await admin('/api/platform/live')).data;
+assert.ok(live.components.gpu.values.util_pct != null && live.components.inference.values.running != null, 'Live-Metriken gelesen');
+assert.equal((await admin('/api/platform', { method: 'PUT', body: { cluster: { ...plat.config.cluster, gpu_count: 0 } } })).status, 400, 'Ungültige GPU-Anzahl abgelehnt');
+const lr = (await admin('/api/platform/load-results')).data;
+assert.ok(lr.some((x) => x.platform?.gpu?.util_pct_peak != null), 'Lasttest enthält Plattformmessung');
+step('Plattform: Konfiguration, Live-Metriken, Lasttest-Messung');
 console.log('Dashboard-Prüfung erfolgreich');

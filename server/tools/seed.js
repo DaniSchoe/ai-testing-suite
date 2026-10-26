@@ -59,6 +59,13 @@ await query(
   [JSON.stringify({ endpoint_id: gateway.id, model: 'mock-large' })],
 );
 
+// Plattform: Metrik-Endpunkte des Mock-Servers, damit Lasttests Messwerte der Komponenten erfassen.
+const mockBase = MOCK_URL;
+await query(
+  `insert into platform_config (id, config) values (1, $1) on conflict (id) do nothing`,
+  [JSON.stringify({ metrics: Object.fromEntries(['gpu', 'inference', 'gateway'].map((k) => [k, { urls: [`${mockBase}/metrics/${k}`], api_key_id: null }])) })],
+);
+
 const tests = [
   { name: 'Smoke: Gateway', type: 'smoke', endpoint: gateway, config: {} },
   { name: 'Performance: mock-small', type: 'performance', endpoint: gateway, config: { model: 'mock-small', requests: 12, concurrency: 3 } },

@@ -63,10 +63,13 @@ export default {
     const allLatencies = [];
     let allErrors = 0;
     let allRequests = 0;
+    const sampler = await ctx.metricsSampler?.();
+    sampler?.start();
 
     for (const [i, stage] of c.stages.entries()) {
       ctx.log('info', `Stufe ${i + 1}: ${stage.concurrency} parallel für ${stage.durationS}s`);
-      const deadline = Date.now() + stage.durationS * 1000;
+      const stageStart = Date.now();
+      const deadline = stageStart + stage.durationS * 1000;
       const latencies = [];
       const byDifficulty = {};
       const statusCodes = {};
@@ -101,6 +104,8 @@ export default {
       const requests = latencies.length + errors;
       stages.push({
         stage: i + 1,
+        t_start: stageStart,
+        t_end: Date.now(),
         concurrency: stage.concurrency,
         requests,
         errors,
@@ -134,6 +139,8 @@ export default {
       rate_limited: stages.reduce((n, s) => n + s.rate_limited, 0),
     };
     const violations = checkThresholds(metrics, c.thresholds);
-    return { status: violations.length ? 'failed' : 'passed', model, metrics, details: { stages, violations } };
+    // Plattformmetriken während der Last (nur wenn Metrik-Endpunkte konfiguriert sind).
+    const platform = sampler?.configured.length ? await sampler.stop() : null;
+    return { status: violations.length ? 'failed' : 'passed', model, metrics, details: { stages, violations, ...(platform ? { platform } : {}) } };
   },
 };

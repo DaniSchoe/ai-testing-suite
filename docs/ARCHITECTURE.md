@@ -148,6 +148,24 @@ Empfehlungen. Der Worker schickt dafür eine verkürzte Fassung der Ergebnisse (
 den Text in `runs.analysis` (`analysis_status`: pending, done, error, skipped). Ein Fehler dabei lässt den Lauf
 nie scheitern; `POST /api/runs/:id/analysis` erzeugt die Analyse neu.
 
+## Plattform
+
+Die Seite „Plattform“ (`web/src/pages/Platform.jsx`) beschreibt den Cluster: GPU-Typ und -Anzahl, NVLink, Inferenzserver
+(Tensor-Parallelität, `max_num_seqs`) und AI-Gateway. Die Konfiguration liegt in `platform_config` (eine Zeile, nur
+Administratoren ändern sie, alle mit `suite.view` lesen).
+
+**Rechenmodell** (`web/src/platformModel.js`, alles Schätzungen): VRAM und Bandbreite sind Summen der Datenblattwerte;
+ein Modell passt, wenn Gewichte plus KV-Cache in den nutzbaren Speicher (`gpu_memory_utilization`) passen. Die
+Token-Rate je Anfrage ergibt sich aus dem Roofline-Ansatz (Zeit für Gewichte lesen gegen Rechenzeit, bei MoE nur die
+berührten Experten), mit einem Abschlag für Tensor-Parallelität (kleiner ohne NVLink). Gleichzeitige Anfragen sind durch
+KV-Cache und `max_num_seqs` begrenzt; Nutzer ergeben sich aus Ziel-Tempo, Antwortlänge und Pause zwischen Anfragen.
+Eigene Modelldaten (JSON) werden lokal im Browser gehalten.
+
+**Messung**: Je Komponente lassen sich Prometheus-Endpunkte hinterlegen (`platformMetrics.js`, DCGM-Namen laut
+NVIDIA-Doku, vLLM, LiteLLM). Die Seite zeigt Live-Werte (`/api/platform/live`, 5 s Cache). Der Lasttest fragt sie alle
+5 s ab und speichert Spitzen und Mittel in `results.details.platform`; `/api/platform/load-results` vergleicht sie mit
+der Schätzung. Metriknamen können je Version abweichen, fehlende Werte werden ausgeblendet.
+
 ## Test-Builder
 
 Ein Test (`tests`) bündelt beliebig viele Testarten für einen Endpoint. Beim Speichern erzeugt

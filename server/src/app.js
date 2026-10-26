@@ -10,6 +10,7 @@ import accessRoutes from './routes/access.js';
 import apiKeyRoutes from './routes/apikeys.js';
 import adminRoutes from './routes/admin.js';
 import buildRoutes from './routes/builds.js';
+import platformRoutes from './routes/platform.js';
 import runRoutes from './routes/runs.js';
 import testRoutes from './routes/tests.js';
 
@@ -57,6 +58,7 @@ export async function buildApp() {
   await app.register(testRoutes);
   await app.register(buildRoutes);
   await app.register(runRoutes);
+  await app.register(platformRoutes);
 
   // Gebautes Frontend ausliefern; unbekannte Pfade gehen an die SPA.
   if (existsSync(publicDir)) {

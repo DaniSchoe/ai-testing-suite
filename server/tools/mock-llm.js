@@ -133,6 +133,17 @@ async function readBody(req) {
 }
 
 async function chat(req, res, who) {
+  inflight += 1;
+  stats.requests += 1;
+  stats.tokens += 40;
+  try {
+    return await chatInner(req, res, who);
+  } finally {
+    inflight -= 1;
+  }
+}
+
+async function chatInner(req, res, who) {
   const body = await readBody(req);
   if (!who.models.includes(body.model)) {
     return send(res, 401, { error: { message: `key not allowed to access model ${body.model}`, type: 'auth_error' } });
@@ -239,6 +250,35 @@ async function mcp(req, res, who) {
 }
 
 // Minimaler Anthropic-Mock (Claude-Flavor): x-api-key, /v1/models und /v1/messages inkl. Streaming.
+// Prometheus-Metriken wie DCGM-Exporter, vLLM und LiteLLM; die Last folgt den laufenden Anfragen.
+let inflight = 0;
+function metrics(res, kind) {
+  const load = Math.min(1, inflight / 8);
+  const jitter = () => Math.random() * 4;
+  const gpu = (i) => `{gpu="${i}",Hostname="mock-node"}`;
+  const lines = {
+    gpu: [0, 1, 2, 3].flatMap((i) => [
+      `DCGM_FI_DEV_GPU_UTIL${gpu(i)} ${Math.round(8 + load * 85 + jitter())}`,
+      `DCGM_FI_DEV_MEM_COPY_UTIL${gpu(i)} ${Math.round(5 + load * 60 + jitter())}`,
+      `DCGM_FI_DEV_FB_USED${gpu(i)} ${Math.round(41000 + load * 18000)}`,
+      `DCGM_FI_DEV_FB_FREE${gpu(i)} ${Math.round(40000 - load * 18000)}`,
+      `DCGM_FI_DEV_POWER_USAGE${gpu(i)} ${Math.round(120 + load * 520)}`,
+      `DCGM_FI_DEV_GPU_TEMP${gpu(i)} ${Math.round(38 + load * 32)}`,
+    ]),
+    inference: [
+      `vllm:num_requests_running ${inflight}`,
+      `vllm:num_requests_waiting ${Math.max(0, inflight - 6)}`,
+      `vllm:gpu_cache_usage_perc ${(0.05 + load * 0.6).toFixed(3)}`,
+      `vllm:generation_tokens_total ${stats.tokens}`,
+    ],
+    gateway: [`litellm_in_flight_requests ${inflight}`, `litellm_proxy_total_requests_metric_total ${stats.requests}`, `litellm_proxy_failed_requests_metric_total 0`],
+  }[kind];
+  if (!lines) return send(res, 404, { error: 'unknown' });
+  res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
+  res.end(`${lines.join('\n')}\n`);
+}
+const stats = { requests: 0, tokens: 0 };
+
 async function claude(req, res, pathname) {
   if (req.headers['x-api-key'] !== 'sk-claude' || !req.headers['anthropic-version']) {
     return send(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } });
@@ -267,6 +307,7 @@ http
   .createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://localhost');
+      if (url.pathname.startsWith('/metrics/')) return metrics(res, url.pathname.slice('/metrics/'.length));
       if (url.pathname === '/health/liveliness') return send(res, 200, { status: 'ok' });
       if (url.pathname.startsWith('/claude/')) return await claude(req, res, url.pathname.slice('/claude'.length));
       if (url.pathname.startsWith('/vllm-qwen/')) {

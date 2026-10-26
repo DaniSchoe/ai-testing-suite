@@ -1,6 +1,7 @@
 // Führt einen Testlauf aus: Tests nacheinander, Ergebnisse und Logs in Postgres, Regressionsvergleich.
 import { many, one, query } from '../db.js';
 import { analyzeRun } from '../analysis.js';
+import { platformSampler } from '../platform.js';
 import { decrypt } from '../crypto.js';
 import { testTypes } from '../testtypes/index.js';
 import { aliasOf, authHeaders, ENDPOINT_SELECT, endpointHeaders, llmClientFor, resolveModel } from '../models.js';
@@ -84,6 +85,8 @@ async function buildContext({ runId, resultId, test, endpoint, endpointsByName, 
       const url = `${endpoint.base_url.replace(/\/$/, '')}${opts.path ?? ''}`;
       return new McpClient({ url, headers: headersFor(opts) });
     },
+    // Metriken der Plattform (DCGM, vLLM, LiteLLM) während des Tests mitschreiben; ohne konfigurierte Endpunkte passiert nichts.
+    metricsSampler: () => platformSampler().catch(() => null),
     log: (level, message, data) => log(runId, resultId, level, message, data),
   };
 }

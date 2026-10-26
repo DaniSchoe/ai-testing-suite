@@ -12,6 +12,7 @@ import {
   Moon,
   Network,
   Boxes,
+  Layers,
   Search,
   ShieldCheck,
   Store,
@@ -21,6 +22,7 @@ import {
 } from 'lucide-react';
 import { api, can, initials, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Platform from './pages/Platform.jsx';
 import ModelDetail from './pages/ModelDetail.jsx';
 import ModelProfiles from './pages/ModelProfiles.jsx';
 import Marketplace from './pages/Marketplace.jsx';
@@ -102,6 +104,9 @@ export default function App() {
             <NavLink to="/" end>
               <LayoutGrid size={18} /> Dashboard
             </NavLink>
+            <NavLink to="/platform">
+              <Layers size={18} /> Plattform
+            </NavLink>
             <NavLink to="/marketplace">
               <Store size={18} /> Marketplace
             </NavLink>
@@ -175,6 +180,7 @@ export default function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/model-profiles" element={<ModelProfiles />} />
               <Route path="/models/:name" element={<ModelDetail />} />
+              <Route path="/platform" element={<Platform />} />
               <Route path="/marketplace" element={<Marketplace />} />
               <Route path="/marketplace/:id" element={<MarketplaceDetail />} />
               <Route path="/test-builder" element={<TestBuilder />} />

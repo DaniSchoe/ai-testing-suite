@@ -1030,3 +1030,22 @@ details > summary {
 .summary-list dt { color: var(--text-2); font-size: 13px; }
 .summary-list dd { margin: 0; font-weight: 600; font-size: 16px; }
 .summary-list .hint { display: block; }
+
+/* Plattform: Architekturdarstellung */
+.arch { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+.arch-arrow { align-self: center; color: var(--text-3); flex: none; }
+.arch-stack { display: flex; flex-direction: column; gap: 12px; flex: 1 1 240px; min-width: 230px; }
+.arch-tile { flex: 1 1 220px; min-width: 210px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.arch-tile.ghost { border-style: dashed; background: transparent; }
+.arch-head { display: flex; align-items: center; gap: 10px; }
+.arch-body { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.arch-field { display: grid; gap: 4px; font-size: 12px; color: var(--text-2); }
+.arch-field select { width: 100%; }
+.arch-live { border-top: 1px solid var(--border); padding-top: 8px; }
+.stepper { display: inline-flex; align-items: center; gap: 4px; }
+.stepper input { width: 64px; text-align: center; }
+.kv { margin: 0; display: grid; gap: 4px; }
+.kv > div { display: flex; justify-content: space-between; gap: 8px; }
+.kv dt { color: var(--text-2); }
+.kv dd { margin: 0; font-weight: 600; }
+@media (max-width: 900px) { .arch-arrow { transform: rotate(90deg); width: 100%; } }
