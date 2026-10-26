@@ -52,9 +52,9 @@ export async function buildApp() {
 
   // Gebautes Frontend ausliefern; unbekannte Pfade gehen an die SPA.
   if (existsSync(publicDir)) {
-    await app.register(fastifyStatic, { root: publicDir, wildcard: false });
+    await app.register(fastifyStatic, { root: publicDir });
     app.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith('/api/') || request.url.startsWith('/auth/')) {
+      if (/^\/(api|auth|assets)\//.test(request.url)) {
         return reply.code(404).send({ error: 'Nicht gefunden' });
       }
       return reply.sendFile('index.html');

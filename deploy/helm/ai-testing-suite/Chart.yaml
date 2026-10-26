@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ai-testing-suite
+description: Testing Suite für LiteLLM, vLLM und MCP (Performance, Qualität, Security/DLP, Berechtigungen)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

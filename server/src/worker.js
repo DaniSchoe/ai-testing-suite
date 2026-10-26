@@ -46,7 +46,7 @@ export async function startWorker(logger = console) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await migrate();
+  if ((process.env.MIGRATE_ON_START ?? 'true') === 'true') await migrate();
   await startWorker();
   const shutdown = async () => {
     await stopBoss();

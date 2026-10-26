@@ -1,0 +1,32 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { check, findPii, looksLikeRefusal } from '../src/testtypes/assertions.js';
+import { checkThresholds } from '../src/testtypes/performance.js';
+import { percentile } from '../src/runner/clients.js';
+
+test('percentile', () => {
+  assert.equal(percentile([5, 1, 3, 2, 4], 50), 3);
+  assert.equal(percentile([1, 2, 3, 4, 100], 95), 100);
+  assert.equal(percentile([], 95), null);
+});
+
+test('Schwellwerte', () => {
+  const v = checkThresholds({ ttft_ms_p95: 900, error_rate: 0 }, { ttft_ms_p95: { max: 800 }, error_rate: { max: 0.05 }, tokens_per_s_avg: { min: 10 } });
+  assert.equal(v.length, 2);
+  assert.match(v[0], /ttft_ms_p95/);
+  assert.match(v[1], /kein Messwert/);
+});
+
+test('Assertions', async () => {
+  assert.equal((await check({ type: 'contains', value: 'berlin' }, 'Berlin')).ok, true);
+  assert.equal((await check({ type: 'regex', value: '\\b391\\b' }, '381')).ok, false);
+  assert.equal((await check({ type: 'json', required: ['a'] }, '```json\n{"a":1}\n```')).ok, true);
+  assert.equal((await check({ type: 'no_pii' }, 'Mail an max@example.com')).ok, false);
+});
+
+test('PII- und Verweigerungserkennung', () => {
+  assert.deepEqual(findPii('Karte 4111 1111 1111 1111', ['credit_card']), ['credit_card']);
+  assert.deepEqual(findPii('IBAN DE89 3704 0044 0532 0130 00', ['iban']), ['iban']);
+  assert.equal(looksLikeRefusal('Das kann ich nicht tun.'), true);
+  assert.equal(looksLikeRefusal('Berlin'), false);
+});

@@ -1,0 +1,78 @@
+image:
+  repository: ghcr.io/danischoe/ai-testing-suite
+  tag: ""            # Standard: appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Öffentliche URL (Ingress). Wird für OIDC-Redirects und Cookies benötigt.
+publicUrl: https://ai-testing.example.com
+
+web:
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits: { memory: 512Mi }
+
+# Worker führen die Tests aus. Für Lasttests großzügig dimensionieren oder mehr Replicas.
+worker:
+  replicas: 1
+  concurrency: 2       # parallele Testläufe pro Worker-Pod
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+oidc:
+  issuerUrl: https://keycloak.example.com/realms/ai-testing
+  clientId: ai-testing-suite
+  personaClientId: ai-testing-personas
+  roles:
+    admin: suite-admin
+    tester: suite-tester
+    viewer: suite-viewer
+  defaultRole: viewer   # leer = ohne Rolle kein Zugriff
+
+# Secrets: entweder hier setzen (Chart legt ein Secret an) oder existingSecret mit den Keys
+# DATABASE_URL, APP_SECRET, OIDC_CLIENT_SECRET, OIDC_PERSONA_CLIENT_SECRET angeben.
+secrets:
+  existingSecret: ""
+  databaseUrl: ""            # leer + postgresql.enabled=true -> interne Postgres
+  appSecret: ""              # mind. 32 Zeichen, z. B. openssl rand -hex 32
+  oidcClientSecret: ""
+  oidcPersonaClientSecret: ""
+
+# Einfache Postgres im Cluster für Test/Entwicklung. Für Produktion eine verwaltete
+# Postgres oder CloudNativePG nutzen und secrets.databaseUrl setzen.
+postgresql:
+  enabled: false
+  image: postgres:16-alpine
+  database: suite
+  username: suite
+  password: change-me
+  storage: 10Gi
+  storageClassName: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  host: ai-testing.example.com
+  annotations: {}
+  tls:
+    enabled: true
+    secretName: ai-testing-tls
+
+service:
+  port: 80
+
+# Läuft als Helm-Hook vor Installation/Upgrade.
+migrations:
+  enabled: true
+
+logLevel: info
+extraEnv: []
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,3 +1,101 @@
 # AI Testing Suite
 
-Cloud-native Testing Suite für LiteLLM, vLLM und MCP auf Kubernetes.
+Cloud-native Testing Suite für KI-Plattformen auf Kubernetes: LiteLLM-Gateway, vLLM-Server und
+MCP-Server. Prüft Performance, Last, Qualität, Modellvergleiche, Security/DLP, Berechtigungen,
+MCP-Freigaben, Rate-Limits und Tool-Calling, protokolliert jeden Lauf und zeigt die historische
+Entwicklung im Dashboard.
+
+- **Node.js** (Fastify) und **PostgreSQL**, Job-Queue und Zeitpläne ebenfalls in Postgres (pg-boss)
+- **Keycloak-Login** (OIDC) mit Rollen und **Test-Personas** für userspezifische Freigabetests
+- **Admin-Panel** für Endpoints (LiteLLM, vLLM, MCP) und Personas
+- Tests **einzeln, gebündelt, geplant oder alle** ausführen
+- Dashboard **global oder nutzerspezifisch**, Tabelle aller eigenen Testausführungen
+- **Hell-, Dunkel- und System-Modus**
+- **Helm-Chart** für Kubernetes
+
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+## Schnellstart ohne Keycloak
+
+Voraussetzung: Node.js 22 und eine Postgres (z. B. `docker compose up postgres`).
+
+```bash
+npm ci --prefix server && npm ci --prefix web
+npm run build --prefix web
+
+cd server
+node tools/mock-llm.js &            # Mock-Gateway auf :4000 (OpenAI-API + MCP)
+AUTH_MODE=dev node tools/seed.js    # Demo-Endpoints, Personas, 11 Beispieltests
+AUTH_MODE=dev npm start             # http://localhost:8080, Login als Dev-Admin
+```
+
+Frontend-Entwicklung mit Hot Reload: `npm run dev --prefix web` (Port 5173, API wird an 8080 weitergeleitet).
+
+## Lokal mit Keycloak
+
+```bash
+echo "127.0.0.1 keycloak" | sudo tee -a /etc/hosts   # gleiche Issuer-URL für Browser und App
+docker compose up --build
+```
+
+Keycloak importiert den Realm `ai-testing` aus `deploy/keycloak/realm-ai-testing.json` mit den
+Usern `admin/admin` (suite-admin), `tester/tester`, `viewer/viewer` und dem Persona-User
+`persona-team-a`. Die App läuft auf http://localhost:8080, die Keycloak-Konsole auf http://keycloak:8081.
+
+## Kubernetes
+
+```bash
+helm install ai-testing deploy/helm/ai-testing-suite \
+  --namespace ai-testing --create-namespace \
+  --set publicUrl=https://ai-testing.example.com \
+  --set ingress.host=ai-testing.example.com \
+  --set oidc.issuerUrl=https://keycloak.example.com/realms/ai-testing \
+  --set secrets.databaseUrl=postgres://user:pass@postgres:5432/suite \
+  --set secrets.appSecret=$(openssl rand -hex 32) \
+  --set secrets.oidcClientSecret=... \
+  --set secrets.oidcPersonaClientSecret=...
+```
+
+Für Testumgebungen ohne eigene Datenbank: `--set postgresql.enabled=true`.
+Das Image wird von der CI bei jedem Merge nach `main` als `ghcr.io/danischoe/ai-testing-suite` gebaut.
+
+### Keycloak einrichten
+
+1. Client `ai-testing-suite`: confidential, Standard Flow, PKCE S256, Redirect-URI `<publicUrl>/auth/callback`,
+   Post-Logout-Redirect `<publicUrl>`.
+2. Client `ai-testing-personas`: confidential, nur Direct Access Grants (für Test-Personas).
+3. Realm-Rollen `suite-admin`, `suite-tester`, `suite-viewer` anlegen und Usern zuweisen.
+   Ohne Rolle erhalten User `DEFAULT_ROLE` (Standard `viewer`).
+
+## Konfiguration
+
+| Variable | Bedeutung |
+|---|---|
+| `DATABASE_URL` | Postgres-Verbindung |
+| `APP_SECRET` | Schlüssel für Session-Cookies und Secret-Verschlüsselung (mind. 32 Zeichen) |
+| `PUBLIC_URL` | Öffentliche URL, z. B. `https://ai-testing.example.com` |
+| `AUTH_MODE` | `oidc` (Standard) oder `dev` (lokal ohne Keycloak) |
+| `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Login-Client |
+| `OIDC_PERSONA_CLIENT_ID`, `OIDC_PERSONA_CLIENT_SECRET` | Client für Test-Personas |
+| `ROLE_ADMIN`, `ROLE_TESTER`, `ROLE_VIEWER`, `DEFAULT_ROLE` | Rollen-Mapping |
+| `RUN_WORKER` | Worker im Web-Prozess mitlaufen lassen (lokal `true`, in Kubernetes `false`) |
+| `WORKER_CONCURRENCY` | parallele Läufe pro Worker |
+| `MIGRATE_ON_START` | Migrationen beim Start ausführen (Standard `true`) |
+
+## Eigene Tests
+
+Die Konfiguration jedes Tests ist JSON und wird in der UI mit sinnvollen Standardwerten
+vorbefüllt. Beispiel für einen Berechtigungstest:
+
+```json
+{
+  "cases": [
+    { "persona": "team-a", "model": "gpt-oss-120b", "expect": "allow" },
+    { "persona": "team-a", "model": "llama-3.3-70b", "expect": "deny" },
+    { "persona": "team-a", "method": "GET", "path": "/key/list", "expect": "deny" },
+    { "persona": null, "model": "gpt-oss-120b", "expect": "deny", "name": "Ohne Credentials" }
+  ]
+}
+```
+
+Allgemeine Optionen für jeden Test: `timeoutS`, `regressionTolerance` (Standard 0.2), `failOnRegression`.

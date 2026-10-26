@@ -1,0 +1,59 @@
+{{- if .Values.postgresql.enabled }}
+# Einfache Single-Instance-Postgres für Test/Entwicklung, ohne Backup und HA.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "suite.fullname" . }}-postgres
+  labels: {{- include "suite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ include "suite.fullname" . }}-postgres
+  replicas: 1
+  selector:
+    matchLabels: {{- include "suite.selector" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels: {{- include "suite.selector" . | nindent 8 }}
+        app.kubernetes.io/component: postgres
+    spec:
+      securityContext:
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: {{ .Values.postgresql.image }}
+          env:
+            - { name: POSTGRES_DB, value: {{ .Values.postgresql.database | quote }} }
+            - { name: POSTGRES_USER, value: {{ .Values.postgresql.username | quote }} }
+            - { name: POSTGRES_PASSWORD, value: {{ .Values.postgresql.password | quote }} }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: pg, containerPort: 5432 }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", {{ .Values.postgresql.username | quote }}] }
+            periodSeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.postgresql.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "suite.fullname" . }}-postgres
+  labels: {{- include "suite.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "suite.selector" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  ports:
+    - { name: pg, port: 5432, targetPort: pg }
+{{- end }}

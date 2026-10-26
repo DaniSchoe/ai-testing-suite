@@ -9,7 +9,7 @@
     "migrate": "node src/migrate.js",
     "dev": "node --watch src/server.js",
     "mock": "node tools/mock-llm.js",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

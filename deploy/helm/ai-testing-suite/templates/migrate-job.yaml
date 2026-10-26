@@ -1,0 +1,32 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "suite.fullname" . }}-migrate
+  labels: {{- include "suite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    # Mit interner Postgres existiert die DB erst nach der Installation.
+    helm.sh/hook: {{ if .Values.postgresql.enabled }}post-install{{ else }}pre-install{{ end }},pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6   # bei Neuinstallation mit interner Postgres kurz warten, bis sie bereit ist
+  template:
+    metadata:
+      labels: {{- include "suite.selector" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "suite.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "src/migrate.js"]
+          env:
+            {{- include "suite.env" . | nindent 12 }}
+{{- end }}
