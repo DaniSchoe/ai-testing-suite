@@ -1,0 +1,133 @@
+{
+  "realm": "ai-testing",
+  "enabled": true,
+  "displayName": "AI Testing Suite",
+  "sslRequired": "external",
+  "roles": {
+    "realm": [
+      {
+        "name": "suite-admin",
+        "description": "Admin der Testing Suite (Endpoints, Personas)"
+      },
+      {
+        "name": "suite-tester",
+        "description": "Darf Tests anlegen und ausführen"
+      },
+      {
+        "name": "suite-viewer",
+        "description": "Darf Ergebnisse ansehen"
+      },
+      {
+        "name": "persona-team-a",
+        "description": "Beispiel-Gruppe für Freigabetests"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "ai-testing-suite",
+      "name": "AI Testing Suite",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "dev-client-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/*"
+      ],
+      "webOrigins": [
+        "http://localhost:8080"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8080*"
+      }
+    },
+    {
+      "clientId": "ai-testing-personas",
+      "name": "Test-Personas (Runner)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "dev-persona-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "description": "Nur für den Runner: holt Tokens für Test-Personas per Password Grant"
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@example.com",
+      "emailVerified": true,
+      "firstName": "Ada",
+      "lastName": "Admin",
+      "realmRoles": [
+        "suite-admin"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "tester",
+      "enabled": true,
+      "email": "tester@example.com",
+      "emailVerified": true,
+      "firstName": "Tom",
+      "lastName": "Tester",
+      "realmRoles": [
+        "suite-tester"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "tester",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "viewer",
+      "enabled": true,
+      "email": "viewer@example.com",
+      "emailVerified": true,
+      "firstName": "Vera",
+      "lastName": "Viewer",
+      "realmRoles": [
+        "suite-viewer"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "viewer",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "persona-team-a",
+      "enabled": true,
+      "email": "persona-team-a@example.com",
+      "emailVerified": true,
+      "firstName": "Persona",
+      "lastName": "Team A",
+      "realmRoles": [
+        "persona-team-a"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "persona-team-a",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

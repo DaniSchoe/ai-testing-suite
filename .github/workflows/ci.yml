@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: suite
+          POSTGRES_PASSWORD: suite
+          POSTGRES_DB: suite
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U suite" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://suite:suite@localhost:5432/suite
+      AUTH_MODE: dev
+      LOG_LEVEL: warn
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Abhängigkeiten
+        run: |
+          npm ci --prefix server
+          npm ci --prefix web
+      - name: Unit-Tests
+        run: npm test --prefix server
+      - name: Frontend bauen
+        run: npm run build --prefix web
+      - name: End-to-End gegen Mock-Gateway
+        working-directory: server
+        run: |
+          node tools/mock-llm.js &
+          node tools/seed.js
+          node src/server.js &
+          for i in $(seq 1 30); do curl -sf localhost:8080/readyz && break; sleep 1; done
+          curl -sf -c /tmp/jar -b /tmp/jar -o /dev/null localhost:8080/auth/login
+          RUN=$(curl -sf -b /tmp/jar -H 'content-type: application/json' -d '{"kind":"all"}' localhost:8080/api/runs | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          for i in $(seq 1 90); do
+            STATUS=$(curl -sf -b /tmp/jar localhost:8080/api/runs/$RUN | node -pe 'JSON.parse(require("fs").readFileSync(0)).status')
+            [ "$STATUS" != queued ] && [ "$STATUS" != running ] && break
+            sleep 2
+          done
+          curl -sf -b /tmp/jar localhost:8080/api/runs/$RUN | node -e '
+            const r = JSON.parse(require("fs").readFileSync(0));
+            for (const x of r.results) console.log(x.status.padEnd(7), x.test_name, x.error ?? "");
+            // Der Mock rechnet bei mock-small absichtlich falsch: genau ein Qualitätstest schlägt fehl.
+            const bad = r.results.filter((x) => x.status !== "passed").map((x) => x.type);
+            if (r.results.length < 14 || bad.length !== 1 || bad[0] !== "quality") process.exit(1);'
+      - name: Helm-Chart prüfen
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm lint deploy/helm/ai-testing-suite --set secrets.appSecret=x --set postgresql.enabled=true
+          helm template t deploy/helm/ai-testing-suite --set secrets.appSecret=x --set postgresql.enabled=true > /dev/null
+
+  image:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image-Name (ghcr verlangt Kleinschreibung)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ai-testing-suite" >> "$GITHUB_ENV"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
