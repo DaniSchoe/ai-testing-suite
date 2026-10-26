@@ -13,8 +13,11 @@ web:
     requests: { cpu: 100m, memory: 192Mi }
     limits: { memory: 512Mi }
 
-# Worker führen die Tests aus. Für Lasttests großzügig dimensionieren oder mehr Replicas.
+# Worker führen die Tests aus (auch Lasttests, direkt im Pod). Für Lasttests großzügig
+# dimensionieren oder mehr Replicas. embedded: true = kein eigenes Deployment, die Web-Pods
+# führen die Tests selbst aus (ein einziges Deployment).
 worker:
+  embedded: false
   replicas: 1
   concurrency: 2       # parallele Testläufe pro Worker-Pod
   resources:
@@ -32,29 +35,41 @@ oidc:
   defaultRole: viewer   # leer = ohne Rolle kein Zugriff
 
 # Secrets: entweder hier setzen (Chart legt ein Secret an) oder existingSecret mit den Keys
-# DATABASE_URL, APP_SECRET, OIDC_CLIENT_SECRET, OIDC_PERSONA_CLIENT_SECRET angeben.
+# DATABASE_URL, APP_SECRET, OIDC_CLIENT_SECRET, OIDC_PERSONA_CLIENT_SECRET (und bei
+# postgresql.enabled zusätzlich POSTGRES_PASSWORD) angeben.
 secrets:
   existingSecret: ""
-  databaseUrl: ""            # leer + postgresql.enabled=true -> interne Postgres
-  appSecret: ""              # mind. 32 Zeichen, z. B. openssl rand -hex 32
+  databaseUrl: ""            # nur für externe Postgres (postgresql.enabled=false)
+  appSecret: ""              # leer = wird einmalig zufällig erzeugt und bei Upgrades beibehalten
   oidcClientSecret: ""
   oidcPersonaClientSecret: ""
 
-# Einfache Postgres im Cluster für Test/Entwicklung. Für Produktion eine verwaltete
-# Postgres oder CloudNativePG nutzen und secrets.databaseUrl setzen.
+# Postgres im Cluster (StatefulSet + PVC). Für eine externe/verwaltete Datenbank
+# enabled: false setzen und secrets.databaseUrl angeben.
 postgresql:
-  enabled: false
+  enabled: true
   image: postgres:16-alpine
   database: suite
   username: suite
-  password: change-me
-  storage: 10Gi
-  storageClassName: ""
+  password: ""               # leer = wird einmalig zufällig erzeugt und bei Upgrades beibehalten
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+  persistence:
+    enabled: true            # false = emptyDir, Daten gehen beim Pod-Neustart verloren
+    existingClaim: ""        # vorhandenes PVC verwenden statt eines neuen
+    size: 10Gi
+    storageClassName: ""     # leer = Standard-StorageClass des Clusters
+    accessModes: [ReadWriteOnce]
+    keepOnUninstall: true    # PVC bei helm uninstall behalten
+    annotations: {}
 
 ingress:
   enabled: true
   className: nginx
   host: ai-testing.example.com
+  # z. B. cert-manager.io/cluster-issuer: letsencrypt oder längere Timeouts für Lasttests:
+  # nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
   annotations: {}
   tls:
     enabled: true

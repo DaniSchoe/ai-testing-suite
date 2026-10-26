@@ -26,7 +26,7 @@ spec:
           env:
             {{- include "suite.env" . | nindent 12 }}
             - name: RUN_WORKER
-              value: "false"
+              value: {{ .Values.worker.embedded | quote }}
             - name: MIGRATE_ON_START
               value: {{ (not .Values.migrations.enabled) | quote }}
           ports:

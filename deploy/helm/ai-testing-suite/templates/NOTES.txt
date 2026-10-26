@@ -8,4 +8,19 @@ Keycloak-Checkliste (Realm aus {{ .Values.oidc.issuerUrl }}):
   2. Client "{{ .Values.oidc.personaClientId }}" mit Direct Access Grants für Test-Personas
   3. Rollen {{ .Values.oidc.roles.admin }}, {{ .Values.oidc.roles.tester }}, {{ .Values.oidc.roles.viewer }} anlegen und zuweisen
 
+{{ if .Values.worker.embedded -}}
+Worker: läuft in den {{ .Values.web.replicas }} Web-Pod(s) mit je {{ .Values.worker.concurrency }} parallelen Läufen.
+{{- else -}}
 Worker: {{ .Values.worker.replicas }} Pod(s) mit je {{ .Values.worker.concurrency }} parallelen Läufen.
+{{- end }}
+{{- if .Values.postgresql.enabled }}
+
+Datenbank: Postgres im Cluster ({{ include "suite.fullname" . }}-postgres),
+{{- if not .Values.postgresql.persistence.enabled }} OHNE Persistenz (emptyDir).
+{{- else }} Volume {{ .Values.postgresql.persistence.existingClaim | default (printf "%s-postgres-data" (include "suite.fullname" .)) }}.
+{{- end }}
+{{- if not .Values.secrets.existingSecret }}
+Passwörter stehen im Secret {{ include "suite.secretName" . }}:
+  kubectl get secret {{ include "suite.secretName" . }} -n {{ .Release.Namespace }} -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d
+{{- end }}
+{{- end }}

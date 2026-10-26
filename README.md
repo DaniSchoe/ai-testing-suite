@@ -47,19 +47,29 @@ Usern `admin/admin` (suite-admin), `tester/tester`, `viewer/viewer` und dem Pers
 
 ## Kubernetes
 
+Das Helm-Chart unter `deploy/helm/ai-testing-suite` bringt alles mit: Web- und Worker-Deployment,
+Service, Ingress, Migrations-Job, Secret und eine Postgres (StatefulSet) mit eigenem PVC.
+
 ```bash
 helm install ai-testing deploy/helm/ai-testing-suite \
   --namespace ai-testing --create-namespace \
   --set publicUrl=https://ai-testing.example.com \
   --set ingress.host=ai-testing.example.com \
   --set oidc.issuerUrl=https://keycloak.example.com/realms/ai-testing \
-  --set secrets.databaseUrl=postgres://user:pass@postgres:5432/suite \
-  --set secrets.appSecret=$(openssl rand -hex 32) \
   --set secrets.oidcClientSecret=... \
   --set secrets.oidcPersonaClientSecret=...
 ```
 
-Für Testumgebungen ohne eigene Datenbank: `--set postgresql.enabled=true`.
+- **Postgres**: läuft standardmäßig im Cluster. Das PVC `<release>-postgres-data` (10 Gi) bleibt bei
+  `helm uninstall` erhalten. Größe und StorageClass über `postgresql.persistence.size` und
+  `postgresql.persistence.storageClassName`, ein vorhandenes Volume über `postgresql.persistence.existingClaim`.
+- **Passwörter**: `APP_SECRET` und das Postgres-Passwort werden bei der Installation zufällig erzeugt
+  und bei Upgrades beibehalten. Alternativ `secrets.existingSecret` (Keys siehe `values.yaml`).
+- **Externe Datenbank** (empfohlen für Produktion): `--set postgresql.enabled=false --set secrets.databaseUrl=postgres://user:pass@host:5432/suite`.
+- **Ingress**: `ingress.className` (Standard `nginx`), TLS über `ingress.tls.secretName`, z. B. mit
+  cert-manager-Annotation; für lange Lasttests `proxy-read-timeout` erhöhen.
+- **Ein einziges Deployment**: `--set worker.embedded=true` führt die Tests in den Web-Pods aus.
+
 Das Image wird von der CI bei jedem Merge nach `main` als `ghcr.io/danischoe/ai-testing-suite` gebaut.
 
 ### Keycloak einrichten
