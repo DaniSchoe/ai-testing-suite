@@ -62,8 +62,12 @@ jobs:
       - name: Helm-Chart prüfen
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          helm lint deploy/helm/ai-testing-suite --set secrets.appSecret=x --set postgresql.enabled=true
-          helm template t deploy/helm/ai-testing-suite --set secrets.appSecret=x --set postgresql.enabled=true > /dev/null
+          C=deploy/helm/ai-testing-suite
+          helm lint $C
+          helm template t $C > /dev/null
+          helm template t $C --set postgresql.enabled=false --set secrets.databaseUrl=postgres://u:p@db:5432/suite > /dev/null
+          helm template t $C --set worker.embedded=true --set postgresql.persistence.existingClaim=data > /dev/null
+          if helm template t $C --set postgresql.enabled=false > /dev/null 2>&1; then echo "externe DB ohne URL muss scheitern"; exit 1; fi
 
   image:
     needs: test

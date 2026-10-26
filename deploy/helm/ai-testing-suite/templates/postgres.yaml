@@ -1,13 +1,41 @@
 {{- if .Values.postgresql.enabled }}
-# Einfache Single-Instance-Postgres für Test/Entwicklung, ohne Backup und HA.
+{{- $pg := .Values.postgresql }}
+{{- $name := printf "%s-postgres" (include "suite.fullname" .) }}
+{{- if and $pg.persistence.enabled (not $pg.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-data
+  labels: {{- include "suite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  {{- if or $pg.persistence.keepOnUninstall $pg.persistence.annotations }}
+  annotations:
+    {{- if $pg.persistence.keepOnUninstall }}
+    helm.sh/resource-policy: keep
+    {{- end }}
+    {{- with $pg.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  accessModes: {{- toYaml $pg.persistence.accessModes | nindent 4 }}
+  {{- with $pg.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $pg.persistence.size }}
+---
+{{- end }}
+# Single-Instance-Postgres, ohne Backup und HA. Für Produktion eine verwaltete Datenbank nutzen.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ include "suite.fullname" . }}-postgres
+  name: {{ $name }}
   labels: {{- include "suite.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 spec:
-  serviceName: {{ include "suite.fullname" . }}-postgres
+  serviceName: {{ $name }}
   replicas: 1
   selector:
     matchLabels: {{- include "suite.selector" . | nindent 6 }}
@@ -17,40 +45,66 @@ spec:
       labels: {{- include "suite.selector" . | nindent 8 }}
         app.kubernetes.io/component: postgres
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
+        # UID/GID des postgres-Users im Alpine-Image
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
         fsGroup: 70
       containers:
         - name: postgres
-          image: {{ .Values.postgresql.image }}
+          image: {{ $pg.image }}
           env:
-            - { name: POSTGRES_DB, value: {{ .Values.postgresql.database | quote }} }
-            - { name: POSTGRES_USER, value: {{ .Values.postgresql.username | quote }} }
-            - { name: POSTGRES_PASSWORD, value: {{ .Values.postgresql.password | quote }} }
+            - { name: POSTGRES_DB, value: {{ $pg.database | quote }} }
+            - { name: POSTGRES_USER, value: {{ $pg.username | quote }} }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "suite.secretName" . }}
+                  key: POSTGRES_PASSWORD
             - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
           ports:
             - { name: pg, containerPort: 5432 }
           readinessProbe:
-            exec: { command: ["pg_isready", "-U", {{ .Values.postgresql.username | quote }}] }
+            exec: { command: ["pg_isready", "-U", {{ $pg.username | quote }}, "-d", {{ $pg.database | quote }}] }
             periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", {{ $pg.username | quote }}, "-d", {{ $pg.database | quote }}] }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources: {{- toYaml $pg.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        {{- with .Values.postgresql.storageClassName }}
-        storageClassName: {{ . }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ .Values.postgresql.storage }}
+            - { name: run, mountPath: /var/run/postgresql }
+      volumes:
+        - name: data
+          {{- if not $pg.persistence.enabled }}
+          emptyDir: {}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ $pg.persistence.existingClaim | default (printf "%s-data" $name) }}
+          {{- end }}
+        - name: run
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "suite.fullname" . }}-postgres
+  name: {{ $name }}
   labels: {{- include "suite.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
 spec:
   selector: {{- include "suite.selector" . | nindent 4 }}
     app.kubernetes.io/component: postgres

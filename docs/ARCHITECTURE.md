@@ -117,9 +117,20 @@ letzten bestandenen Ausführung derselben Testdefinition verglichen (Standardtol
 
 ## Kubernetes
 
-Helm-Chart unter `deploy/helm/ai-testing-suite`: Deployments für `web` und `worker`, Service,
-Ingress, Migrations-Job als Hook, Secret (oder `existingSecret`) und optional eine einfache
-Postgres für Testumgebungen. Für Produktion eine verwaltete Postgres oder CloudNativePG nutzen.
+Helm-Chart unter `deploy/helm/ai-testing-suite`:
+
+| Ressource | Hinweis |
+|---|---|
+| Deployment `web` + Service | API und Frontend; mit `worker.embedded=true` laufen hier auch die Tests |
+| Deployment `worker` | entfällt bei `worker.embedded=true` |
+| Ingress | `className`, Annotationen, TLS-Secret konfigurierbar |
+| Job `migrate` | Helm-Hook; mit interner Postgres nach der Installation, sonst davor |
+| Secret | Hook vor Installation/Upgrade; `APP_SECRET` und Postgres-Passwort werden erzeugt und per `lookup` bei Upgrades übernommen. Oder `existingSecret`. |
+| StatefulSet + Service `postgres` | Single-Instance, standardmäßig aktiv |
+| PVC `postgres-data` | eigenes PVC mit `helm.sh/resource-policy: keep`, alternativ `existingClaim` oder `emptyDir` |
+
+Die eingebaute Postgres hat kein Backup und keine HA. Für Produktion eine verwaltete Postgres oder
+CloudNativePG nutzen (`postgresql.enabled=false`, `secrets.databaseUrl`).
 
 Der Worker braucht Netzwerkzugriff auf die getesteten Endpoints. Läuft vLLM im selben Cluster,
 genügt die Service-URL (`http://vllm.<ns>.svc.cluster.local:8000`).
