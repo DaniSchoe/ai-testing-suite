@@ -309,10 +309,12 @@ http
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname.startsWith('/metrics/')) return metrics(res, url.pathname.slice('/metrics/'.length));
       if (url.pathname === '/health/liveliness') return send(res, 200, { status: 'ok' });
+      if (url.pathname === '/health/readiness') return send(res, 200, { status: 'healthy', db: 'connected', cache: null, litellm_version: '1.77.0-mock' });
       if (url.pathname.startsWith('/claude/')) return await claude(req, res, url.pathname.slice('/claude'.length));
       if (url.pathname.startsWith('/vllm-qwen/')) {
         url.pathname = url.pathname.slice('/vllm-qwen'.length);
-        if (url.pathname === '/v1/models') return send(res, 200, { data: VLLM.models.map((id) => ({ id, object: 'model', owned_by: 'vllm' })) });
+        if (url.pathname === '/version') return send(res, 200, { version: '0.11.0-mock' });
+        if (url.pathname === '/v1/models') return send(res, 200, { data: VLLM.models.map((id) => ({ id, object: 'model', owned_by: 'vllm', root: 'Qwen/Qwen3-32B', max_model_len: 32768 })) });
         if (url.pathname === '/v1/chat/completions') return await chat(req, res, VLLM);
         return send(res, 404, { error: 'not found' });
       }

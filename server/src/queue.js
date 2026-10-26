@@ -2,7 +2,7 @@
 import { PgBoss } from 'pg-boss';
 import { config } from './config.js';
 
-export const QUEUES = { run: 'test-run', scheduled: 'scheduled-run', modelSync: 'model-sync' };
+export const QUEUES = { run: 'test-run', scheduled: 'scheduled-run', modelSync: 'model-sync', retention: 'evidence-retention' };
 
 let boss;
 

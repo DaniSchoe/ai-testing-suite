@@ -9,11 +9,15 @@ import { pool } from './db.js';
 import accessRoutes from './routes/access.js';
 import apiKeyRoutes from './routes/apikeys.js';
 import adminRoutes from './routes/admin.js';
-import buildRoutes from './routes/builds.js';
 import platformRoutes from './routes/platforms.js';
 import sizingRoutes from './routes/sizing.js';
 import runRoutes from './routes/runs.js';
-import testRoutes from './routes/tests.js';
+import auditRoutes from './routes/audits.js';
+import catalogRoutes from './routes/catalog.js';
+import datasetRoutes from './routes/datasets.js';
+import findingRoutes from './routes/findings.js';
+import dashboardRoutes from './routes/dashboard.js';
+import systemRoutes from './routes/system.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -60,9 +64,13 @@ export async function buildApp() {
   await app.register(adminRoutes);
   await app.register(accessRoutes);
   await app.register(apiKeyRoutes);
-  await app.register(testRoutes);
-  await app.register(buildRoutes);
+  await app.register(datasetRoutes);
+  await app.register(catalogRoutes);
+  await app.register(auditRoutes);
   await app.register(runRoutes);
+  await app.register(findingRoutes);
+  await app.register(dashboardRoutes);
+  await app.register(systemRoutes);
   await app.register(platformRoutes);
   await app.register(sizingRoutes);
 

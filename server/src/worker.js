@@ -8,7 +8,9 @@ import { migrate } from './migrate.js';
 import { getBoss, QUEUES, stopBoss } from './queue.js';
 import { syncAllModels } from './models.js';
 import { executeRun } from './runner/executor.js';
-import { createRun } from './runs.js';
+import { loadAudits } from './audits.js';
+import { purgeEvidence } from './findings.js';
+import { createAuditRun } from './runs.js';
 
 // Mit MIGRATE_ON_START=false (Helm) migriert ein Job. Der Worker wartet, bis das Schema da ist,
 // statt mit "relation does not exist" abzustürzen.
@@ -47,24 +49,30 @@ export async function startWorker(logger = console) {
     if (!schedule) return;
     if (schedule.run_at && new Date(schedule.run_at).toISOString() !== job.data.runAt) return; // Zeitpunkt wurde geändert
     // Zeitpläne laufen mit den Rechten ihres Besitzers: gesperrt oder ohne runs.start = kein Lauf.
-    const owner = schedule.owner_id ? await loadUser(schedule.owner_id) : null;
+    const owner = schedule.owner_id ? await loadUser(schedule.owner_id, schedule.tenant_id) : null;
     if (owner && !hasPermission(owner, 'runs.start')) {
       logger.warn(`Zeitplan ${schedule.name} übersprungen: Besitzer gesperrt oder ohne Berechtigung runs.start`);
       return;
     }
-    await createRun({
-      kind: schedule.target_kind === 'test' ? 'single' : schedule.target_kind,
-      trigger: 'schedule',
-      testIds: schedule.test_id ? [schedule.test_id] : undefined,
-      suiteId: schedule.suite_id,
-      buildId: schedule.build_id,
-      scheduleId: schedule.id,
-      userId: schedule.owner_id,
-      label: `${schedule.name} (geplant)`,
-    });
+    const audit = (await loadAudits(schedule.tenant_id, schedule.audit_id))[0];
+    if (!audit) return;
+    try {
+      await createAuditRun({ audit, user: owner, trigger: 'schedule', scheduleId: schedule.id, label: `${audit.name} (geplant)` });
+    } catch (err) {
+      // Zum Beispiel fehlende Freigabe für Prod oder gesperrte Plattform: kein Lauf, aber nachvollziehbar.
+      logger.warn(`Zeitplan ${schedule.name}: kein Lauf gestartet (${err.message})`);
+      await query(`insert into audit_log (tenant_id, user_id, user_name, action, object_type, object_id, details) values ($1, $2, 'Zeitplan', 'schedule.skipped', 'schedule', $3, $4)`, [schedule.tenant_id, schedule.owner_id, schedule.id, JSON.stringify({ reason: err.message })]);
+    }
     // Einmalige Zeitpläne sind danach erledigt.
     await query('update schedules set last_run_at = now(), enabled = enabled and run_at is null where id = $1', [schedule.id]);
   });
+
+  // Aufbewahrung: Inhalte von Nachweisen nach Ablauf der Frist löschen (Hash und Metadaten bleiben).
+  await boss.work(QUEUES.retention, async () => {
+    const n = await purgeEvidence();
+    if (n) logger.info(`Nachweise nach Aufbewahrungsfrist gelöscht: ${n}`);
+  });
+  await boss.schedule(QUEUES.retention, process.env.RETENTION_CRON ?? '17 3 * * *');
 
   // Modellkatalog regelmäßig mit LiteLLM und den vLLM-Endpunkten abgleichen.
   await boss.work(QUEUES.modelSync, async () => syncAllModels(logger));
