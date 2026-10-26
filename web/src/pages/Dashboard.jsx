@@ -50,6 +50,9 @@ export default function Dashboard() {
             <option value={30}>Letzte 30 Tage</option>
             <option value={90}>Letzte 90 Tage</option>
           </select>
+          <Link className="btn" to="/history">
+            Alle Ergebnisse
+          </Link>
           {can(user, 'runs.start') && (
             <button className="btn primary" onClick={runAll}>
               <Play size={15} /> Alle Tests ausführen
@@ -83,7 +86,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid cols-2">
-        <Card title="Erfolgsquote nach Testart" sub="Anteil bestandener Ergebnisse je Testtyp" action={<Link to="/tests">Zu den Tests</Link>}>
+        <Card title="Erfolgsquote nach Testart" sub="Anteil bestandener Ergebnisse je Testtyp" action={<Link to="/test-builder">Zum Test-Builder</Link>}>
           {data?.byType?.length ? (
             <ProgressList
               rows={data.byType.map((t) => ({

@@ -147,8 +147,9 @@ export default async function testRoutes(app) {
   // --- Schedules ---
   app.get('/api/schedules', viewer, async () =>
     many(
-      `select sc.*, s.name as suite_name, t.name as test_name, u.display_name as owner_name
+      `select sc.*, s.name as suite_name, t.name as test_name, b.name as build_name, u.display_name as owner_name
        from schedules sc
+       left join tests b on b.id = sc.build_id
        left join suites s on s.id = sc.suite_id
        left join test_definitions t on t.id = sc.test_id
        left join users u on u.id = sc.owner_id
@@ -158,10 +159,11 @@ export default async function testRoutes(app) {
 
   function validateSchedule(b) {
     if (!b.name?.trim()) throw badRequest('Name fehlt');
-    if (!CRON.test(b.cron?.trim() ?? '')) throw badRequest('Cron-Ausdruck muss 5 Felder haben, z. B. "0 6 * * *"');
+    if (!b.run_at && !CRON.test(b.cron?.trim() ?? '')) throw badRequest('Cron-Ausdruck muss 5 Felder haben, z. B. "0 6 * * *"');
+    if (b.target_kind === 'build' && !b.build_id) throw badRequest('Test fehlt');
     if (b.target_kind === 'test' && !b.test_id) throw badRequest('Test fehlt');
     if (b.target_kind === 'suite' && !b.suite_id) throw badRequest('Suite fehlt');
-    if (!['test', 'suite', 'all'].includes(b.target_kind)) throw badRequest('Ungültiges Ziel');
+    if (!['test', 'suite', 'all', 'build'].includes(b.target_kind)) throw badRequest('Ungültiges Ziel');
   }
 
   app.post('/api/schedules', scheduler, async (request) => {
@@ -194,17 +196,19 @@ export default async function testRoutes(app) {
       return reply.code(403).send({ error: 'Nur Besitzer oder Admin dürfen den Schedule ändern' });
     }
     const row = await one(
-      `update schedules set name = $2, target_kind = $3, test_id = $4, suite_id = $5, cron = $6, timezone = $7, enabled = $8
-       where id = $1 returning *`,
+      `update schedules set name = $2, target_kind = $3, test_id = $4, suite_id = $5, cron = $6, timezone = $7, enabled = $8,
+         build_id = $9, run_at = $10 where id = $1 returning *`,
       [
         request.params.id,
         b.name.trim(),
         b.target_kind,
         b.target_kind === 'test' ? b.test_id : null,
         b.target_kind === 'suite' ? b.suite_id : null,
-        b.cron.trim(),
+        b.cron?.trim() || null,
         b.timezone || 'Europe/Berlin',
         b.enabled ?? true,
+        b.target_kind === 'build' ? b.build_id : null,
+        b.run_at || null,
       ],
     );
     await syncSchedule(row);

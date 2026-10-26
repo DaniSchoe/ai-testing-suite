@@ -7,6 +7,8 @@ export default {
   description:
     'Verbindet sich mit einem MCP-Server (Streamable HTTP), prüft sichtbare Tools je API-Key, Tool-Aufrufe und Freigaben.',
   endpointKinds: ['mcp', 'ai_proxy'],
+  // Wie die im Test-Builder gewählten Modelle wirken: each = ein Test je Modell, list = Modellliste im Test, first = erstes Modell, none = ignoriert.
+  modelMode: 'none',
   defaults: {
     // Pfad relativ zur Endpoint-URL; bei LiteLLM als MCP-Gateway z. B. "/mcp/".
     path: '',

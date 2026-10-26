@@ -3,6 +3,8 @@ export default {
   type: 'smoke',
   label: 'Health / Smoke',
   description: 'Prüft Erreichbarkeit, /v1/models und eine Mini-Anfrage pro Modell. Gut als häufiger Schedule (z. B. alle 5 Minuten).',
+  // Wie die im Test-Builder gewählten Modelle wirken: each = ein Test je Modell, list = Modellliste im Test, first = erstes Modell, none = ignoriert.
+  modelMode: 'list',
   defaults: { models: [], prompt: 'Antworte nur mit OK.' },
   async run(ctx) {
     const llm = ctx.llm();

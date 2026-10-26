@@ -5,7 +5,6 @@ import {
   FlaskConical,
   KeyRound,
   LayoutGrid,
-  ListChecks,
   LogOut,
   Menu,
   Monitor,
@@ -15,14 +14,14 @@ import {
   Search,
   ShieldCheck,
   Sun,
-  Table2,
   Users,
   UsersRound,
 } from 'lucide-react';
 import { api, can, initials, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
-import Tests from './pages/Tests.jsx';
-import Suites from './pages/Suites.jsx';
+import TestBuilder from './pages/TestBuilder.jsx';
+import TestEditor from './pages/TestEditor.jsx';
+import TestTypeInfo from './pages/TestTypeInfo.jsx';
 import Schedules from './pages/Schedules.jsx';
 import History from './pages/History.jsx';
 import RunDetail from './pages/RunDetail.jsx';
@@ -97,18 +96,12 @@ export default function App() {
             <NavLink to="/" end>
               <LayoutGrid size={18} /> Dashboard
             </NavLink>
-            <NavLink to="/tests">
-              <FlaskConical size={18} /> Tests
-            </NavLink>
-            <NavLink to="/suites">
-              <ListChecks size={18} /> Testläufe bündeln
+            <NavLink to="/test-builder">
+              <FlaskConical size={18} /> Test-Builder
+              {activeCount > 0 && <span className="count">{activeCount}</span>}
             </NavLink>
             <NavLink to="/schedules">
               <CalendarClock size={18} /> Zeitpläne
-            </NavLink>
-            <NavLink to="/history">
-              <Table2 size={18} /> Meine Tests
-              {activeCount > 0 && <span className="count">{activeCount}</span>}
             </NavLink>
           </nav>
           {adminNav.length > 0 && (
@@ -168,8 +161,10 @@ export default function App() {
           <main className="content">
             <Routes>
               <Route path="/" element={<Dashboard />} />
-              <Route path="/tests" element={<Tests />} />
-              <Route path="/suites" element={<Suites />} />
+              <Route path="/test-builder" element={<TestBuilder />} />
+              <Route path="/test-builder/new" element={<TestEditor />} />
+              <Route path="/test-builder/:id" element={<TestEditor />} />
+              <Route path="/test-types/:type" element={<TestTypeInfo />} />
               <Route path="/schedules" element={<Schedules />} />
               <Route path="/history" element={<History />} />
               <Route path="/runs/:id" element={<RunDetail />} />
