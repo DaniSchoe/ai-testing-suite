@@ -130,12 +130,24 @@ letzten bestandenen Ausführung derselben Testdefinition verglichen (Standardtol
 | `endpoints` | LiteLLM/vLLM/MCP mit URL, optional verschlüsseltem Key, Discovery-Status |
 | `endpoint_models` | abgefragte Modelle je Endpoint mit Alias und Verfügbarkeit |
 | `api_keys` | API-Key-Sammlung (verschlüsselt) mit Teams/Usern |
-| `test_definitions` | Typ, Endpoint, API-Key, Konfiguration (JSON) |
-| `suites`, `suite_tests` | gebündelte Läufe mit Reihenfolge |
-| `schedules` | Cron, Ziel, Besitzer |
+| `tests`, `test_teams` | Test aus dem Test-Builder: Name, Beschreibung, Tags, Maintainer, Endpoint, Modelle, API-Key, Testarten mit Konfiguration, Veröffentlichung |
+| `test_definitions` | ausführbare Einzeltests (Testart × Modell), vom Test erzeugt (`build_id`) und bei jedem Speichern abgeglichen, damit IDs und Historie stabil bleiben |
+| `suites`, `suite_tests` | Altbestand, wird von der UI nicht mehr verwendet |
+| `schedules` | Cron oder einmaliger Zeitpunkt (`run_at`), Ziel (Test), Besitzer |
 | `runs` | ein Lauf: Art, Auslöser, User, Status, Zähler |
 | `results` | ein Ergebnis pro Test und Lauf: Status, Score, Kennzahlen, Details. Name, Typ, Endpoint und Modell sind denormalisiert, damit die Historie stabil bleibt. |
 | `run_logs` | Logzeilen pro Lauf bzw. Ergebnis |
+
+## Test-Builder
+
+Ein Test (`tests`) bündelt beliebig viele Testarten für einen Endpoint. Beim Speichern erzeugt
+`syncAtoms` je Testart und Modell einen Einzeltest (`test_definitions`), abhängig vom `modelMode` der
+Testart: `each` (ein Test je Modell, z. B. Performance), `list` (Modellliste in der Konfiguration, z. B.
+Smoke, Vergleich), `first` (erstes Modell, z. B. Zugriff) oder `none` (MCP). Ein Lauf vom Typ `build`
+führt alle Einzeltests des Tests aus. Zeitpläne eines Tests sind Cron-Ausdrücke oder ein einmaliger
+Zeitpunkt (pg-boss `startAfter`); `/api/calendar` liefert daraus die kommenden Termine und die bisherigen
+Läufe. Sichtbar ist ein Test für Ersteller, Maintainer und Administratoren, nach dem Veröffentlichen
+zusätzlich für die gewählten Teams oder alle.
 
 ## Kubernetes
 

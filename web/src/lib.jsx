@@ -316,3 +316,18 @@ export function TeamPicker({ teams, value, onChange }) {
 
 export const useTeams = () => useApi('/api/teams');
 export const useUserDirectory = () => useApi('/api/user-directory');
+
+export const CRON_PRESETS = [
+  ['*/15 * * * *', 'Alle 15 Minuten'],
+  ['0 * * * *', 'Stündlich'],
+  ['0 3 * * *', 'Täglich 03:00'],
+  ['0 6 * * 1-5', 'Werktags 06:00'],
+  ['0 4 * * 0', 'Sonntags 04:00'],
+];
+
+// Kurzbeschreibung des Zeitplans eines Tests (aus den schedule_*-Feldern von /api/builds).
+export function describeSchedule(b) {
+  if (!b.schedule_id) return null;
+  if (b.schedule_run_at) return `Einmalig ${fmt.date(b.schedule_run_at)}${b.schedule_enabled ? '' : ' (erledigt)'}`;
+  return `${CRON_PRESETS.find(([c]) => c === b.schedule_cron)?.[1] ?? b.schedule_cron}${b.schedule_enabled ? '' : ' (pausiert)'}`;
+}

@@ -1,7 +1,8 @@
-// Demo-Daten für lokale Entwicklung: API-Keys, Mock-Endpoints, Beispieltests und eine Suite.
+// Demo-Daten für lokale Entwicklung: API-Keys, Mock-Endpoints, Beispieltests (Test-Builder).
 // Aufruf: MOCK_URL=http://localhost:4000 node tools/seed.js
 import { encrypt } from '../src/crypto.js';
 import { one, pool, query } from '../src/db.js';
+import { syncAtoms } from '../src/builds.js';
 import { migrate } from '../src/migrate.js';
 import { syncEndpointModels } from '../src/models.js';
 
@@ -106,34 +107,33 @@ const tests = [
   { name: 'Rate-Limit: 10 RPM Key', type: 'ratelimit', endpoint: gateway, apiKey: 'limited', config: { burst: 15, expectedLimit: 10 } },
 ];
 
-const ids = [];
-for (const t of tests) {
-  const key = t.apiKey ? await one('select id from api_keys where name = $1', [t.apiKey]) : null;
-  const existing = await one('select id from test_definitions where name = $1', [t.name]);
-  const row = existing
-    ? await one('update test_definitions set config = $2, endpoint_id = $3, api_key_id = $4 where id = $1 returning id', [
-        existing.id,
-        t.config,
-        t.endpoint.id,
-        key?.id ?? null,
-      ])
+// Beispiele für den Test-Builder: ein gebündelter Test (Nightly Gateway) und je ein Test für den Rest.
+const nightly = ['Smoke: Gateway', 'Qualität: Basiswissen', 'Security & DLP: Standardkatalog', 'Zugriff: Modellfreigaben je Team'];
+const groups = [
+  { name: 'Nightly Gateway', description: 'Smoke, Qualität, Security und Berechtigungen', members: tests.filter((t) => nightly.includes(t.name)) },
+  ...tests.filter((t) => !nightly.includes(t.name)).map((t) => ({ name: t.name, members: [t] })),
+];
+
+let atoms = 0;
+for (const g of groups) {
+  const first = g.members[0];
+  const key = first.apiKey ? await one('select id from api_keys where name = $1', [first.apiKey]) : null;
+  const configs = Object.fromEntries(g.members.map((t) => [t.type, t.config]));
+  const values = [g.name, g.description ?? null, first.endpoint.id, key?.id ?? null, g.members.map((t) => t.type), configs];
+  const existing = await one('select id from tests where name = $1', [g.name]);
+  const build = existing
+    ? await one(
+        `update tests set description = $2, endpoint_id = $3, api_key_id = $4, types = $5, configs = $6, updated_at = now()
+         where id = $1 returning *`,
+        [existing.id, ...values.slice(1)],
+      )
     : await one(
-        'insert into test_definitions (name, type, endpoint_id, api_key_id, config) values ($1, $2, $3, $4, $5) returning id',
-        [t.name, t.type, t.endpoint.id, key?.id ?? null, t.config],
+        `insert into tests (name, description, endpoint_id, api_key_id, types, configs, visibility)
+         values ($1, $2, $3, $4, $5, $6, 'global') returning *`,
+        values,
       );
-  ids.push(row.id);
+  atoms += await syncAtoms(pool, build);
 }
 
-const suite = await one(
-  `insert into suites (name, description) values ('Nightly Gateway', 'Smoke, Qualität, Security und Berechtigungen')
-   on conflict (name) do update set description = excluded.description returning id`,
-);
-await query('delete from suite_tests where suite_id = $1', [suite.id]);
-const byName = (name) => ids[tests.findIndex((t) => t.name === name)];
-const nightly = ['Smoke: Gateway', 'Qualität: Basiswissen', 'Security & DLP: Standardkatalog', 'Zugriff: Modellfreigaben je Team', 'MCP: Tool-Freigaben je User'];
-for (const [i, id] of nightly.map(byName).entries()) {
-  await query('insert into suite_tests (suite_id, test_id, position) values ($1, $2, $3)', [suite.id, id, i]);
-}
-
-console.log(`Seed fertig: ${tests.length} Tests, 1 Suite, 3 API-Keys`);
+console.log(`Seed fertig: ${groups.length} Tests (${atoms} Einzeltests), 3 API-Keys`);
 await pool.end();

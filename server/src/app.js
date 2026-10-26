@@ -9,6 +9,7 @@ import { pool } from './db.js';
 import accessRoutes from './routes/access.js';
 import apiKeyRoutes from './routes/apikeys.js';
 import adminRoutes from './routes/admin.js';
+import buildRoutes from './routes/builds.js';
 import runRoutes from './routes/runs.js';
 import testRoutes from './routes/tests.js';
 
@@ -54,6 +55,7 @@ export async function buildApp() {
   await app.register(accessRoutes);
   await app.register(apiKeyRoutes);
   await app.register(testRoutes);
+  await app.register(buildRoutes);
   await app.register(runRoutes);
 
   // Gebautes Frontend ausliefern; unbekannte Pfade gehen an die SPA.

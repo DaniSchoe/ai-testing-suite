@@ -5,6 +5,8 @@ export default {
   label: 'Zugriff / Berechtigungen',
   description:
     'Prüft pro API-Key, ob Modelle und API-Routen erlaubt bzw. verweigert werden (RBAC, Teams, Virtual Keys).',
+  // Wie die im Test-Builder gewählten Modelle wirken: each = ein Test je Modell, list = Modellliste im Test, first = erstes Modell, none = ignoriert.
+  modelMode: 'first',
   defaults: {
     cases: [
       { apiKey: '', model: '', expect: 'allow' },

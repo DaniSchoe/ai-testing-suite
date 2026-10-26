@@ -45,6 +45,7 @@ export async function startWorker(logger = console) {
   await boss.work(QUEUES.scheduled, async ([job]) => {
     const schedule = await one('select * from schedules where id = $1 and enabled', [job.data.scheduleId]);
     if (!schedule) return;
+    if (schedule.run_at && new Date(schedule.run_at).toISOString() !== job.data.runAt) return; // Zeitpunkt wurde geändert
     // Zeitpläne laufen mit den Rechten ihres Besitzers: gesperrt oder ohne runs.start = kein Lauf.
     const owner = schedule.owner_id ? await loadUser(schedule.owner_id) : null;
     if (owner && !hasPermission(owner, 'runs.start')) {
@@ -56,11 +57,13 @@ export async function startWorker(logger = console) {
       trigger: 'schedule',
       testIds: schedule.test_id ? [schedule.test_id] : undefined,
       suiteId: schedule.suite_id,
+      buildId: schedule.build_id,
       scheduleId: schedule.id,
       userId: schedule.owner_id,
       label: `${schedule.name} (geplant)`,
     });
-    await query('update schedules set last_run_at = now() where id = $1', [schedule.id]);
+    // Einmalige Zeitpläne sind danach erledigt.
+    await query('update schedules set last_run_at = now(), enabled = enabled and run_at is null where id = $1', [schedule.id]);
   });
 
   // Modellkatalog regelmäßig mit LiteLLM und den vLLM-Endpunkten abgleichen.

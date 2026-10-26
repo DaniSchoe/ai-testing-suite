@@ -29,6 +29,14 @@ export async function enqueueRun(runId) {
 // Schedule aus der DB in pg-boss spiegeln (Key = Schedule-ID).
 export async function syncSchedule(schedule) {
   const b = await getBoss();
+  if (schedule.run_at) {
+    // Einmaliger Zeitpunkt: Job mit Startzeit. Der Worker ignoriert Jobs, deren Zeit nicht mehr zum Zeitplan passt.
+    if (schedule.enabled && new Date(schedule.run_at) > new Date()) {
+      const runAt = new Date(schedule.run_at);
+      await b.send(QUEUES.scheduled, { scheduleId: schedule.id, runAt: runAt.toISOString() }, { startAfter: runAt, retryLimit: 0 });
+    }
+    return;
+  }
   if (schedule.enabled) {
     await b.schedule(QUEUES.scheduled, schedule.cron, { scheduleId: schedule.id }, {
       key: schedule.id,

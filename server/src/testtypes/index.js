@@ -16,11 +16,12 @@ export const testTypes = Object.fromEntries(
 );
 
 export function describeTypes() {
-  return Object.values(testTypes).map(({ type, label, description, defaults, endpointKinds }) => ({
+  return Object.values(testTypes).map(({ type, label, description, defaults, endpointKinds, modelMode }) => ({
     type,
     label,
     description,
     defaults,
     endpointKinds: endpointKinds ?? ['ai_proxy', 'llm'],
+    modelMode: modelMode ?? 'each',
   }));
 }

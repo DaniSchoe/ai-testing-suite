@@ -12,7 +12,8 @@ Entwicklung im Dashboard.
 - **Modellkatalog**: Modelle werden automatisch von LiteLLM und jedem vLLM-Endpunkt abgefragt,
   unterschiedliche Namen desselben Modells werden per Alias zusammengeführt
 - **Thinking vs. Non-Thinking**: Genauigkeit, Token-Verbrauch, Latenz und Schlüssigkeit im Vergleich
-- Tests **einzeln, gebündelt, geplant oder alle** ausführen
+- **Test-Builder**: ein Test kombiniert beliebige Testarten mit Endpoint, mehreren Modellen und API-Key und läuft sofort, einmalig geplant oder regelmäßig; Veröffentlichung für dich, Teams oder alle
+- **Zeitpläne** als Kalender mit geplanten und bisherigen Läufen
 - Dashboard **global oder nutzerspezifisch**, Tabelle aller eigenen Testausführungen
 - **Hell-, Dunkel- und System-Modus**
 - **Helm-Chart** für Kubernetes
@@ -115,8 +116,10 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
 
 ## Eigene Tests
 
-Die Konfiguration jedes Tests ist JSON und wird in der UI mit sinnvollen Standardwerten
-vorbefüllt. Beispiel für einen Berechtigungstest:
+Tests entstehen im Test-Builder: Endpoint und Modelle wählen, Testarten ankreuzen (zu jeder Art gibt es eine
+Beschreibungsseite unter `/test-types/<art>`), Ausführung festlegen. Pro Testart und Modell entsteht ein
+Einzeltest. Die Konfiguration jeder Testart ist JSON, wird mit sinnvollen Standardwerten vorbefüllt und ist
+über den Experten-Modus editierbar. Beispiel für einen Berechtigungstest:
 
 ```json
 {

@@ -9,6 +9,8 @@ export default {
   label: 'Modell-Vergleich',
   description:
     'Führt denselben Datensatz gegen mehrere Modelle oder Endpoints aus (z. B. LiteLLM vs. vLLM direkt) und vergleicht Score, Latenz und Tokens.',
+  // Wie die im Test-Builder gewählten Modelle wirken: each = ein Test je Modell, list = Modellliste im Test, first = erstes Modell, none = ignoriert.
+  modelMode: 'list',
   defaults: {
     models: [],
     targets: [],

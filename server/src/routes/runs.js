@@ -21,7 +21,8 @@ export default async function runRoutes(app) {
   // body: { kind: 'single'|'selection'|'suite'|'all', testIds?, suiteId? }
   app.post('/api/runs', starter, async (request) => {
     const b = request.body ?? {};
-    return createRun({ kind: b.kind, testIds: b.testIds, suiteId: b.suiteId, userId: request.user.id, label: b.label });
+    if (b.kind === 'build') throw Object.assign(new Error('Tests werden über /api/builds/:id/run gestartet'), { statusCode: 400 });
+    return createRun({ kind: b.kind, testIds: b.testIds, suiteId: b.suiteId, buildId: b.buildId, userId: request.user.id, label: b.label });
   });
 
   app.get('/api/runs', viewer, async (request) => {
