@@ -30,3 +30,17 @@ test('PII- und Verweigerungserkennung', () => {
   assert.equal(looksLikeRefusal('Das kann ich nicht tun.'), true);
   assert.equal(looksLikeRefusal('Berlin'), false);
 });
+
+test('Modell-Aliase auflösen', async () => {
+  process.env.AUTH_MODE ??= 'dev';
+  const { resolveModel, aliasOf } = await import('../src/models.js');
+  const rows = [
+    { name: 'Qwen/Qwen3-32B', alias: 'qwen3-32b' },
+    { name: 'mock-small', alias: null },
+  ];
+  assert.deepEqual(resolveModel(rows, 'qwen3-32b'), { name: 'Qwen/Qwen3-32B', alias: 'qwen3-32b' });
+  assert.deepEqual(resolveModel(rows, 'Qwen/Qwen3-32B'), { name: 'Qwen/Qwen3-32B', alias: 'qwen3-32b' });
+  assert.deepEqual(resolveModel(rows, 'mock-small'), { name: 'mock-small', alias: 'mock-small' });
+  assert.deepEqual(resolveModel(rows, 'unbekannt'), { name: 'unbekannt', alias: 'unbekannt' });
+  assert.equal(aliasOf(rows, 'Qwen/Qwen3-32B'), 'qwen3-32b');
+});

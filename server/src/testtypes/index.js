@@ -9,9 +9,10 @@ import access from './access.js';
 import mcp from './mcp.js';
 import ratelimit from './ratelimit.js';
 import structured from './structured.js';
+import thinking from './thinking.js';
 
 export const testTypes = Object.fromEntries(
-  [smoke, performance, load, quality, comparison, security, access, mcp, ratelimit, structured].map((t) => [t.type, t]),
+  [smoke, performance, load, quality, comparison, security, access, mcp, ratelimit, structured, thinking].map((t) => [t.type, t]),
 );
 
 export function describeTypes() {

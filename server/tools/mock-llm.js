@@ -1,10 +1,13 @@
 // Mock eines LiteLLM-Gateways (OpenAI-API + MCP) für lokale Entwicklung, Demos und CI.
 // Keys: sk-admin (alle Modelle, alle MCP-Tools), sk-team-a (nur mock-small, nur Tool "search"),
 //       sk-limited (max. 10 Requests pro Minute). Ohne Key: 401.
+// Unter /vllm-qwen läuft zusätzlich ein "vLLM-Endpunkt" ohne Auth, der dasselbe Modell wie
+// qwen3-32b im Gateway unter seinem Originalnamen Qwen/Qwen3-32B anbietet.
 import http from 'node:http';
 
 const PORT = Number(process.env.MOCK_PORT ?? 4000);
-const MODELS = ['mock-small', 'mock-large'];
+const MODELS = ['mock-small', 'mock-large', 'qwen3-32b'];
+const VLLM = { key: 'vllm', models: ['Qwen/Qwen3-32B'], tools: [] };
 const KEYS = {
   'sk-admin': { models: MODELS, tools: ['search', 'delete_records'], admin: true },
   'sk-team-a': { models: ['mock-small'], tools: ['search'] },
@@ -14,14 +17,29 @@ const hits = new Map();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Antworten auf die Thinking-Aufgaben: mit Reasoning richtig, ohne bei den Fangfragen falsch.
+const THINKING_TASKS = [
+  [/Schläger/, '5', '10'],
+  [/Maschinen/, '5', '100'],
+  [/zweitjüngste/, 'Carla', 'Carla'],
+  [/Primzahlen/, '5', '5'],
+  [/Zug fährt/, '12:15', '12:15'],
+];
+
+function thinkingEnabled(body) {
+  if (body.chat_template_kwargs?.enable_thinking === false) return false;
+  if (body.reasoning_effort === 'none' || body.reasoning_effort === 'low') return false;
+  return true;
+}
+
 function answer(messages, model) {
   const text = messages.map((m) => m.content).join('\n');
   const user = messages.filter((m) => m.role === 'user').at(-1)?.content ?? '';
+  if (/Du bewertest/i.test(text)) return '{"score": 8, "reason": "solide"}';
   if (/DAN|Malware|Sprengstoff|Ignoriere alle/i.test(user)) return 'Das kann ich nicht tun, tut mir leid.';
   if (/Hauptstadt von Deutschland/i.test(user)) return 'Berlin';
   if (/17 \* 23/.test(user)) return model === 'mock-small' ? '381' : '391';
   if (/JSON-Objekt/i.test(user)) return '{"name": "Erika", "alter": 34}';
-  if (/Du bewertest Antworten/i.test(text)) return '{"score": 8, "reason": "solide"}';
   if (/Dokument zusammen/i.test(user)) return 'Der Quartalsbericht Q3 meldet einen stabilen Umsatz.';
   return 'OK. Kubernetes ist eine Plattform zur Orchestrierung von Containern.';
 }
@@ -59,8 +77,29 @@ async function chat(req, res, who) {
   if (/\b(?:\d[ -]?){13,16}\b/.test(prompt)) {
     return send(res, 400, { error: { message: 'Blocked by guardrail: PII detected', type: 'guardrail' } });
   }
-  const base = body.model === 'mock-large' ? 180 : 60;
+  const large = body.model !== 'mock-small';
+  const base = large ? 180 : 60;
   await sleep(base + Math.random() * 60);
+
+  const task = !/Du bewertest/.test(prompt) && THINKING_TASKS.find(([re]) => re.test(prompt));
+  if (task) {
+    const think = thinkingEnabled(body);
+    const reasoning = think ? `Schritt für Schritt: ${prompt.slice(0, 80)} … geprüft und nachgerechnet.`.repeat(12) : '';
+    if (think) await sleep(400);
+    const content = `Antwort: ${think ? task[1] : task[2]}`;
+    return send(res, 200, {
+      id: 'chatcmpl-mock',
+      object: 'chat.completion',
+      model: body.model,
+      choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content, reasoning_content: reasoning || null } }],
+      usage: {
+        prompt_tokens: 40,
+        completion_tokens: 6 + Math.round(reasoning.length / 4),
+        total_tokens: 46 + Math.round(reasoning.length / 4),
+        completion_tokens_details: { reasoning_tokens: Math.round(reasoning.length / 4) },
+      },
+    });
+  }
 
   if (body.tools?.length) {
     const city = prompt.match(/in (\w+)/)?.[1] ?? 'Berlin';
@@ -89,7 +128,7 @@ async function chat(req, res, who) {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     for (const w of words) {
       res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: w } }] })}\n\n`);
-      await sleep(body.model === 'mock-large' ? 25 : 10);
+      await sleep(large ? 25 : 10);
     }
     res.write(
       `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12, completion_tokens: words.length, total_tokens: 12 + words.length } })}\n\n`,
@@ -132,6 +171,12 @@ http
     try {
       const url = new URL(req.url, 'http://localhost');
       if (url.pathname === '/health/liveliness') return send(res, 200, { status: 'ok' });
+      if (url.pathname.startsWith('/vllm-qwen/')) {
+        url.pathname = url.pathname.slice('/vllm-qwen'.length);
+        if (url.pathname === '/v1/models') return send(res, 200, { data: VLLM.models.map((id) => ({ id, object: 'model', owned_by: 'vllm' })) });
+        if (url.pathname === '/v1/chat/completions') return await chat(req, res, VLLM);
+        return send(res, 404, { error: 'not found' });
+      }
       const who = auth(req);
       if (!who) return send(res, 401, { error: { message: 'Authentication Error, no api key passed in' } });
       if (url.pathname === '/v1/models') return send(res, 200, { data: who.models.map((id) => ({ id, object: 'model' })) });

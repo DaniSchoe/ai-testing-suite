@@ -3,20 +3,23 @@
 import { encrypt } from '../src/crypto.js';
 import { one, pool, query } from '../src/db.js';
 import { migrate } from '../src/migrate.js';
+import { syncEndpointModels } from '../src/models.js';
 
 const MOCK_URL = process.env.MOCK_URL ?? 'http://localhost:4000';
 
 await migrate();
 
 async function upsertEndpoint(e) {
-  return one(
-    `insert into endpoints (name, kind, base_url, api_key_enc, models, default_model)
-     values ($1, $2, $3, $4, $5, $6)
+  const row = await one(
+    `insert into endpoints (name, kind, base_url, api_key_enc, default_model)
+     values ($1, $2, $3, $4, $5)
      on conflict (name) do update set base_url = excluded.base_url, api_key_enc = excluded.api_key_enc,
-       models = excluded.models, default_model = excluded.default_model
+       default_model = excluded.default_model
      returning *`,
-    [e.name, e.kind, e.base_url, encrypt(e.api_key), e.models, e.default_model],
+    [e.name, e.kind, e.base_url, encrypt(e.api_key), e.default_model],
   );
+  if (e.kind !== 'mcp') await syncEndpointModels(row);
+  return row;
 }
 
 async function upsertPersona(p) {
@@ -34,10 +37,12 @@ const gateway = await upsertEndpoint({
   kind: 'litellm',
   base_url: MOCK_URL,
   api_key: 'sk-admin',
-  models: ['mock-small', 'mock-large'],
   default_model: 'mock-small',
 });
-const mcpServer = await upsertEndpoint({ name: 'MCP Gateway (Mock)', kind: 'mcp', base_url: `${MOCK_URL}/mcp`, api_key: 'sk-admin', models: [] });
+const mcpServer = await upsertEndpoint({ name: 'MCP Gateway (Mock)', kind: 'mcp', base_url: `${MOCK_URL}/mcp`, api_key: 'sk-admin' });
+// vLLM ohne Auth; das Modell heißt dort anders als im Gateway und bekommt deshalb einen Alias.
+const vllm = await upsertEndpoint({ name: 'vLLM Qwen3 (Mock)', kind: 'vllm', base_url: `${MOCK_URL}/vllm-qwen`, default_model: 'qwen3-32b' });
+await query(`update endpoint_models set alias = 'qwen3-32b' where endpoint_id = $1 and name = 'Qwen/Qwen3-32B'`, [vllm.id]);
 
 await upsertPersona({ name: 'admin', description: 'Plattform-Admin, alle Modelle und Tools', secret: 'sk-admin' });
 await upsertPersona({ name: 'team-a', description: 'Fachbereich A, nur mock-small und Tool "search"', secret: 'sk-team-a' });
@@ -50,6 +55,19 @@ const tests = [
   { name: 'Last: Ramp-up kurz', type: 'load', endpoint: gateway, config: { stages: [{ durationS: 3, concurrency: 2 }, { durationS: 3, concurrency: 8 }] } },
   { name: 'Qualität: Basiswissen', type: 'quality', endpoint: gateway, config: { model: 'mock-small' } },
   { name: 'Vergleich: small vs. large', type: 'comparison', endpoint: gateway, config: { models: ['mock-small', 'mock-large'] } },
+  {
+    name: 'Vergleich: qwen3 über LiteLLM vs. vLLM direkt',
+    type: 'comparison',
+    endpoint: gateway,
+    config: {
+      targets: [
+        { endpoint: 'LiteLLM (Mock)', model: 'qwen3-32b' },
+        { endpoint: 'vLLM Qwen3 (Mock)', model: 'qwen3-32b' },
+      ],
+    },
+  },
+  { name: 'Smoke: vLLM Qwen3', type: 'smoke', endpoint: vllm, config: {} },
+  { name: 'Thinking: Qwen3 mit und ohne Reasoning', type: 'thinking', endpoint: vllm, config: { judgeModel: 'qwen3-32b' } },
   { name: 'Security & DLP: Standardkatalog', type: 'security', endpoint: gateway, config: {} },
   { name: 'Tool-Calling: Wetter', type: 'structured', endpoint: gateway, config: {} },
   {
@@ -107,7 +125,9 @@ const suite = await one(
    on conflict (name) do update set description = excluded.description returning id`,
 );
 await query('delete from suite_tests where suite_id = $1', [suite.id]);
-for (const [i, id] of [ids[0], ids[4], ids[6], ids[8], ids[9]].entries()) {
+const byName = (name) => ids[tests.findIndex((t) => t.name === name)];
+const nightly = ['Smoke: Gateway', 'Qualität: Basiswissen', 'Security & DLP: Standardkatalog', 'Zugriff: Modellfreigaben je Team', 'MCP: Tool-Freigaben je User'];
+for (const [i, id] of nightly.map(byName).entries()) {
   await query('insert into suite_tests (suite_id, test_id, position) values ($1, $2, $3)', [suite.id, id, i]);
 }
 

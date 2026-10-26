@@ -29,8 +29,10 @@ function keyMetric(r) {
       return `${m.passed}/${m.checks} Checks${m.tools_leaked ? ` · ${m.tools_leaked} Tools zu viel` : ''}`;
     case 'smoke':
       return `${m.models_healthy}/${m.models_expected} Modelle ok`;
+    case 'thinking':
+      return `Genauigkeit ${m.accuracy_gain >= 0 ? '+' : ''}${fmt.num((m.accuracy_gain ?? 0) * 100, 0)} Pkt. · ${fmt.num(m.token_factor)}× Tokens`;
     case 'comparison':
-      return `Bestes Modell: ${m.best_model ?? '–'}`;
+      return `Bestes Ergebnis: ${m.best ?? m.best_model ?? '–'}`;
     default:
       return m.cases !== undefined ? `${m.passed}/${m.cases} Fälle` : '';
   }

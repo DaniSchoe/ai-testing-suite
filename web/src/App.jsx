@@ -11,6 +11,7 @@ import {
   Monitor,
   Moon,
   Network,
+  Boxes,
   Search,
   Sun,
   Table2,
@@ -26,6 +27,7 @@ import RunDetail from './pages/RunDetail.jsx';
 import Endpoints from './pages/admin/Endpoints.jsx';
 import Personas from './pages/admin/Personas.jsx';
 import UsersPage from './pages/admin/Users.jsx';
+import Models from './pages/admin/Models.jsx';
 
 const ROLE_LABEL = { admin: 'Administrator', tester: 'Tester', viewer: 'Betrachter' };
 
@@ -81,6 +83,9 @@ export default function App() {
               <nav className="nav">
                 <NavLink to="/admin/endpoints">
                   <Network size={18} /> Endpoints
+                </NavLink>
+                <NavLink to="/admin/models">
+                  <Boxes size={18} /> Modellkatalog
                 </NavLink>
                 <NavLink to="/admin/personas">
                   <KeyRound size={18} /> Test-Personas
@@ -142,6 +147,7 @@ export default function App() {
               <Route path="/history" element={<History />} />
               <Route path="/runs/:id" element={<RunDetail />} />
               <Route path="/admin/endpoints" element={<Endpoints />} />
+              <Route path="/admin/models" element={<Models />} />
               <Route path="/admin/personas" element={<Personas />} />
               <Route path="/admin/users" element={<UsersPage />} />
               <Route path="*" element={<div className="empty">Seite nicht gefunden</div>} />

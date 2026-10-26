@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Pencil, PlugZap, Plus, Trash2 } from 'lucide-react';
-import { api, JsonField, Modal, useApi } from '../../lib.jsx';
+import { api, fmt, JsonField, Modal, useApi } from '../../lib.jsx';
 
 const KIND_LABEL = { litellm: 'LiteLLM', vllm: 'vLLM', openai: 'OpenAI-kompatibel', mcp: 'MCP-Server' };
 
@@ -13,6 +14,7 @@ export default function Endpoints() {
     setChecks((c) => ({ ...c, [e.id]: { pending: true } }));
     const res = await api(`/api/endpoints/${e.id}/check`, { method: 'POST' }).catch((err) => ({ ok: false, error: err.message }));
     setChecks((c) => ({ ...c, [e.id]: res }));
+    endpoints.reload();
   }
 
   async function remove(e) {
@@ -26,7 +28,11 @@ export default function Endpoints() {
       <div className="page-head">
         <div>
           <h1>Endpoints</h1>
-          <p>LiteLLM-Gateways, vLLM-Server und MCP-Server, gegen die getestet wird. API-Keys werden verschlüsselt gespeichert.</p>
+          <p>
+            LiteLLM-Gateways, vLLM-Server (einer pro Modell) und MCP-Server. Modelle werden automatisch über <code>/v1/models</code> abgefragt; gleiche
+            Modelle mit unterschiedlichen Namen führst du im <Link to="/admin/models">Modellkatalog</Link> zusammen. API-Keys werden verschlüsselt
+            gespeichert, für vLLM ohne Auth einfach leer lassen.
+          </p>
         </div>
         <button className="btn primary" onClick={() => setEditing({})}>
           <Plus size={15} /> Neuer Endpoint
@@ -62,8 +68,17 @@ export default function Endpoints() {
                     <code>{e.base_url}</code>
                   </td>
                   <td className="sub">
-                    {e.models.join(', ') || '–'}
-                    {e.default_model && <div>Standard: {e.default_model}</div>}
+                    {e.kind === 'mcp' ? (
+                      '–'
+                    ) : (
+                      <>
+                        <Link to="/admin/models">{e.models.filter((m) => m.available).length} Modelle</Link>
+                        {e.models.some((m) => !m.available) && <span> · {e.models.filter((m) => !m.available).length} verschwunden</span>}
+                        {e.default_model && <div>Standard: {e.default_model}</div>}
+                        <div>{e.auto_discover ? `abgefragt ${fmt.ago(e.models_synced_at)}` : 'manuell gepflegt'}</div>
+                        {e.models_sync_error && <div style={{ color: 'var(--bad)' }}>Abruf fehlgeschlagen</div>}
+                      </>
+                    )}
                   </td>
                   <td className="sub">{e.api_key_masked ?? '–'}</td>
                   <td className="sub">
@@ -120,7 +135,11 @@ function EndpointEditor({ endpoint, onClose, onSaved }) {
     name: endpoint.name ?? '',
     kind: endpoint.kind ?? 'litellm',
     base_url: endpoint.base_url ?? '',
-    models: (endpoint.models ?? []).join(', '),
+    manual_models: (endpoint.models ?? [])
+      .filter((m) => m.source === 'manual')
+      .map((m) => m.name)
+      .join(', '),
+    auto_discover: endpoint.auto_discover ?? true,
     default_model: endpoint.default_model ?? '',
     enabled: endpoint.enabled ?? true,
     notes: endpoint.notes ?? '',
@@ -134,7 +153,7 @@ function EndpointEditor({ endpoint, onClose, onSaved }) {
     const body = {
       ...form,
       headers,
-      models: form.models
+      manual_models: form.manual_models
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
@@ -204,16 +223,31 @@ function EndpointEditor({ endpoint, onClose, onSaved }) {
         />
       </label>
       {form.kind !== 'mcp' && (
-        <div className="form-grid">
-          <label className="field">
-            <span>Modelle (kommagetrennt)</span>
-            <input value={form.models} placeholder="gpt-oss-120b, llama-3.3-70b" onChange={(e) => set({ models: e.target.value })} />
+        <>
+          <label className="checkbox" style={{ marginBottom: 14 }}>
+            <input type="checkbox" checked={form.auto_discover} onChange={(e) => set({ auto_discover: e.target.checked })} /> Modelle automatisch über
+            /v1/models abfragen (beim Speichern, beim Verbindungstest und alle 15 Minuten)
           </label>
-          <label className="field">
-            <span>Standardmodell</span>
-            <input value={form.default_model} onChange={(e) => set({ default_model: e.target.value })} />
-          </label>
-        </div>
+          <div className="form-grid">
+            <label className="field">
+              <span>Zusätzliche Modelle (manuell, kommagetrennt)</span>
+              <input value={form.manual_models} placeholder="nur nötig ohne /v1/models" onChange={(e) => set({ manual_models: e.target.value })} />
+            </label>
+            <label className="field">
+              <span>Standardmodell (Name oder Alias)</span>
+              <input
+                value={form.default_model}
+                list="endpoint-models"
+                onChange={(e) => set({ default_model: e.target.value })}
+              />
+              <datalist id="endpoint-models">
+                {(endpoint.models ?? []).map((m) => (
+                  <option key={m.name} value={m.alias ?? m.name} />
+                ))}
+              </datalist>
+            </label>
+          </div>
+        </>
       )}
       <JsonField label="Zusätzliche Header (JSON)" value={headers} rows={3} onChange={(v, ok) => ok && setHeaders(v)} />
       <label className="field">

@@ -58,7 +58,7 @@ jobs:
             for (const x of r.results) console.log(x.status.padEnd(7), x.test_name, x.error ?? "");
             // Der Mock rechnet bei mock-small absichtlich falsch: genau ein Qualitätstest schlägt fehl.
             const bad = r.results.filter((x) => x.status !== "passed").map((x) => x.type);
-            if (r.results.length < 11 || bad.length !== 1 || bad[0] !== "quality") process.exit(1);'
+            if (r.results.length < 14 || bad.length !== 1 || bad[0] !== "quality") process.exit(1);'
       - name: Helm-Chart prüfen
         run: |
           curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash

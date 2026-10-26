@@ -111,7 +111,7 @@ export default async function runRoutes(app) {
         and res.finished_at > now() - make_interval(days => $3::int)
         and ($1 = 'global' or r.user_id = $2)`;
 
-    const [kpis, trend, byType, perfByModel, models, recentFailures, regressions, runsCount, byUser] = await Promise.all([
+    const [kpis, trend, byType, perfByModel, models, recentFailures, regressions, runsCount, byUser, thinking] = await Promise.all([
       one(
         `select count(*)::int as results,
            count(*) filter (where res.status = 'passed')::int as passed,
@@ -140,7 +140,7 @@ export default async function runRoutes(app) {
         p,
       ),
       many(
-        `select date_trunc('day', res.finished_at) as day, res.model,
+        `select date_trunc('day', res.finished_at) as day, coalesce(res.model_alias, res.model) as model,
            avg((res.metrics->>'ttft_ms_p95')::numeric) as ttft_ms_p95,
            avg((res.metrics->>'latency_ms_p95')::numeric) as latency_ms_p95,
            avg((res.metrics->>'tokens_per_s_avg')::numeric) as tokens_per_s
@@ -148,13 +148,14 @@ export default async function runRoutes(app) {
         p,
       ),
       many(
-        `select res.model, count(*)::int as results,
+        `select coalesce(res.model_alias, res.model) as model, count(*)::int as results,
+           count(distinct res.endpoint_id)::int as endpoints,
            avg(res.score) filter (where res.type in ('quality', 'structured')) as quality_score,
            avg(res.score) filter (where res.type = 'security') as security_score,
            avg((res.metrics->>'ttft_ms_p95')::numeric) as ttft_ms_p95,
            avg((res.metrics->>'tokens_per_s_avg')::numeric) as tokens_per_s,
            count(*) filter (where res.status = 'passed')::float / nullif(count(*), 0) as pass_rate
-         ${base} and res.model is not null and res.type <> 'comparison' group by 1 order by 2 desc limit 12`,
+         ${base} and res.model is not null and res.type not in ('comparison', 'thinking') group by 1 order by 2 desc limit 12`,
         p,
       ),
       many(
@@ -186,6 +187,16 @@ export default async function runRoutes(app) {
             [days],
           )
         : Promise.resolve([]),
+      // Thinking vs. Non-Thinking: Mittelwerte je Modell über die Thinking-Tests im Zeitraum.
+      many(
+        `select coalesce(res.model_alias, res.model) as model, count(*)::int as results,
+           avg((res.metrics->>'accuracy_gain')::numeric) as accuracy_gain,
+           avg((res.metrics->>'token_factor')::numeric) as token_factor,
+           avg((res.metrics->>'latency_factor')::numeric) as latency_factor,
+           avg(res.score) as thinking_accuracy
+         ${base} and res.type = 'thinking' and res.status <> 'error' group by 1 order by 1`,
+        p,
+      ),
     ]);
 
     return {
@@ -203,6 +214,7 @@ export default async function runRoutes(app) {
       models,
       recentFailures,
       byUser,
+      thinking,
     };
   });
 }

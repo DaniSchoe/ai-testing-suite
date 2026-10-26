@@ -7,7 +7,10 @@ Entwicklung im Dashboard.
 
 - **Node.js** (Fastify) und **PostgreSQL**, Job-Queue und Zeitpläne ebenfalls in Postgres (pg-boss)
 - **Keycloak-Login** (OIDC) mit Rollen und **Test-Personas** für userspezifische Freigabetests
-- **Admin-Panel** für Endpoints (LiteLLM, vLLM, MCP) und Personas
+- **Admin-Panel** für Endpoints (LiteLLM, mehrere vLLM-Endpunkte, MCP) und Personas
+- **Modellkatalog**: Modelle werden automatisch von LiteLLM und jedem vLLM-Endpunkt abgefragt,
+  unterschiedliche Namen desselben Modells werden per Alias zusammengeführt
+- **Thinking vs. Non-Thinking**: Genauigkeit, Token-Verbrauch, Latenz und Schlüssigkeit im Vergleich
 - Tests **einzeln, gebündelt, geplant oder alle** ausführen
 - Dashboard **global oder nutzerspezifisch**, Tabelle aller eigenen Testausführungen
 - **Hell-, Dunkel- und System-Modus**
@@ -25,7 +28,7 @@ npm run build --prefix web
 
 cd server
 node tools/mock-llm.js &            # Mock-Gateway auf :4000 (OpenAI-API + MCP)
-AUTH_MODE=dev node tools/seed.js    # Demo-Endpoints, Personas, 11 Beispieltests
+AUTH_MODE=dev node tools/seed.js    # Demo-Endpoints (LiteLLM, vLLM, MCP), Personas, 14 Beispieltests
 AUTH_MODE=dev npm start             # http://localhost:8080, Login als Dev-Admin
 ```
 
@@ -81,6 +84,7 @@ Das Image wird von der CI bei jedem Merge nach `main` als `ghcr.io/danischoe/ai-
 | `RUN_WORKER` | Worker im Web-Prozess mitlaufen lassen (lokal `true`, in Kubernetes `false`) |
 | `WORKER_CONCURRENCY` | parallele Läufe pro Worker |
 | `MIGRATE_ON_START` | Migrationen beim Start ausführen (Standard `true`) |
+| `MODEL_SYNC_CRON` | wie oft der Worker die Modelle aller Endpoints abfragt (Standard `*/15 * * * *`) |
 
 ## Eigene Tests
 
@@ -94,6 +98,33 @@ vorbefüllt. Beispiel für einen Berechtigungstest:
     { "persona": "team-a", "model": "llama-3.3-70b", "expect": "deny" },
     { "persona": "team-a", "method": "GET", "path": "/key/list", "expect": "deny" },
     { "persona": null, "model": "gpt-oss-120b", "expect": "deny", "name": "Ohne Credentials" }
+  ]
+}
+```
+
+Persona-Namen beziehen sich auf die Test-Personas (Standard: LiteLLM-Key pro User/Team).
+
+Thinking-Test für ein Qwen3-Modell auf vLLM; für gpt-oss oder über LiteLLM stattdessen
+`reasoning_effort` in den Varianten setzen:
+
+```json
+{
+  "model": "qwen3-32b",
+  "judgeModel": "qwen3-32b",
+  "variants": [
+    { "name": "Thinking", "params": { "chat_template_kwargs": { "enable_thinking": true } } },
+    { "name": "Non-Thinking", "params": { "chat_template_kwargs": { "enable_thinking": false } } }
+  ]
+}
+```
+
+Vergleich desselben Modells über LiteLLM und direkt am vLLM-Endpunkt (Aliase aus dem Modellkatalog):
+
+```json
+{
+  "targets": [
+    { "endpoint": "LiteLLM", "model": "qwen3-32b" },
+    { "endpoint": "vLLM Qwen3", "model": "qwen3-32b" }
   ]
 }
 ```

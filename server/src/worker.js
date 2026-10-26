@@ -5,6 +5,7 @@ import { config } from './config.js';
 import { one, query, pool } from './db.js';
 import { migrate } from './migrate.js';
 import { getBoss, QUEUES, stopBoss } from './queue.js';
+import { syncAllModels } from './models.js';
 import { executeRun } from './runner/executor.js';
 import { createRun } from './runs.js';
 
@@ -41,6 +42,11 @@ export async function startWorker(logger = console) {
     });
     await query('update schedules set last_run_at = now() where id = $1', [schedule.id]);
   });
+
+  // Modellkatalog regelmäßig mit LiteLLM und den vLLM-Endpunkten abgleichen.
+  await boss.work(QUEUES.modelSync, async () => syncAllModels(logger));
+  await boss.schedule(QUEUES.modelSync, process.env.MODEL_SYNC_CRON ?? '*/15 * * * *');
+  syncAllModels(logger).catch((err) => logger.warn(`Modellabruf: ${err.message}`));
 
   logger.info(`Worker bereit (Parallelität ${config.workerConcurrency})`);
 }

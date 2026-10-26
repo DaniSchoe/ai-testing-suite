@@ -181,6 +181,8 @@ function TestEditor({ test, types, onClose, onSaved }) {
   }
 
   const allowedEndpoints = (endpoints.data ?? []).filter((e) => !typeInfo || typeInfo.endpointKinds.includes(e.kind));
+  const selectedEndpoint = endpoints.data?.find((e) => e.id === form.endpoint_id);
+  const modelNames = [...new Set((selectedEndpoint?.models ?? []).filter((m) => m.available).map((m) => m.alias ?? m.name))];
 
   async function save() {
     setError(null);
@@ -265,6 +267,11 @@ function TestEditor({ test, types, onClose, onSaved }) {
         </label>
       </div>
       {typeInfo && <p className="hint" style={{ marginTop: -4 }}>{typeInfo.description}</p>}
+      {modelNames.length > 0 && (
+        <p className="hint">
+          Verfügbare Modelle an diesem Endpoint (Alias oder Name verwendbar): <code>{modelNames.join(', ')}</code>
+        </p>
+      )}
       <JsonField
         key={configKey}
         label="Konfiguration (JSON)"

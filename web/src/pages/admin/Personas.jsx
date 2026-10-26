@@ -3,8 +3,8 @@ import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, JsonField, Modal, useApi } from '../../lib.jsx';
 
 const AUTH_LABEL = {
-  keycloak_password: 'Keycloak-User',
-  api_key: 'API-Key / Virtual Key',
+  api_key: 'LiteLLM-Key / Virtual Key',
+  keycloak_password: 'Keycloak-User (JWT)',
   none: 'Ohne Credentials',
 };
 
@@ -24,8 +24,8 @@ export default function Personas() {
         <div>
           <h1>Test-Personas</h1>
           <p>
-            Test-User, unter deren Identität Tests laufen. So lassen sich userspezifische Freigaben für Modelle und MCP-Tools prüfen. Keycloak-User holen sich
-            ihr Token über den Persona-Client.
+            Test-User, unter deren Identität Tests laufen. So lassen sich userspezifische Freigaben für Modelle und MCP-Tools prüfen. Standard ist ein
+            LiteLLM-Key pro User oder Team; alternativ holt sich ein Keycloak-User sein Token über den Persona-Client.
           </p>
         </div>
         <button className="btn primary" onClick={() => setEditing({})}>
@@ -98,7 +98,7 @@ function PersonaEditor({ persona, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: persona.name ?? '',
     description: persona.description ?? '',
-    auth_type: persona.auth_type ?? 'keycloak_password',
+    auth_type: persona.auth_type ?? 'api_key',
     username: persona.username ?? '',
   });
   const [secret, setSecret] = useState(undefined);

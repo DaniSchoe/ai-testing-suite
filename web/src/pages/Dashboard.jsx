@@ -162,7 +162,10 @@ export default function Dashboard() {
               <tbody>
                 {(data?.models ?? []).map((m) => (
                   <tr key={m.model}>
-                    <td style={{ fontWeight: 600 }}>{m.model}</td>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{m.model}</div>
+                      {m.endpoints > 1 && <div className="sub">über {m.endpoints} Endpoints</div>}
+                    </td>
                     <td className="num">{m.results}</td>
                     <td className="num">{fmt.pct(m.pass_rate)}</td>
                     <td className="num">{fmt.pct(m.quality_score)}</td>
@@ -183,6 +186,41 @@ export default function Dashboard() {
           </div>
         </Card>
       </div>
+
+      {data?.thinking?.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <Card title="Thinking vs. Non-Thinking" sub="Mittelwerte aus Thinking-Tests im Zeitraum: was bringt Reasoning und was kostet es?" flush>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Modell</th>
+                    <th className="num">Tests</th>
+                    <th className="num">Genauigkeit mit Thinking</th>
+                    <th className="num">Gewinn ggü. ohne</th>
+                    <th className="num">Token-Faktor</th>
+                    <th className="num">Latenz-Faktor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.thinking.map((t) => (
+                    <tr key={t.model}>
+                      <td style={{ fontWeight: 600 }}>{t.model}</td>
+                      <td className="num">{t.results}</td>
+                      <td className="num">{fmt.pct(t.thinking_accuracy)}</td>
+                      <td className="num">
+                        {t.accuracy_gain === null ? '–' : `${t.accuracy_gain >= 0 ? '+' : ''}${fmt.num(t.accuracy_gain * 100, 0)} Pkt.`}
+                      </td>
+                      <td className="num">{t.token_factor === null ? '–' : `${fmt.num(t.token_factor)}×`}</td>
+                      <td className="num">{t.latency_factor === null ? '–' : `${fmt.num(t.latency_factor)}×`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {scope === 'global' && (
         <Card title="Alle Nutzer" sub="Testaktivität je Nutzer im Zeitraum" flush>

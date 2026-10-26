@@ -165,13 +165,17 @@ function ResultCard({ result, logs }) {
 function formatMetric(key, v) {
   if (typeof v !== 'number') return v;
   if (key.includes('_ms')) return fmt.ms(v);
-  if (key.includes('rate') || key.startsWith('score') || key.startsWith('pass_rate')) return fmt.pct(v);
+  if (key.includes('rate') || key.startsWith('score') || key.startsWith('pass_rate') || key.startsWith('accuracy') || key.startsWith('judge_score')) {
+    return fmt.pct(v);
+  }
+  if (key.endsWith('_factor')) return `${fmt.num(v)}×`;
   return fmt.num(v);
 }
 
 // Einzelfälle (Quality, Security, Access, MCP, Vergleich) als Tabelle.
 function DetailsTable({ result }) {
   const d = result.details ?? {};
+  if (d.variants) return <ThinkingDetails variants={d.variants} />;
   if (d.ranking) {
     return (
       <div className="table-wrap">
@@ -187,9 +191,12 @@ function DetailsTable({ result }) {
           </thead>
           <tbody>
             {d.ranking.map((m, i) => (
-              <tr key={m.model}>
+              <tr key={m.label ?? m.model}>
                 <td>{i + 1}</td>
-                <td style={{ fontWeight: 600 }}>{m.model}</td>
+                <td style={{ fontWeight: 600 }}>
+                  {m.label ?? m.model}
+                  {m.label && m.model !== m.alias && <div className="sub">{m.model}</div>}
+                </td>
                 <td className="num">{fmt.pct(m.score)}</td>
                 <td className="num">{fmt.ms(m.latency_ms_avg)}</td>
                 <td className="num">{m.tokens_total}</td>
@@ -277,5 +284,76 @@ function DetailsTable({ result }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+// Thinking vs. Non-Thinking: Varianten nebeneinander, darunter jede Aufgabe je Variante.
+function ThinkingDetails({ variants }) {
+  const caseNames = variants[0]?.cases.map((c) => c.name) ?? [];
+  return (
+    <>
+      <div className="table-wrap" style={{ marginBottom: 16 }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Variante</th>
+              <th className="num">Genauigkeit</th>
+              <th className="num">Ø Latenz</th>
+              <th className="num">Ø Tokens</th>
+              <th className="num">Ø Reasoning</th>
+              <th className="num">Tokens je richtige Antwort</th>
+              <th className="num">Schlüssigkeit (Judge)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {variants.map((v) => (
+              <tr key={v.name}>
+                <td>
+                  <div style={{ fontWeight: 600 }}>{v.name}</div>
+                  <div className="sub">
+                    <code>{JSON.stringify(v.params)}</code>
+                  </div>
+                </td>
+                <td className="num">
+                  {fmt.pct(v.accuracy)} <span className="sub">({v.correct}/{v.cases.length})</span>
+                </td>
+                <td className="num">{fmt.ms(v.latency_ms_avg)}</td>
+                <td className="num">{fmt.num(v.completion_tokens_avg, 0)}</td>
+                <td className="num">{fmt.num(v.reasoning_tokens_avg, 0)}</td>
+                <td className="num">{fmt.num(v.tokens_per_correct, 0)}</td>
+                <td className="num">{fmt.pct(v.judge_score)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Aufgabe</th>
+              {variants.map((v) => (
+                <th key={v.name}>{v.name}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {caseNames.map((name, i) => (
+              <tr key={name}>
+                <td style={{ fontWeight: 600 }}>{name}</td>
+                {variants.map((v) => {
+                  const c = v.cases[i];
+                  return (
+                    <td key={v.name} className="sub">
+                      <StatusBadge status={c?.ok ? 'passed' : 'failed'} /> {c?.error ?? `${c?.answer?.slice(0, 60) ?? ''} · ${fmt.num(c?.completionTokens, 0)} Tokens · ${fmt.ms(c?.latencyMs)}`}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

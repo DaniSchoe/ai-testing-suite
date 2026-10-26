@@ -60,9 +60,15 @@ export class LlmClient {
     const latencyMs = performance.now() - started;
     if (!res.ok) throw new HttpError(res.status, res.text);
     const choice = res.json?.choices?.[0];
+    const raw = choice?.message?.content ?? '';
+    // Reasoning kommt je nach Server als eigenes Feld (vLLM: reasoning_content, neuer: reasoning)
+    // oder als <think>-Block im Content.
+    const think = raw.match(/<think>([\s\S]*?)<\/think>/);
     return {
       latencyMs,
-      content: choice?.message?.content ?? '',
+      content: think ? raw.replace(think[0], '').trim() : raw,
+      reasoning: choice?.message?.reasoning_content ?? choice?.message?.reasoning ?? think?.[1]?.trim() ?? '',
+      reasoningTokens: res.json?.usage?.completion_tokens_details?.reasoning_tokens ?? null,
       toolCalls: choice?.message?.tool_calls ?? [],
       finishReason: choice?.finish_reason,
       usage: res.json?.usage ?? {},

@@ -87,6 +87,7 @@ export const TYPE_LABELS = {
   mcp: 'MCP',
   ratelimit: 'Rate-Limits',
   structured: 'Tool-Calling / JSON',
+  thinking: 'Thinking vs. Non-Thinking',
 };
 
 export const STATUS_LABELS = {

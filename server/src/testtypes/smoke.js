@@ -9,7 +9,9 @@ export default {
     const t0 = performance.now();
     const available = await llm.models();
     const listMs = performance.now() - t0;
-    const expected = ctx.config.models?.length ? ctx.config.models : ctx.endpoint.models.length ? ctx.endpoint.models : available;
+    // Erwartet: konfigurierte Modelle, sonst alle bekannten des Katalogs (auch zuletzt verschwundene).
+    const known = ctx.endpoint.modelRows.map((m) => m.name);
+    const expected = ctx.config.models?.length ? ctx.config.models.map(ctx.resolveModel) : known.length ? known : available;
     const missing = expected.filter((m) => !available.includes(m));
     const checks = [];
     for (const model of expected.filter((m) => available.includes(m))) {

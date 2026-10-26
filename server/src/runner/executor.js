@@ -3,6 +3,7 @@ import { many, one, query } from '../db.js';
 import { decrypt } from '../crypto.js';
 import { getPersonaToken } from '../auth.js';
 import { testTypes } from '../testtypes/index.js';
+import { aliasOf, endpointHeaders, resolveModel } from '../models.js';
 import { LlmClient, McpClient } from './clients.js';
 
 // Kennzahlen, bei denen "höher" schlechter ist bzw. "niedriger" schlechter ist.
@@ -41,7 +42,7 @@ async function authHeaderFor(persona) {
   return {};
 }
 
-async function buildContext({ runId, resultId, test, endpoint, personasByName, signal }) {
+async function buildContext({ runId, resultId, test, endpoint, endpointsByName, personasByName, signal }) {
   const type = testTypes[test.type];
   const cfg = { ...structuredClone(type.defaults), ...test.config };
   const defaultPersona = test.persona_id ? [...personasByName.values()].find((p) => p.id === test.persona_id) : null;
@@ -70,10 +71,23 @@ async function buildContext({ runId, resultId, test, endpoint, personasByName, s
     endpoint: { ...endpoint, api_key_enc: undefined },
     persona: defaultPersona ? { id: defaultPersona.id, name: defaultPersona.name } : null,
     signal,
+    // Modellnamen dürfen echte Namen oder Aliase sein; zurück kommt der Name am Endpoint.
     model() {
       const m = cfg.model || endpoint.default_model || endpoint.models?.[0];
       if (!m) throw new Error('Kein Modell konfiguriert (Test oder Endpoint)');
-      return m;
+      return resolveModel(endpoint.modelRows, m).name;
+    },
+    resolveModel: (name) => resolveModel(endpoint.modelRows, name).name,
+    aliasOf: (name) => aliasOf(endpoint.modelRows, name),
+    // Anderer Endpoint als Ziel, z. B. LiteLLM gegen vLLM direkt. Nutzt dessen eigenen Key.
+    target(name) {
+      const other = endpointsByName.get(name);
+      if (!other) throw new Error(`Endpoint "${name}" existiert nicht`);
+      return {
+        endpoint: other,
+        llm: () => new LlmClient({ baseUrl: other.base_url, headers: endpointHeaders(other), timeoutMs: (cfg.requestTimeoutS ?? 120) * 1000 }),
+        resolveModel: (m) => resolveModel(other.modelRows, m ?? other.default_model ?? other.models[0]),
+      };
     },
     llm(opts) {
       return new LlmClient({ baseUrl: endpoint.base_url, headers: headersFor(opts), timeoutMs: (cfg.requestTimeoutS ?? 120) * 1000 });
@@ -112,7 +126,7 @@ async function regressionCheck(test, metrics, score) {
   return { baselineResultId: baseline.id, baselineRunId: baseline.run_id, tolerance, deltas, regressions };
 }
 
-async function runOne({ run, test, endpoint, personasByName }) {
+async function runOne({ run, test, endpoint, endpointsByName, personasByName }) {
   const result = await one(
     `insert into results (run_id, test_id, test_name, type, endpoint_id, endpoint_name, persona_name, status)
      values ($1, $2, $3, $4, $5, $6, $7, 'running') returning id`,
@@ -136,7 +150,15 @@ async function runOne({ run, test, endpoint, personasByName }) {
     if (!type) throw new Error(`Unbekannter Testtyp "${test.type}"`);
     if (!endpoint) throw new Error('Kein Endpoint zugeordnet');
     if (!endpoint.enabled) throw new Error(`Endpoint "${endpoint.name}" ist deaktiviert`);
-    const ctx = await buildContext({ runId: run.id, resultId: result.id, test, endpoint, personasByName, signal: controller.signal });
+    const ctx = await buildContext({
+      runId: run.id,
+      resultId: result.id,
+      test,
+      endpoint,
+      endpointsByName,
+      personasByName,
+      signal: controller.signal,
+    });
     await ctx.log('info', `Starte ${type.label}: ${test.name}`);
     const res = await Promise.race([
       type.run(ctx),
@@ -144,7 +166,7 @@ async function runOne({ run, test, endpoint, personasByName }) {
         controller.signal.addEventListener('abort', () => reject(new Error(`Timeout nach ${timeoutS}s`))),
       ),
     ]);
-    outcome = { status: res.status, model: res.model, score: res.score ?? null, metrics: res.metrics ?? {}, details: res.details ?? {} };
+    outcome = { status: res.status, model: res.model, modelAlias: res.modelAlias ?? (res.model ? ctx.aliasOf(res.model) : null), score: res.score ?? null, metrics: res.metrics ?? {}, details: res.details ?? {} };
     const regression = await regressionCheck(test, outcome.metrics, outcome.score);
     if (regression) {
       outcome.details.regression = regression;
@@ -162,7 +184,7 @@ async function runOne({ run, test, endpoint, personasByName }) {
   }
   await query(
     `update results set status = $2, model = $3, score = $4, metrics = $5, details = $6, error = $7,
-       duration_ms = $8, finished_at = now() where id = $1`,
+       duration_ms = $8, model_alias = $9, finished_at = now() where id = $1`,
     [
       result.id,
       outcome.status,
@@ -172,6 +194,7 @@ async function runOne({ run, test, endpoint, personasByName }) {
       JSON.stringify(outcome.details),
       outcome.error ?? null,
       Date.now() - started,
+      outcome.modelAlias ?? outcome.model ?? null,
     ],
   );
   return outcome.status;
@@ -186,7 +209,13 @@ export async function executeRun(runId) {
 
   const tests = await many('select * from test_definitions where id = any($1)', [run.test_ids]);
   const byId = new Map(tests.map((t) => [t.id, t]));
-  const endpoints = new Map((await many('select * from endpoints')).map((e) => [e.id, e]));
+  const modelRows = await many('select * from endpoint_models');
+  const endpointList = (await many('select * from endpoints')).map((e) => {
+    const rows = modelRows.filter((m) => m.endpoint_id === e.id);
+    return { ...e, modelRows: rows, models: rows.filter((m) => m.available).map((m) => m.name) };
+  });
+  const endpoints = new Map(endpointList.map((e) => [e.id, e]));
+  const endpointsByName = new Map(endpointList.map((e) => [e.name, e]));
   const personasByName = new Map((await many('select * from personas')).map((p) => [p.name, p]));
 
   const counts = { passed: 0, failed: 0, error: 0 };
@@ -198,7 +227,7 @@ export async function executeRun(runId) {
     }
     const test = byId.get(testId);
     if (!test) continue;
-    const status = await runOne({ run, test, endpoint: endpoints.get(test.endpoint_id), personasByName });
+    const status = await runOne({ run, test, endpoint: endpoints.get(test.endpoint_id), endpointsByName, personasByName });
     counts[status === 'error' ? 'error' : status] = (counts[status === 'error' ? 'error' : status] ?? 0) + 1;
     await query('update runs set passed = $2, failed = $3, errored = $4 where id = $1', [
       run.id,

@@ -2,8 +2,7 @@ import { buildMessages, checkAll } from './assertions.js';
 import { avg } from '../runner/clients.js';
 
 // Führt einen Testdatensatz gegen ein Modell aus. Wird auch vom Modell-Vergleich genutzt.
-export async function runCases(ctx, model, cases) {
-  const llm = ctx.llm();
+export async function runCases(ctx, model, cases, llm = ctx.llm()) {
   const results = [];
   for (const testCase of cases) {
     if (ctx.signal.aborted) break;
