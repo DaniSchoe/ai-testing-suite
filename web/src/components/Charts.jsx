@@ -1,5 +1,23 @@
 // Diagramme im Stil der Vorlage: dünne Marken, dezente Achsen, Tooltip bei Hover, Legende ab zwei Reihen.
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  PolarAngleAxis,
+  PolarGrid,
+  PolarRadiusAxis,
+  Radar,
+  RadarChart,
+  ResponsiveContainer,
+  Scatter,
+  ScatterChart,
+  Tooltip,
+  XAxis,
+  YAxis,
+  ZAxis,
+} from 'recharts';
 import { fmt } from '../lib.jsx';
 
 export const SERIES = Array.from({ length: 8 }, (_, i) => `var(--series-${i + 1})`);
@@ -119,4 +137,111 @@ export function ProgressList({ rows }) {
       </div>
     </div>
   ));
+}
+
+// Halbkreis-Gauge für einen Anteil von 0 bis 1 (z. B. Genauigkeit/Qualität). Farbe nach Schwellen.
+export function Gauge({ value, label, sub }) {
+  const has = value !== null && value !== undefined;
+  const v = has ? Math.max(0, Math.min(1, Number(value))) : 0;
+  const color = !has ? 'var(--axis)' : v >= 0.8 ? 'var(--ok, #1a9b5f)' : v >= 0.6 ? 'var(--warn, #c77d12)' : 'var(--bad, #dc2626)';
+  const r = 80;
+  const c = Math.PI * r; // Länge des Halbkreises
+  const arc = `M 20 100 A ${r} ${r} 0 0 1 180 100`;
+  return (
+    <div className="gauge" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(v * 100)} aria-label={label}>
+      <svg viewBox="0 0 200 118" width="100%" style={{ maxWidth: 280 }}>
+        <path d={arc} fill="none" stroke="var(--grid)" strokeWidth="16" strokeLinecap="round" />
+        {has && <path d={arc} fill="none" stroke={color} strokeWidth="16" strokeLinecap="round" strokeDasharray={`${c * v} ${c}`} />}
+        <text x="100" y="92" textAnchor="middle" fontSize="30" fontWeight="700" fill="var(--text)">
+          {has ? fmt.pct(v) : '–'}
+        </text>
+        <text x="20" y="116" textAnchor="middle" fontSize="10" fill="var(--axis)">
+          0
+        </text>
+        <text x="180" y="116" textAnchor="middle" fontSize="10" fill="var(--axis)">
+          100 %
+        </text>
+      </svg>
+      {sub && <div className="sub" style={{ textAlign: 'center' }}>{sub}</div>}
+    </div>
+  );
+}
+
+// Lasttests: Antwortzeit (p95) im Verhältnis zu parallelen Anfragen, eine Reihe je Modell.
+export function LoadScatter({ points, height = 260 }) {
+  const models = [...new Set(points.map((p) => p.model))];
+  const items = models.map((m, i) => ({ label: m, color: SERIES[i % SERIES.length] }));
+  return (
+    <>
+      <Legend items={items} />
+      <div style={{ width: '100%', height }}>
+        <ResponsiveContainer>
+          <ScatterChart margin={{ top: 8, right: 12, left: -4, bottom: 18 }}>
+            <CartesianGrid stroke="var(--grid)" />
+            <XAxis type="number" dataKey="concurrency" name="Parallele Anfragen" {...axis} label={{ value: 'Parallele Anfragen', position: 'insideBottom', offset: -10, fill: 'var(--axis)', fontSize: 12 }} allowDecimals={false} />
+            <YAxis type="number" dataKey="latency_ms_p95" name="Antwortzeit p95" tickFormatter={fmt.ms} {...axis} width={64} />
+            <ZAxis range={[60, 60]} />
+            <Tooltip
+              cursor={{ strokeDasharray: '3 3' }}
+              content={({ active, payload }) =>
+                active && payload?.length ? (
+                  <div className="chart-tooltip">
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>{payload[0].payload.model}</div>
+                    <div className="row">
+                      <span>Parallel</span>
+                      <strong>{payload[0].payload.concurrency}</strong>
+                    </div>
+                    <div className="row">
+                      <span>p95</span>
+                      <strong>{fmt.ms(payload[0].payload.latency_ms_p95)}</strong>
+                    </div>
+                    <div className="row">
+                      <span>Fehlerquote</span>
+                      <strong>{fmt.pct(payload[0].payload.error_rate)}</strong>
+                    </div>
+                  </div>
+                ) : null
+              }
+            />
+            {models.map((m, i) => (
+              <Scatter key={m} name={m} data={points.filter((p) => p.model === m)} fill={SERIES[i % SERIES.length]} />
+            ))}
+          </ScatterChart>
+        </ResponsiveContainer>
+      </div>
+    </>
+  );
+}
+
+// Netzdiagramm: Achsen mit Werten von 0 bis 100 (höher ist besser); Rohwerte stehen im Tooltip.
+export function RadarProfile({ axes, height = 300 }) {
+  return (
+    <div style={{ width: '100%', height }}>
+      <ResponsiveContainer>
+        <RadarChart data={axes} outerRadius="72%">
+          <PolarGrid stroke="var(--grid)" />
+          <PolarAngleAxis dataKey="label" tick={{ fill: 'var(--text-2)', fontSize: 12 }} />
+          <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+          <Tooltip
+            content={({ active, payload }) =>
+              active && payload?.length ? (
+                <div className="chart-tooltip">
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{payload[0].payload.label}</div>
+                  <div className="row">
+                    <span>Wert</span>
+                    <strong>{payload[0].payload.display}</strong>
+                  </div>
+                  <div className="row">
+                    <span>Bewertung</span>
+                    <strong>{payload[0].payload.missing ? 'keine Daten' : `${Math.round(payload[0].payload.value)} / 100`}</strong>
+                  </div>
+                </div>
+              ) : null
+            }
+          />
+          <Radar dataKey="value" stroke="var(--series-1)" fill="var(--series-1)" fillOpacity={0.25} strokeWidth={2} />
+        </RadarChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }

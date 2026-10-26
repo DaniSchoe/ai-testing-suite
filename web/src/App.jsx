@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { api, can, initials, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import ModelDetail from './pages/ModelDetail.jsx';
 import Marketplace from './pages/Marketplace.jsx';
 import MarketplaceDetail from './pages/MarketplaceDetail.jsx';
 import TestBuilder from './pages/TestBuilder.jsx';
@@ -167,6 +168,7 @@ export default function App() {
           <main className="content">
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/models/:name" element={<ModelDetail />} />
               <Route path="/marketplace" element={<Marketplace />} />
               <Route path="/marketplace/:id" element={<MarketplaceDetail />} />
               <Route path="/test-builder" element={<TestBuilder />} />

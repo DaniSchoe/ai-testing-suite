@@ -15,7 +15,7 @@ Entwicklung im Dashboard.
 - **Test-Builder**: ein Test kombiniert beliebige Testarten mit Endpoint, mehreren Modellen und API-Key und läuft sofort, einmalig geplant oder regelmäßig; Veröffentlichung für dich, Teams oder alle
 - **Marketplace**: Tests entdecken (Filter nach Testart, privat/öffentlich, Sortierung, Namenssuche), Detailseite, Merkliste; Herausgeber können verlangen, dass andere mit ihrem eigenen API-Key ausführen
 - **Zeitpläne** als Kalender mit geplanten und bisherigen Läufen
-- Dashboard **global oder nutzerspezifisch**, Tabelle aller eigenen Testausführungen
+- Dashboard **global, pro Team oder nutzerspezifisch** mit Filter für Modelle und Endpoints (Standard nur Prod, Dev gezielt für Administratoren, Mehrfachauswahl wird summiert), Gauge für Genauigkeit/Qualität, Lastdiagramm (Antwortzeit × parallele Anfragen) und Netzdiagramm; Modelldetailseite als Beta-Platzhalter
 - **Hell-, Dunkel- und System-Modus**
 - **Helm-Chart** für Kubernetes
 

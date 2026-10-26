@@ -1,6 +1,7 @@
 // Testläufe starten und einsehen, Ergebnistabelle ("Meine Tests") und Dashboard-Auswertungen.
 import { hasPermission, requirePermission } from '../auth.js';
 import { many, one, query } from '../db.js';
+import { dashboardAccess, dashboardFilters } from '../dashboardFilter.js';
 import { createRun } from '../runs.js';
 import { canSeeRunOf, resolveScope, scopeParams, scopeSql } from '../scope.js';
 
@@ -107,17 +108,34 @@ export default async function runRoutes(app) {
     return row;
   });
 
+  // Auswahlliste für den Filter im Dashboard.
+  app.get('/api/dashboard/filters', viewer, async (request) => dashboardFilters(request.user));
+
   // Dashboard: global (alle User), ein Team oder nur eigene Läufe, über einen Zeitraum in Tagen.
   app.get('/api/dashboard', viewer, async (request) => {
     const s = resolveScope(request.user, request.query, 'all');
     const days = Math.min(Math.max(Number(request.query.days ?? 30), 1), 365);
-    const p = [...scopeParams(request.user, s), days];
+    const access = await dashboardAccess(request.user, request.query);
+    const p = [
+      ...scopeParams(request.user, s),
+      days,
+      access.allowedEndpoints,
+      access.blockedEndpoints,
+      access.blockedModels,
+      access.selModels,
+      access.selEndpoints,
+    ];
+    // Nur sichtbare Endpoints/Modelle (ohne Auswahl: nur Prod); mit Auswahl die gewählten Modelle und Endpoints, summiert.
     const base = `from results res join runs r on r.id = res.run_id
       where res.finished_at is not null
         and res.finished_at > now() - make_interval(days => $4::int)
-        and ${scopeSql(1)}`;
+        and ${scopeSql(1)}
+        and res.endpoint_id = any($5::uuid[])
+        and not exists (select 1 from unnest($6::uuid[], $7::text[]) as b(e, m) where b.e = res.endpoint_id and b.m = res.model)
+        and (cardinality($8::text[]) + cardinality($9::uuid[]) = 0
+             or coalesce(res.model_alias, res.model) = any($8::text[]) or res.endpoint_id = any($9::uuid[]))`;
 
-    const [kpis, trend, byType, perfByModel, models, recentFailures, regressions, runsCount, byUser, thinking] = await Promise.all([
+    const [kpis, trend, byType, perfByModel, models, recentFailures, regressions, runsCount, byUser, thinking, quality, radar, loadRows] = await Promise.all([
       one(
         `select count(*)::int as results,
            count(*) filter (where res.status = 'passed')::int as passed,
@@ -177,9 +195,9 @@ export default async function runRoutes(app) {
         p,
       ),
       one(
-        `select count(*)::int as runs,
-           count(*) filter (where r.status in ('queued', 'running'))::int as active
-         from runs r where r.created_at > now() - make_interval(days => $4::int) and ${scopeSql(1)}`,
+        `select count(distinct res.run_id)::int as runs,
+           (select count(*)::int from runs a where a.status in ('queued', 'running') and ${scopeSql(1, 'a')}) as active
+         ${base}`,
         p,
       ),
       s.scope !== 'me'
@@ -187,8 +205,7 @@ export default async function runRoutes(app) {
             `select u.id, u.display_name, u.username, count(distinct r.id)::int as runs, count(res.id)::int as results,
                count(res.id) filter (where res.status = 'passed')::float / nullif(count(res.id), 0) as pass_rate,
                max(r.created_at) as last_run_at
-             from runs r join users u on u.id = r.user_id left join results res on res.run_id = r.id
-             where r.created_at > now() - make_interval(days => $4::int) and ${scopeSql(1)}
+             ${base.replace('where', 'join users u on u.id = r.user_id where')}
              group by u.id order by runs desc limit 20`,
             p,
           )
@@ -203,7 +220,59 @@ export default async function runRoutes(app) {
          ${base} and res.type = 'thinking' and res.status <> 'error' group by 1 order by 1`,
         p,
       ),
+      // Genauigkeit/Qualität für die Gauge.
+      one(
+        `select avg(res.score) as score, count(*)::int as results ${base}
+           and res.type in ('quality', 'structured') and res.score is not null`,
+        p,
+      ),
+      // Rohwerte für das Netzdiagramm über die gesamte Auswahl.
+      one(
+        `select avg((res.metrics->>'latency_ms_p50')::numeric) filter (where res.type = 'performance') as latency_ms,
+           avg((res.metrics->>'ttft_ms_p95')::numeric) filter (where res.type = 'performance') as ttft_ms,
+           avg((res.metrics->>'tokens_per_s_avg')::numeric) filter (where res.type = 'performance') as tokens_per_s,
+           avg(res.score) filter (where res.type in ('quality', 'structured')) as quality,
+           avg(least(1, greatest(0, (res.details->'variants'->0->>'reasoning_tokens_avg')::numeric
+               / nullif((res.details->'variants'->0->>'completion_tokens_avg')::numeric, 0)))) filter (where res.type = 'thinking') as thinking_share
+         ${base}`,
+        p,
+      ),
+      // Lasttests: Stufen mit Parallelität, Antwortzeit und Fehlerquote.
+      many(
+        `select res.id, coalesce(res.model_alias, res.model) as model, res.finished_at, res.details->'stages' as stages
+         ${base} and res.type = 'load' and jsonb_typeof(res.details->'stages') = 'array'
+         order by res.finished_at desc limit 200`,
+        p,
+      ),
     ]);
+
+    // Lastpunkte (Parallelität × Antwortzeit) und Lastwert: Anteil erfolgreicher Anfragen, gewichtet damit,
+    // wie stabil die Antwortzeit von der ersten zur letzten Stufe bleibt.
+    const loadPoints = [];
+    const loadScores = [];
+    for (const row of loadRows) {
+      const stages = row.stages ?? [];
+      for (const st of stages) {
+        if (st.latency_ms_p95 == null) continue;
+        loadPoints.push({
+          model: row.model ?? 'unbekannt',
+          concurrency: st.concurrency,
+          latency_ms_p50: st.latency_ms_p50,
+          latency_ms_p95: st.latency_ms_p95,
+          error_rate: st.error_rate,
+          requests_per_s: st.requests_per_s,
+        });
+      }
+      const first = stages.find((st) => st.latency_ms_p95 != null);
+      const last = [...stages].reverse().find((st) => st.latency_ms_p95 != null);
+      if (first && last) {
+        const requests = stages.reduce((n, st) => n + st.requests, 0);
+        const errors = stages.reduce((n, st) => n + st.errors, 0);
+        const stability = last.latency_ms_p95 > 0 ? Math.min(1, first.latency_ms_p95 / last.latency_ms_p95) : 1;
+        loadScores.push((requests ? 1 - errors / requests : 1) * stability);
+      }
+    }
+    radar.load_score = loadScores.length ? loadScores.reduce((a, b) => a + b, 0) / loadScores.length : null;
 
     return {
       scope: s.scope === 'all' ? 'global' : s.scope,
@@ -222,6 +291,10 @@ export default async function runRoutes(app) {
       recentFailures,
       byUser,
       thinking,
+      quality,
+      radar,
+      loadPoints,
+      selection: { models: access.selModels, endpoints: access.selEndpoints, isDefault: !access.selected },
     };
   });
 }
