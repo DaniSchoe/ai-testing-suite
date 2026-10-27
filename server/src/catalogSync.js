@@ -50,6 +50,8 @@ async function syncDatasets(db) {
 }
 
 async function syncTemplates(db, datasetVersions) {
+  // Vor Migration 017 (Alt-Migration 014 gleicht den Katalog schon ab) gibt es die Spalte target noch nicht.
+  const hasTarget = (await db.query("select 1 from information_schema.columns where table_name = 'templates' and column_name = 'target'")).rowCount > 0;
   const latest = new Map();
   for (const def of TEMPLATES) {
     const spec = structuredClone(def.spec);
@@ -58,16 +60,16 @@ async function syncTemplates(db, datasetVersions) {
     const hash = sha({ type: def.type, spec, categories });
     let template = (await db.query('select id from templates where tenant_id is null and key = $1', [def.key])).rows[0];
     if (template) {
-      await db.query('update templates set name = $2, description = $3, use_cases = $4, target = $5, updated_at = now() where id = $1', [
-        template.id, def.name, def.description, def.use_cases ?? [], def.target ?? 'llm',
-      ]);
+      await db.query('update templates set name = $2, description = $3, use_cases = $4, updated_at = now() where id = $1', [template.id, def.name, def.description, def.use_cases ?? []]);
+      if (hasTarget) await db.query('update templates set target = $2 where id = $1', [template.id, def.target ?? 'llm']);
     } else {
       template = (
         await db.query(
-          `insert into templates (key, tenant_id, origin, name, description, type, use_cases, target) values ($1, null, 'official', $2, $3, $4, $5, $6) returning id`,
-          [def.key, def.name, def.description, def.type, def.use_cases ?? [], def.target ?? 'llm'],
+          `insert into templates (key, tenant_id, origin, name, description, type, use_cases) values ($1, null, 'official', $2, $3, $4, $5) returning id`,
+          [def.key, def.name, def.description, def.type, def.use_cases ?? []],
         )
       ).rows[0];
+      if (hasTarget) await db.query('update templates set target = $2 where id = $1', [template.id, def.target ?? 'llm']);
     }
     const versions = (await db.query('select id, version, hash from template_versions where template_id = $1', [template.id])).rows;
     const same = versions.find((v) => v.hash === hash);
