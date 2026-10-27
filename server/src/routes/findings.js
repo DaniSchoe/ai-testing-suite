@@ -95,8 +95,8 @@ export default async function findingRoutes(app) {
     const rows = await many(
       `select r.id, r.status, r.run_id, r.audit_id, r.created_at, r.updated_at, r.approved_at, r.body->'rating' as rating, r.body->'platform' as platform, a.name as audit_name, run.finished_at
        from reports r left join audits a on a.id = r.audit_id join runs run on run.id = r.run_id
-       where r.tenant_id = $1 and ($2::text is null or r.status = $2) order by r.created_at desc limit 200`,
-      [request.user.tenant_id, request.query.status || null],
+       where r.tenant_id = $1 and ($2::text is null or r.status = $2) and ($3::text is null or r.body->'platform'->>'id' = $3) order by r.created_at desc limit 200`,
+      [request.user.tenant_id, request.query.status || null, request.query.platform_id || null],
     );
     return rows.filter((r) => sees(request.user, r));
   });

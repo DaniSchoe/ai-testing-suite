@@ -218,29 +218,3 @@ export function sealFromRate(rate) {
   if (rate === null || rate === undefined) return null;
   return rate >= SEAL.thresholds[0] ? 4 : rate >= SEAL.thresholds[1] ? 3 : rate >= SEAL.thresholds[2] ? 2 : rate >= SEAL.thresholds[3] ? 1 : 0;
 }
-
-export async function sovereignty(tenantId, platformId, environment = null) {
-  const platform = await one('select id, name, environment, sovereignty from platforms where id = $1 and tenant_id = $2', [platformId, tenantId]);
-  if (!platform) return null;
-  const goals = await many(`select key, name from categories where framework = 'SOV' and tenant_id is null order by key`);
-  const links = await many(
-    `select distinct t.key as template_key, c.key as goal from templates t join template_versions v on v.template_id = t.id join template_version_categories tc on tc.version_id = v.id
-     join categories c on c.id = tc.category_id where c.framework = 'SOV'`,
-  );
-  const rows = await latestResults(tenantId, { platformId, environment: null, days: 90 });
-  const declared = platform.sovereignty?.goals ?? {};
-  const minLevel = Number(platform.sovereignty?.min_level ?? 0);
-  const out = goals.map((g) => {
-    const keys = new Set(links.filter((l) => l.goal === g.key).map((l) => l.template_key));
-    const rs = rows.filter((r) => keys.has(r.template_key));
-    const passed = rs.filter((r) => r.status === 'passed').length;
-    const rate = rs.length ? passed / rs.length : null;
-    const derived = sealFromRate(rate);
-    const d = declared[g.key]?.level;
-    // Wirksam gilt der niedrigere Wert aus erklärter und gemessener Stufe.
-    const effective = derived === null ? (d ?? null) : d === undefined || d === null ? derived : Math.min(Number(d), derived);
-    return { key: g.key, name: g.name, declared: d ?? null, note: declared[g.key]?.note ?? null, derived, tests: rs.length, passed, rate, effective, status: effective === null ? 'unrated' : effective >= minLevel ? 'ok' : 'gap' };
-  });
-  const rated = out.filter((o) => o.effective !== null);
-  return { platform: { id: platform.id, name: platform.name, environment: platform.environment }, min_level: minLevel, goals: out, overall: rated.length ? Math.min(...rated.map((o) => o.effective)) : null, seal: SEAL };
-}

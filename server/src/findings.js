@@ -1,6 +1,7 @@
 // Nachweise (Evidence mit Hash und Aufbewahrungsfrist) und Findings, die aus fehlgeschlagenen Sicherheits-, Zugriffs- und Plattformtests entstehen.
 import { createHash } from 'node:crypto';
 import { many, one, query } from './db.js';
+import { SECURITY_TYPES } from './evaluate.js';
 
 export const OWASP = 'OWASP LLM Top 10';
 // Zuordnung der Fallkategorien der Angriffsdatensätze zu OWASP LLM Top 10.
@@ -92,7 +93,7 @@ function severityOf(atom, c) {
 // Findings aus einem fehlgeschlagenen Ergebnis anlegen oder fortschreiben. Gibt die Fingerprints der festgestellten Probleme zurück.
 export async function recordFindings({ tenantId, run, atom, details, outcome }) {
   const found = [];
-  const security = atom.security || ['security', 'access', 'mcp'].includes(atom.type);
+  const security = atom.security || SECURITY_TYPES.includes(atom.type);
   const platformFailure = atom.type === 'smoke' && outcome === 'quality_deviation';
   if (!security && !platformFailure) return found;
   if (outcome === 'technical_error' || outcome === 'not_applicable') return found;

@@ -60,7 +60,7 @@ export async function describeItems(items) {
       version: v.version,
       status: v.status,
       load: Boolean(v.spec?.load),
-      security: v.security,
+      target: v.target,
       requires: v.spec?.requires ?? [],
       categories: v.categories,
       suggested_thresholds: v.spec?.suggested_thresholds ?? [],
@@ -69,7 +69,7 @@ export async function describeItems(items) {
   });
 }
 
-const DEFAULT_MS = { smoke: 5_000, performance: 45_000, quality: 90_000, coding: 60_000, ocr: 45_000, security: 40_000, access: 8_000, mcp: 8_000, structured: 15_000, thinking: 150_000 };
+const DEFAULT_MS = { smoke: 5_000, performance: 45_000, quality: 90_000, coding: 60_000, ocr: 45_000, security: 40_000, access: 8_000, mcp: 8_000, structured: 15_000, thinking: 150_000, network: 20_000 };
 
 // Geschätzte Laufzeit: Median der letzten Ausführungen derselben Vorlage (und desselben Modells), sonst Richtwert je Testart.
 export async function estimateRuntime(plan) {

@@ -1,6 +1,7 @@
 // Aus einer Prüfung (oder einem Vorlagen-Entwurf) wird der Plan eines Laufs: Vorlage × Modell × Pfad, aufgelöst auf Endpoints
 // der Plattform. Voraussetzungen (vision, tools, reasoning, mcp) und fehlende Endpoints führen zu "nicht anwendbar" statt zu Fehlern.
 import { many, one } from './db.js';
+import { SECURITY_TYPES } from './evaluate.js';
 import { testTypes } from './testtypes/index.js';
 
 export const PATHS = ['direct', 'gateway', 'both'];
@@ -12,7 +13,7 @@ export async function platformContext(platformId) {
   if (!platform) return null;
   const endpoints = await many('select e.* from endpoints e where e.platform_id = $1 and e.enabled order by e.kind, e.name', [platformId]);
   const models = await many(
-    'select m.* from endpoint_models m join endpoints e on e.id = m.endpoint_id where e.platform_id = $1 and m.available',
+    'select m.* from endpoint_models m join endpoints e on e.id = m.endpoint_id where e.platform_id = $1 and m.available and m.portfolio_id is not null',
     [platformId],
   );
   return { platform, endpoints: endpoints.map((e) => ({ ...e, modelRows: models.filter((m) => m.endpoint_id === e.id) })) };
@@ -63,7 +64,7 @@ export function capLoadConfig(config, limits = {}) {
 export async function loadTemplateVersions(ids) {
   if (!ids.length) return new Map();
   const rows = await many(
-    `select v.id, v.version, v.status, v.spec, v.hash, t.id as template_id, t.key, t.name, t.type, t.security, t.use_cases, t.origin, t.tenant_id,
+    `select v.id, v.version, v.status, v.spec, v.hash, t.id as template_id, t.key, t.name, t.type, t.target, t.use_cases, t.origin, t.tenant_id,
        coalesce((select jsonb_agg(jsonb_build_object('framework', c.framework, 'key', c.key, 'name', c.name))
                  from template_version_categories tc join categories c on c.id = tc.category_id where tc.version_id = v.id), '[]') as categories
      from template_versions v join templates t on t.id = v.template_id where v.id = any($1)`,
@@ -72,7 +73,7 @@ export async function loadTemplateVersions(ids) {
   return new Map(rows.map((r) => [r.id, r]));
 }
 
-// Plan erzeugen. `models`: [{ alias, path, api_key_id? }], `items`: [{ template_version_id, pack_version_id?, endpoint_id?, thresholds }].
+// Plan erzeugen. `models`: [{ alias, path, api_key_id? }], `items`: [{ template_version_id, endpoint_id?, thresholds }].
 // Im Vergleichsmodus (A/B) tragen die Einzeltests die Variante. `limits` begrenzt Lasttests.
 export async function buildPlan({ platformId, models, items, repeats, mode = 'standard', compare, limits = {} }) {
   const ctx = await platformContext(platformId);
@@ -99,13 +100,13 @@ export async function buildPlan({ platformId, models, items, repeats, mode = 'st
       template_version: v.version,
       template_name: v.name,
       type: v.type,
-      security: Boolean(v.security),
+      security: SECURITY_TYPES.includes(v.type),
+      target: v.target,
       load: Boolean(spec.load || v.type === 'load'),
       use_cases: v.use_cases ?? [],
       categories: v.categories,
       dataset: spec.dataset ?? null,
       thresholds: item.thresholds ?? [],
-      pack_version_id: item.pack_version_id ?? null,
       repeats: wantedRepeats,
       config,
       applicable: true,
@@ -114,6 +115,10 @@ export async function buildPlan({ platformId, models, items, repeats, mode = 'st
     const skip = (extra, reason) => push({ ...base, ...extra, name: nameOf(v, extra), applicable: false, reason });
     const mode_ = type.modelMode ?? 'each';
 
+    if (type.platformLevel) {
+      push({ ...base, name: v.name, endpoint_id: null, endpoint_name: null, path: null, model: null });
+      continue;
+    }
     if (v.type === 'mcp') {
       const mcps = ctx.endpoints.filter((e) => e.kind === 'mcp' && (!item.endpoint_id || e.id === item.endpoint_id));
       if (!mcps.length) skip({ path: null, model: null }, 'Die Plattform hat keine MCP-Komponente');

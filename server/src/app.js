@@ -10,6 +10,7 @@ import accessRoutes from './routes/access.js';
 import apiKeyRoutes from './routes/apikeys.js';
 import adminRoutes from './routes/admin.js';
 import platformRoutes from './routes/platforms.js';
+import portfolioRoutes from './routes/portfolio.js';
 import sizingRoutes from './routes/sizing.js';
 import runRoutes from './routes/runs.js';
 import auditRoutes from './routes/audits.js';
@@ -72,6 +73,7 @@ export async function buildApp() {
   await app.register(dashboardRoutes);
   await app.register(systemRoutes);
   await app.register(platformRoutes);
+  await app.register(portfolioRoutes);
   await app.register(sizingRoutes);
 
   // Gebautes Frontend ausliefern; unbekannte Pfade gehen an die SPA.

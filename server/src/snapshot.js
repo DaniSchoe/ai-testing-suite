@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { many, one } from './db.js';
 import { endpointHeaders, ENDPOINT_SELECT } from './models.js';
 import { McpClient } from './runner/clients.js';
+import { URL_KINDS } from './inventory.js';
 
 const join = (base, path) => `${base.replace(/\/$/, '')}${path}`;
 
@@ -25,7 +26,14 @@ export async function probeEndpoint(e) {
   const out = { endpoint_id: e.id, name: e.name, kind: e.kind, status: 'down', version: null, latency_ms: null, info: {}, error: null };
   try {
     const headers = endpointHeaders(e);
-    if (e.kind === 'mcp') {
+    if (!URL_KINDS.includes(e.kind)) {
+      // Rechenzentrum, Kubernetes, GPU: nur überwachbar, wenn ein Metrics-Endpunkt (DCGM) angegeben ist.
+      if (e.metrics_url) {
+        const res = await getJson(e.metrics_url, {});
+        out.status = res.ok ? 'up' : 'down';
+        if (!res.ok) out.error = `HTTP ${res.status}`;
+      } else out.status = 'n/a';
+    } else if (e.kind === 'mcp') {
       const info = await new McpClient({ url: e.base_url, headers, timeoutMs: 6000 }).initialize();
       out.status = 'up';
       out.version = info?.serverInfo?.version ?? null;
@@ -98,7 +106,7 @@ export async function takeSnapshot(platformId, { previousRunId } = {}) {
   const components = await Promise.all(endpoints.map(probeEndpoint));
   const models = endpoints.flatMap((e) =>
     e.modelRows
-      .filter((m) => m.available)
+      .filter((m) => m.available && m.portfolio_id)
       .map((m) => ({
         endpoint: e.name,
         name: m.name,

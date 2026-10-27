@@ -1,12 +1,14 @@
-// Offizielle Vorlagen und Prüfpakete (Release 0.4.0). Vorlagen enthalten weder Endpoint noch Key und adressieren Modelle
+// Offizielle Vorlagen (Release 0.5.0). Vorlagen enthalten weder Endpoint noch Key und adressieren Modelle
 // über Fähigkeiten (requires). Schwellwerte sind nur Vorschläge; verbindlich legt sie die Prüfung fest.
 import { AIC4, OWASP, SOV } from './categories.js';
+import { DEFAULT_TARGETS } from '../src/testtypes/network.js';
 
 const c = (framework, key) => ({ framework, key });
 
 export const TEMPLATES = [
   {
     key: 'smoke-health',
+    target: 'platform',
     name: 'Health / Smoke',
     description: 'Prüft Erreichbarkeit, /v1/models und eine Mini-Anfrage je Modell. Gut als häufiger Zeitplan.',
     type: 'smoke',
@@ -16,6 +18,7 @@ export const TEMPLATES = [
   },
   {
     key: 'performance-streaming',
+    target: 'llm',
     name: 'Performance (Streaming)',
     description: 'Time-to-first-Token, Latenz und Token-Durchsatz über Streaming-Anfragen mit fester Parallelität.',
     type: 'performance',
@@ -34,6 +37,7 @@ export const TEMPLATES = [
   },
   {
     key: 'load-ramp',
+    target: 'platform',
     name: 'Last (Ramp-up)',
     description: 'Stufenweise steigende Parallelität mit wechselnden Prompts; misst Durchsatz, Fehlerquote, p95 und gedrosselte Anfragen (HTTP 429). Erzeugt echte Last: auf Prod nur mit Freigabe.',
     type: 'load',
@@ -53,6 +57,7 @@ export const TEMPLATES = [
   },
   {
     key: 'quality-reasoning',
+    target: 'llm',
     name: 'Qualität: Logik, Rechnen, Code',
     description: 'Fünf Fragen von leicht bis extrem schwer. Der Score gewichtet nach Schwierigkeit; kleine Modelle bleiben bei den leichten Stufen hängen, große kommen weiter.',
     type: 'quality',
@@ -69,6 +74,7 @@ export const TEMPLATES = [
   },
   {
     key: 'coding-js',
+    target: 'llm',
     name: 'Coding: JavaScript',
     description: 'Eine einfache und eine komplexe Programmieraufgabe; der Code läuft isoliert gegen Tests. Die komplexe Aufgabe zählt doppelt.',
     type: 'coding',
@@ -85,6 +91,7 @@ export const TEMPLATES = [
   },
   {
     key: 'ocr-documents',
+    target: 'llm',
     name: 'OCR: Dokumente lesen',
     description: 'Liest Dokumente als Bild und vergleicht die extrahierten Felder mit der Ground Truth des Datensatzes. Modelle ohne Bildverarbeitung werden als „nicht anwendbar“ ausgeschlossen.',
     type: 'ocr',
@@ -105,11 +112,11 @@ export const TEMPLATES = [
   },
   {
     key: 'security-owasp',
+    target: 'llm',
     name: 'Security: Angriffe und DLP',
     description: 'Prompt Injection, System-Prompt-Leak, Jailbreak, schädliche Anfragen und Data Loss Prevention. Fehlschläge werden zu Findings. Angriffsinhalte sehen nur Berechtigte.',
     type: 'security',
     use_cases: [],
-    security: true,
     categories: [c(OWASP, 'LLM01'), c(OWASP, 'LLM02'), c(OWASP, 'LLM07'), c(AIC4, 'SR'), c(SOV, 'SOV-3'), c(SOV, 'SOV-7')],
     spec: {
       dataset: { key: 'security-owasp-llm-de', version: '1.0.0' },
@@ -120,12 +127,28 @@ export const TEMPLATES = [
     },
   },
   {
+    key: 'network-isolation',
+    name: 'Netzwerk-Isolation (Air-Gap)',
+    target: 'platform',
+    description: 'Ruft mehrere Seiten aus dem Internet auf und prüft, ob die Umgebung abgeschottet (Air-Gapped) ist bzw. sensible Seiten wie Datenablagen und fremde KI-APIs geblockt werden. Der Test läuft aus dem Netz der Suite.',
+    type: 'network',
+    use_cases: [],
+    categories: [c(SOV, 'SOV-3'), c(SOV, 'SOV-4'), c(SOV, 'SOV-7'), c(AIC4, 'SR'), c(OWASP, 'LLM02')],
+    spec: {
+      dataset: null,
+      config: { timeoutMs: 5000, blockStatus: [403, 407, 451], targets: DEFAULT_TARGETS },
+      repeats: 1,
+      suggested_thresholds: [{ metric: 'unexpected_reachable', op: '<=', value: 0 }],
+      example_result: { score: 1, metrics: { targets: 12, reachable: 0, blocked: 12, unexpected_reachable: 0, sensitive_reachable: 0, air_gapped: 1 } },
+    },
+  },
+  {
     key: 'access-keys',
+    target: 'platform',
     name: 'Zugriff / Berechtigungen',
     description: 'Prüft mit dem Key der Prüfung, ob erlaubte Modelle antworten, ob Anfragen ohne Credentials abgelehnt werden und ob Admin-Routen verschlossen sind. Eigene Fälle (weitere Keys, Modelle) lassen sich in einer Team-Vorlage ergänzen.',
     type: 'access',
     use_cases: [],
-    security: true,
     categories: [c(OWASP, 'LLM06'), c(AIC4, 'SR'), c(SOV, 'SOV-7'), c(SOV, 'SOV-4')],
     spec: {
       dataset: null,
@@ -143,11 +166,11 @@ export const TEMPLATES = [
   },
   {
     key: 'mcp-tools',
+    target: 'platform',
     name: 'MCP: Tools und Freigaben',
     description: 'Verbindet sich mit einem MCP-Server oder MCP-Gateway, listet die sichtbaren Tools für den Key der Prüfung und prüft erwartete und verbotene Tools.',
     type: 'mcp',
     use_cases: ['agent'],
-    security: true,
     categories: [c(OWASP, 'LLM06'), c(SOV, 'SOV-7')],
     spec: {
       dataset: null,
@@ -160,6 +183,7 @@ export const TEMPLATES = [
   },
   {
     key: 'structured-tools',
+    target: 'llm',
     name: 'Tool-Calling und JSON',
     description: 'Prüft, ob das Modell Tools korrekt aufruft (Name, gültige Argumente). Modelle ohne Tool-Unterstützung werden ausgeschlossen.',
     type: 'structured',
@@ -176,6 +200,7 @@ export const TEMPLATES = [
   },
   {
     key: 'thinking-compare',
+    target: 'llm',
     name: 'Thinking vs. Non-Thinking',
     description: 'Dieselben Aufgaben mit und ohne Reasoning: Genauigkeit, Token-Verbrauch, Latenz und Tokens pro richtiger Antwort.',
     type: 'thinking',
@@ -189,51 +214,6 @@ export const TEMPLATES = [
       suggested_thresholds: [],
       example_result: { score: 1, metrics: { 'accuracy:Thinking': 1, 'accuracy:Non-Thinking': 0.6, accuracy_gain: 0.4, token_factor: 6.2 } },
     },
-  },
-];
-
-export const PACKS = [
-  {
-    key: 'owasp-llm-top10',
-    name: 'OWASP LLM Top 10',
-    description: 'Prüft die in Tests abbildbaren Risiken der OWASP LLM Top 10: Prompt Injection, Offenlegung vertraulicher Daten, System-Prompt-Leak, übermäßige Handlungsfreiheit und unbegrenzter Verbrauch.',
-    framework: 'OWASP LLM Top 10',
-    items: ['security-owasp', 'access-keys', 'mcp-tools', 'load-ramp'],
-  },
-  {
-    key: 'gateway-haertung',
-    name: 'Gateway-Härtung',
-    description: 'Verfügbarkeit, Berechtigungen, DLP-Guardrails und MCP-Freigaben des AI-Gateways.',
-    framework: 'AIC4',
-    items: ['smoke-health', 'access-keys', 'security-owasp', 'mcp-tools'],
-  },
-  {
-    key: 'sov-basispruefung',
-    name: 'SOV-Basisprüfung',
-    description: 'Nachweise für die Souveränitätsziele SOV-3 (Daten und KI), SOV-4 (Betrieb) und SOV-7 (Sicherheit und Compliance).',
-    framework: 'SOV',
-    items: ['smoke-health', 'access-keys', 'security-owasp', 'mcp-tools'],
-  },
-  {
-    key: 'performance-abnahme',
-    name: 'Performance-Abnahme',
-    description: 'Abnahme einer Plattform: Gesundheit, Streaming-Latenz und Lastverhalten. Der Lasttest braucht auf Prod eine Freigabe.',
-    framework: 'AIC4',
-    items: ['smoke-health', 'performance-streaming', 'load-ramp'],
-  },
-  {
-    key: 'modellqualitaet',
-    name: 'Modellqualität',
-    description: 'Qualität, Coding, Tool-Calling und Reasoning eines Modells.',
-    framework: 'AIC4',
-    items: ['quality-reasoning', 'coding-js', 'structured-tools', 'thinking-compare'],
-  },
-  {
-    key: 'dokumentenverarbeitung',
-    name: 'Dokumentenverarbeitung',
-    description: 'OCR und Feldextraktion aus Dokumenten (Vision-Modelle).',
-    framework: 'AIC4',
-    items: ['ocr-documents'],
   },
 ];
 

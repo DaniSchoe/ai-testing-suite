@@ -8,7 +8,8 @@ import { hasPermission } from '../permissions.js';
 import { McpClient } from '../runner/clients.js';
 import { canSeePublished } from '../visibility.js';
 
-const KINDS = ['ai_proxy', 'llm', 'mcp', 'vector_db', 'iam', 'observability'];
+import { KINDS, URL_KINDS } from '../inventory.js';
+import { cleanSpec } from '../inventorySpec.js';
 const CAPABILITIES = ['vision', 'tools', 'reasoning', 'mcp', 'json', 'embeddings'];
 const FLAVORS = ['openai', 'claude'];
 const ENVIRONMENTS = ['dev', 'prod'];
@@ -26,19 +27,40 @@ function validateEndpoint(b) {
   if (b.environment && !ENVIRONMENTS.includes(b.environment)) throw badRequest('Umgebung muss dev oder prod sein');
   if (b.visibility && !VISIBILITIES.includes(b.visibility)) throw badRequest('Ungültige Veröffentlichung');
   if (b.visibility === 'teams' && !(b.teamIds ?? []).length) throw badRequest('Mindestens ein Team auswählen');
-  try {
-    new URL(b.base_url);
-  } catch {
-    throw badRequest('Basis-URL ist ungültig');
+  if (URL_KINDS.includes(b.kind)) {
+    try {
+      new URL(b.base_url);
+    } catch {
+      throw badRequest('Basis-URL ist ungültig');
+    }
   }
+  if (b.metrics_url) {
+    try {
+      new URL(b.metrics_url);
+    } catch {
+      throw badRequest('Metrics-Endpunkt ist keine gültige URL');
+    }
+  }
+  cleanSpec(b.kind, b.spec);
 }
 
 // Das Flavor gilt nur für LLM-Endpoints; AI-Proxys und MCP sind immer OpenAI-kompatibel bzw. MCP.
-const flavorOf = (b) => (b.kind === 'llm' && b.llm_flavor === 'claude' ? 'claude' : 'openai');
+const flavorOf = (b) => (b.kind === 'llm' && (b.llm_flavor === 'claude' || b.spec?.provider === 'anthropic') ? 'claude' : 'openai');
 
 // Verbindungstest einer (auch noch nicht gespeicherten) Konfiguration: Modelle bzw. MCP-Tools abrufen.
-async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc, health_path }) {
-  const e = { kind, llm_flavor: flavorOf({ kind, llm_flavor }), base_url, headers: headers ?? {}, api_key_enc: secretEnc };
+async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc, health_path, metrics_url, spec }) {
+  if (!URL_KINDS.includes(kind)) {
+    // Rechenzentrum, Kubernetes und GPU-Server haben keine Basis-URL; geprüft wird nur ein angegebener Metrics-Endpunkt (DCGM).
+    if (!metrics_url) return { ok: true, latencyMs: 0, models: [], note: 'Keine Verbindung zu prüfen' };
+    const t1 = performance.now();
+    try {
+      const res = await fetch(metrics_url, { signal: AbortSignal.timeout(15_000) });
+      return { ok: res.ok, latencyMs: Math.round(performance.now() - t1), models: [], error: res.ok ? undefined : `HTTP ${res.status}` };
+    } catch (err) {
+      return { ok: false, latencyMs: Math.round(performance.now() - t1), error: err.message };
+    }
+  }
+  const e ={ kind, llm_flavor: flavorOf({ kind, llm_flavor, spec }), base_url, headers: headers ?? {}, api_key_enc: secretEnc };
   const t0 = performance.now();
   const latency = () => Math.round(performance.now() - t0);
   try {
@@ -124,7 +146,7 @@ export default async function adminRoutes(app) {
 
   // Modelle von Endpoint abrufen; Ergebnis für das Popup nach dem Anlegen.
   async function discover(endpoint) {
-    if (endpoint.kind === 'mcp') return null;
+    if (!['ai_proxy', 'llm'].includes(endpoint.kind)) return null;
     if (!endpoint.auto_discover) return { ok: true, models: [], skipped: true };
     try {
       return { ok: true, models: await syncEndpointModels(endpoint) };
@@ -144,10 +166,12 @@ export default async function adminRoutes(app) {
   app.post('/api/endpoints/test', endpointAdmin, async (request) => {
     const b = request.body ?? {};
     if (!KINDS.includes(b.kind)) throw badRequest('Art fehlt');
-    try {
-      new URL(b.base_url);
-    } catch {
-      throw badRequest('Basis-URL ist ungültig');
+    if (URL_KINDS.includes(b.kind)) {
+      try {
+        new URL(b.base_url);
+      } catch {
+        throw badRequest('Basis-URL ist ungültig');
+      }
     }
     const key = b.api_key_id ? await one('select secret_enc from api_keys where id = $1 and tenant_id = $2', [b.api_key_id, request.user.tenant_id]) : null;
     return testConnection({ ...b, secretEnc: key?.secret_enc });
@@ -166,7 +190,7 @@ export default async function adminRoutes(app) {
       b.name.trim(),
       b.kind,
       flavorOf(b),
-      b.base_url.trim(),
+      b.base_url?.trim() || null,
       b.api_key_id || null,
       b.headers ?? {},
       b.auto_discover ?? true,
@@ -178,20 +202,22 @@ export default async function adminRoutes(app) {
       visibility,
       b.platform_id,
       b.health_path || null,
+      JSON.stringify(cleanSpec(b.kind, b.spec)),
+      b.metrics_url || null,
     ];
     const row = await tx(async (c) => {
       const { rows } = id
         ? await c.query(
             `update endpoints set name = $2, kind = $3, llm_flavor = $4, base_url = $5, api_key_id = $6, headers = $7,
                auto_discover = $8, default_model = $9, enabled = $10, notes = $11, maintainer_id = $12,
-               environment = $13, visibility = $14, platform_id = $15, health_path = $16, updated_at = now()
-             where id = $1 and tenant_id = $17 returning id`,
+               environment = $13, visibility = $14, platform_id = $15, health_path = $16, spec = $17, metrics_url = $18, updated_at = now()
+             where id = $1 and tenant_id = $19 returning id`,
             [id, ...values, tenantId],
           )
         : await c.query(
             `insert into endpoints (name, kind, llm_flavor, base_url, api_key_id, headers, auto_discover, default_model, enabled,
-               notes, maintainer_id, environment, visibility, platform_id, health_path, created_by, tenant_id)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) returning id`,
+               notes, maintainer_id, environment, visibility, platform_id, health_path, spec, metrics_url, created_by, tenant_id)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) returning id`,
             [...values, request.user.id, tenantId],
           );
       if (!rows[0]) throw badRequest('Endpoint nicht gefunden', 404);

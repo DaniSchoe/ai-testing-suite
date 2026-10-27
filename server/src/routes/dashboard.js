@@ -1,7 +1,8 @@
 // Dashboard in drei Ebenen: Portfolio → Plattform → Modell, dazu Souveränität (SEAL). Die Umgebung (prod/dev/all) wählt die Oberfläche oben.
 import { hasPermission, requirePermission } from '../auth.js';
 import { many, one } from '../db.js';
-import { envFilter, heatmap, latestResults, NORMALIZATION, scorecard, sloOf, sovereignty, suitability } from '../dashboard.js';
+import { envFilter, heatmap, latestResults, NORMALIZATION, scorecard, sloOf, suitability } from '../dashboard.js';
+import { assess, sovereignty } from '../assessment.js';
 import { percentile } from '../evaluate.js';
 import { platformStatus } from '../snapshot.js';
 
@@ -128,7 +129,7 @@ export default async function dashboardRoutes(app) {
     } catch {
       /* Status ist optional */
     }
-    const [routesRows, findingsRows, topFindings, trend, mk, lastSnapshot, sov] = await Promise.all([
+    const [routesRows, findingsRows, topFindings, trend, mk, lastSnapshot, assessment, reportCounts] = await Promise.all([
       many(`select g.name as gateway, b.name as backend, r.models from platform_routes r join endpoints g on g.id = r.gateway_endpoint_id join endpoints b on b.id = r.backend_endpoint_id where r.platform_id = $1`, [platform.id]),
       many(`select severity, count(*)::int as n from findings where platform_id = $1 and status in ('open', 'in_progress') group by 1`, [platform.id]),
       many(`select id, title, severity, status, framework, category, model, path, last_seen_at from findings where platform_id = $1 and status in ('open', 'in_progress') order by array_position(array['critical','high','medium','low','info'], severity), last_seen_at desc limit 8`, [platform.id]),
@@ -139,7 +140,8 @@ export default async function dashboardRoutes(app) {
       ),
       markers(t, platform.id, days),
       one(`select id, finished_at, snapshot from runs where platform_id = $1 and snapshot is not null and not is_draft order by created_at desc limit 1`, [platform.id]),
-      sovereignty(t, platform.id),
+      assess(t, platform.id),
+      one(`select count(*)::int as total, count(*) filter (where status = 'approved')::int as approved from reports where tenant_id = $1 and body->'platform'->>'id' = $2`, [t, platform.id]),
     ]);
     // SLO je Prüfung: welche Schwellwerte werden nicht erfüllt.
     const failing = rows.filter((r) => r.rules?.length && r.status === 'failed').map((r) => ({ template: r.template_key, model: r.model_alias, path: r.path, rules: r.rules }));
@@ -150,7 +152,9 @@ export default async function dashboardRoutes(app) {
       status,
       routes: routesRows,
       snapshot: lastSnapshot ? { run_id: lastSnapshot.id, at: lastSnapshot.finished_at, ...lastSnapshot.snapshot } : null,
-      sovereignty: sov,
+      sovereignty: assessment ? { ...assessment.sovereignty, goals: assessment.sovereignty.goals.map(({ checks, ...g }) => g) } : null,
+      assessment: assessment ? { security: { score: assessment.security.score, level: assessment.security.level }, production: { score: assessment.production.score, level: assessment.production.level } } : null,
+      reports: reportCounts,
       findings: { open: Object.fromEntries(findingsRows.map((f) => [f.severity, f.n])), top: topFindings },
       slo: { ...sloOf(rows), failing: failing.slice(0, 10) },
       models,

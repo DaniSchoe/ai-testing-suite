@@ -4,19 +4,28 @@ import { logAudit } from '../audit.js';
 import { many, one, query, tx } from '../db.js';
 import { catalog } from './admin.js';
 import { platformStatus, takeSnapshot } from '../snapshot.js';
+import { assess } from '../assessment.js';
+import { presets } from '../inventory.js';
+import { validateLinks } from '../inventorySpec.js';
 
 const bad = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const ENVIRONMENTS = ['dev', 'prod'];
 
-// SEAL (Sovereign Effectiveness Assurance Level) 0 bis 4 je Souveränitätsziel; min_level ist die geforderte Mindeststufe.
-function cleanSovereignty(s = {}) {
-  const level = (v, fallback = 0) => Math.min(4, Math.max(0, Math.round(Number(v ?? fallback)) || 0));
-  const goals = {};
-  for (const [key, g] of Object.entries(s.goals ?? {})) {
-    if (!/^SOV-\d{1,2}$/.test(key)) continue;
-    goals[key] = { level: level(g?.level), note: String(g?.note ?? '').slice(0, 500) };
+// SEAL (Sovereign Effectiveness Assurance Level) 0 bis 4. min_level ist die geforderte Mindeststufe; overrides überschreiben die
+// abgeleitete Stufe eines Ziels und brauchen eine Begründung.
+const level = (v, fallback = 0) => Math.min(4, Math.max(0, Math.round(Number(v ?? fallback)) || 0));
+
+function cleanSovereignty(s = {}, user = null, previous = {}) {
+  const overrides = {};
+  const incoming = s.overrides ?? previous.overrides ?? {};
+  for (const [key, o] of Object.entries(incoming)) {
+    if (!/^SOV-\d{1,2}$/.test(key) || !o) continue;
+    const reason = String(o.reason ?? '').trim().slice(0, 1000);
+    if (!reason) throw bad(`Überschreiben von ${key} braucht eine Begründung`);
+    const same = previous.overrides?.[key] && Number(previous.overrides[key].level) === level(o.level) && previous.overrides[key].reason === reason;
+    overrides[key] = same ? previous.overrides[key] : { level: level(o.level), reason, by: user?.display_name ?? user?.username ?? user?.email ?? null, at: new Date().toISOString() };
   }
-  return { min_level: level(s.min_level, 2), goals };
+  return { min_level: level(s.min_level, previous.min_level ?? 2), overrides };
 }
 
 export default async function platformRoutes(app) {
@@ -35,7 +44,7 @@ export default async function platformRoutes(app) {
       `select p.*,
          (select count(*)::int from endpoints e where e.platform_id = p.id) as components,
          coalesce((select json_agg(distinct e.kind) from endpoints e where e.platform_id = p.id), '[]') as kinds,
-         (select count(*)::int from endpoint_models m join endpoints e on e.id = m.endpoint_id where e.platform_id = p.id and m.available) as models,
+         (select count(*)::int from endpoint_models m join endpoints e on e.id = m.endpoint_id where e.platform_id = p.id and m.available and m.portfolio_id is not null) as models,
          (select r.status from runs r where r.platform_id = p.id and r.finished_at is not null order by r.finished_at desc limit 1) as last_status,
          (select max(r.finished_at) from runs r where r.platform_id = p.id) as last_run_at
        from platforms p where p.tenant_id = $1 and ($2::text is null or p.environment = $2) order by p.name`,
@@ -45,11 +54,12 @@ export default async function platformRoutes(app) {
 
   app.get('/api/platforms/:id', viewer, async (request) => {
     const p = await load(request);
-    const [endpoints, routes] = await Promise.all([
+    const [endpoints, routes, links] = await Promise.all([
       catalog(request.user, { platformId: p.id }),
       many('select * from platform_routes where platform_id = $1', [p.id]),
+      many('select kind, from_id, to_id, data from platform_links where platform_id = $1', [p.id]),
     ]);
-    return { ...p, endpoints, routes };
+    return { ...p, endpoints, routes, links };
   });
 
   async function save(request, id) {
@@ -66,7 +76,7 @@ export default async function platformRoutes(app) {
           )
         : await c.query(
             `insert into platforms (tenant_id, name, description, environment, sovereignty, created_by) values ($1, $2, $3, $4, $5, $6) returning *`,
-            [tenantId, b.name.trim(), b.description ?? null, environment, JSON.stringify(cleanSovereignty(b.sovereignty)), request.user.id],
+            [tenantId, b.name.trim(), b.description ?? null, environment, JSON.stringify(cleanSovereignty(b.sovereignty, request.user)), request.user.id],
           );
       if (!rows[0]) throw bad('Plattform nicht gefunden', 404);
       // Die Umgebung der Komponenten folgt der Plattform.
@@ -85,16 +95,43 @@ export default async function platformRoutes(app) {
     return { ok: true };
   });
 
-  // Topologie: komplett ersetzen. Gateway und Backend müssen zur Plattform gehören.
-  app.put('/api/platforms/:id/routes', manager, async (request) => {
+  // Topologie: Zuordnungen (Standort, Cluster, GPU), Routen vom Gateway zu Inferenzservern, Modelle je Inferenzserver und Positionen
+  // im Editor werden gemeinsam ersetzt. Gateway und Backend müssen zur Plattform gehören.
+  app.put('/api/platforms/:id/topology', manager, async (request) => {
     const p = await load(request);
-    const routes = request.body?.routes ?? [];
-    const eps = new Map((await many('select id, kind from endpoints where platform_id = $1', [p.id])).map((e) => [e.id, e.kind]));
+    const b = request.body ?? {};
+    const eps = await many('select id, name, kind, spec from endpoints where platform_id = $1', [p.id]);
+    const byId = new Map(eps.map((e) => [e.id, e]));
+    const links = validateLinks(b.links, byId);
+    const routes = b.routes ?? [];
     for (const r of routes) {
-      if (eps.get(r.gateway_endpoint_id) !== 'ai_proxy') throw bad('Der Ausgang einer Route muss ein AI Proxy (Gateway) der Plattform sein');
-      if (!eps.has(r.backend_endpoint_id) || r.backend_endpoint_id === r.gateway_endpoint_id) throw bad('Ungültiges Backend');
+      if (byId.get(r.gateway_endpoint_id)?.kind !== 'ai_proxy') throw bad('Der Ausgang einer Route muss ein AI Gateway der Plattform sein');
+      if (!['llm', 'ai_proxy'].includes(byId.get(r.backend_endpoint_id)?.kind) || r.backend_endpoint_id === r.gateway_endpoint_id) throw bad('Eine Route führt zu einem Inferenzserver oder Gateway der Plattform');
+    }
+    const layout = {};
+    for (const [id, pos] of Object.entries(b.layout ?? {})) {
+      if (byId.has(id) && Number.isFinite(Number(pos?.x)) && Number.isFinite(Number(pos?.y))) layout[id] = { x: Math.round(pos.x), y: Math.round(pos.y) };
+    }
+    const warnings = [];
+    const slots = new Map();
+    for (const l of links.filter((x) => x.kind === 'runs_on')) {
+      const key = `${l.to_id}|${l.data.mig_slice ?? 'all'}`;
+      slots.set(key, [...(slots.get(key) ?? []), byId.get(l.from_id).name]);
+    }
+    for (const [key, users] of slots) {
+      const gpu = byId.get(key.split('|')[0]);
+      if (users.length > 1) warnings.push(`${gpu.name}: ${users.join(', ')} teilen sich ${key.endsWith('|all') ? 'die GPU' : 'eine MIG-Instanz'}`);
+    }
+    for (const [id, models] of Object.entries(b.served_models ?? {})) {
+      if (byId.get(id)?.kind !== 'llm') continue;
+      const spec = { ...(byId.get(id).spec ?? {}), served_models: [...new Set((models ?? []).map(String))] };
+      await query('update endpoints set spec = $2 where id = $1', [id, JSON.stringify(spec)]);
     }
     await tx(async (c) => {
+      await c.query('delete from platform_links where platform_id = $1', [p.id]);
+      for (const l of links) {
+        await c.query('insert into platform_links (platform_id, kind, from_id, to_id, data) values ($1, $2, $3, $4, $5)', [p.id, l.kind, l.from_id, l.to_id, JSON.stringify(l.data)]);
+      }
       await c.query('delete from platform_routes where platform_id = $1', [p.id]);
       for (const r of routes) {
         await c.query(
@@ -103,16 +140,31 @@ export default async function platformRoutes(app) {
           [p.id, r.gateway_endpoint_id, r.backend_endpoint_id, (r.models ?? []).map(String), r.note ?? null],
         );
       }
+      await c.query('update platforms set layout = $2, updated_at = now() where id = $1', [p.id, JSON.stringify(layout)]);
     });
-    await logAudit(request, 'platform.routes', 'platform', p.id, { routes: routes.length });
-    return many('select * from platform_routes where platform_id = $1', [p.id]);
+    await logAudit(request, 'platform.topology', 'platform', p.id, { links: links.length, routes: routes.length });
+    return {
+      links: await many('select kind, from_id, to_id, data from platform_links where platform_id = $1', [p.id]),
+      routes: await many('select * from platform_routes where platform_id = $1', [p.id]),
+      layout,
+      warnings,
+    };
   });
 
+  app.get('/api/inventory/presets', viewer, async () => presets());
+
+  // Einstufung: Sicherheit, Produktionsreife und Souveränitätsziele mit Begründung je Prüfpunkt.
+  app.get('/api/platforms/:id/assessment', viewer, async (request) => {
+    const p = await load(request);
+    return assess(request.user.tenant_id, p.id);
+  });
+
+  // Mindeststufe und Überschreibungen der Ziele. Eine Überschreibung braucht eine Begründung; null hebt sie auf.
   app.put('/api/platforms/:id/sovereignty', manager, async (request) => {
     const p = await load(request);
-    const value = cleanSovereignty(request.body);
+    const value = cleanSovereignty(request.body, request.user, p.sovereignty ?? {});
     await query('update platforms set sovereignty = $2, updated_at = now() where id = $1', [p.id, JSON.stringify(value)]);
-    await logAudit(request, 'platform.sovereignty', 'platform', p.id, { min_level: value.min_level });
+    await logAudit(request, 'platform.sovereignty', 'platform', p.id, { min_level: value.min_level, overrides: Object.keys(value.overrides) });
     return value;
   });
 

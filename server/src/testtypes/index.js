@@ -10,13 +10,15 @@ import access from './access.js';
 import mcp from './mcp.js';
 import structured from './structured.js';
 import thinking from './thinking.js';
+import network from './network.js';
 
 export const testTypes = Object.fromEntries(
-  [smoke, performance, load, quality, coding, ocr, security, access, mcp, structured, thinking].map((t) => [t.type, t]),
+  [smoke, performance, load, quality, coding, ocr, security, access, mcp, structured, thinking, network].map((t) => [t.type, t]),
 );
 
 export function describeTypes() {
-  return Object.values(testTypes).map(({ type, label, description, defaults, endpointKinds, modelMode }) => ({
+  return Object.values(testTypes).map(({ type, label, description, defaults, endpointKinds, modelMode, platformLevel }) => ({
+    platformLevel: Boolean(platformLevel),
     type,
     label,
     description,

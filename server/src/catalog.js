@@ -11,6 +11,8 @@ import { testTypes } from './testtypes/index.js';
 export const SCHEMA = 'ai-testing-suite/v1';
 export const REQUIREMENTS = ['vision', 'tools', 'reasoning', 'mcp', 'json'];
 export const USE_CASES = ['chat', 'coding', 'ocr', 'agent'];
+// Was eine Vorlage prüft: die Plattform selbst, das Sprachmodell, Daten oder Prozesse.
+export const TARGETS = ['platform', 'llm', 'data', 'process'];
 
 const bad = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 export { bad };
@@ -65,6 +67,12 @@ export async function validateSpec(user, type, spec) {
   return out;
 }
 
+export function validateTarget(target) {
+  const v = target ?? 'llm';
+  if (!TARGETS.includes(v)) throw bad(`Test-Ziel: erlaubt sind ${TARGETS.join(', ')}`);
+  return v;
+}
+
 export function validateUseCases(list) {
   const v = list ?? [];
   if (!Array.isArray(v) || v.some((x) => !USE_CASES.includes(x))) throw bad(`Einsatzprofile: erlaubt sind ${USE_CASES.join(', ')}`);
@@ -94,7 +102,7 @@ async function datasetDoc(user, key, version, includeFiles = true) {
 
 export async function templateDoc(user, versionId, { datasets = false } = {}) {
   const v = await one(
-    `select v.*, t.key, t.name, t.description, t.type, t.tags, t.use_cases, t.security, t.origin from template_versions v join templates t on t.id = v.template_id where v.id = $1`,
+    `select v.*, t.key, t.name, t.description, t.type, t.tags, t.use_cases, t.target, t.origin from template_versions v join templates t on t.id = v.template_id where v.id = $1`,
     [versionId],
   );
   if (!v) return null;
@@ -102,7 +110,7 @@ export async function templateDoc(user, versionId, { datasets = false } = {}) {
   const doc = {
     schema: SCHEMA,
     kind: 'template',
-    template: { key: v.key, name: v.name, description: v.description, type: v.type, tags: v.tags, use_cases: v.use_cases, security: v.security, categories },
+    template: { key: v.key, name: v.name, description: v.description, type: v.type, tags: v.tags, use_cases: v.use_cases, target: v.target, categories },
     version: v.version,
     changelog: v.changelog,
     hash: v.hash,
@@ -113,29 +121,6 @@ export async function templateDoc(user, versionId, { datasets = false } = {}) {
     if (d) doc.datasets = [d];
   }
   return doc;
-}
-
-export async function packDoc(user, packVersionId, { datasets = false } = {}) {
-  const v = await one(`select v.*, p.key, p.name, p.description, p.framework from pack_versions v join packs p on p.id = v.pack_id where v.id = $1`, [packVersionId]);
-  if (!v) return null;
-  const templates = [];
-  const datasetDocs = new Map();
-  for (const it of v.items) {
-    const doc = await templateDoc(user, it.template_version_id, { datasets });
-    if (!doc) continue;
-    for (const d of doc.datasets ?? []) datasetDocs.set(`${d.key}@${d.version}`, d);
-    delete doc.datasets;
-    templates.push(doc);
-  }
-  return {
-    schema: SCHEMA,
-    kind: 'pack',
-    pack: { key: v.key, name: v.name, description: v.description, framework: v.framework },
-    version: v.version,
-    changelog: v.changelog,
-    templates,
-    ...(datasetDocs.size ? { datasets: [...datasetDocs.values()] } : {}),
-  };
 }
 
 export const serialize = (doc, format) => (format === 'json' ? JSON.stringify(doc, null, 2) : YAML.stringify(doc, { lineWidth: 0 }));
@@ -149,7 +134,7 @@ export function parseDocument(content, format) {
   }
   if (!doc || typeof doc !== 'object') throw bad('Leeres oder ungültiges Dokument');
   if (doc.schema !== SCHEMA) throw bad(`Unbekanntes Schema „${doc.schema ?? 'fehlt'}“ (erwartet ${SCHEMA})`);
-  if (!['template', 'pack'].includes(doc.kind)) throw bad('kind muss template oder pack sein');
+  if (doc.kind !== 'template') throw bad('kind muss template sein (Pakete gibt es seit 0.5.0 nicht mehr)');
   if (doc.version && !isSemver(doc.version)) throw bad(`Ungültige Version „${doc.version}“`);
   return doc;
 }

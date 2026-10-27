@@ -1,5 +1,8 @@
 // Bewertung eines Einzeltests: Schwellwerte der Prüfung, Wiederholungen (Aggregation), Ergebnisart, Statistik, Baseline-Vergleich.
 
+// Typen, deren Fehlschläge als Sicherheitsfinding gelten.
+export const SECURITY_TYPES = ['security', 'access', 'mcp', 'network'];
+
 const OPS = {
   '<': (a, b) => a < b,
   '<=': (a, b) => a <= b,
@@ -48,7 +51,7 @@ export function outcomeOf({ status, type, security }) {
   if (status === 'skipped') return 'not_applicable';
   if (status === 'error') return 'technical_error';
   if (status === 'passed') return 'passed';
-  return security || ['security', 'access', 'mcp'].includes(type) ? 'security_finding' : 'quality_deviation';
+  return security || SECURITY_TYPES.includes(type) ? 'security_finding' : 'quality_deviation';
 }
 
 export function median(values) {

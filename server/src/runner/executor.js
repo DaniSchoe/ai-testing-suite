@@ -40,7 +40,7 @@ async function loadEndpoints(platformId) {
     `select e.*, k.secret_enc as api_key_enc, k.name as api_key_name from endpoints e left join api_keys k on k.id = e.api_key_id where e.platform_id = $1`,
     [platformId],
   );
-  const models = await many('select m.* from endpoint_models m join endpoints e on e.id = m.endpoint_id where e.platform_id = $1', [platformId]);
+  const models = await many('select m.* from endpoint_models m join endpoints e on e.id = m.endpoint_id where e.platform_id = $1 and m.portfolio_id is not null', [platformId]);
   return rows.map((e) => {
     const modelRows = models.filter((m) => m.endpoint_id === e.id);
     return { ...e, modelRows, models: modelRows.filter((m) => m.available).map((m) => m.name) };
@@ -146,7 +146,7 @@ async function runAtom({ run, audit, atom, endpoints, endpointsByName, keysByNam
   try {
     const type = testTypes[atom.type];
     if (!type) throw new Error(`Unbekannter Testtyp "${atom.type}"`);
-    if (!endpoint) throw new Error('Kein Endpoint zugeordnet');
+    if (!endpoint && !type.platformLevel) throw new Error('Kein Endpoint zugeordnet');
     const ds = await datasetConfig(run, atom);
     // Regeln (bestanden/nicht bestanden) legt die Prüfung über Schwellwerte fest; die Testart misst nur.
     const cfg = { ...structuredClone(type.defaults), ...structuredClone(atom.config), ...ds.config, model: atom.model ?? atom.config?.model ?? '' };
@@ -154,7 +154,9 @@ async function runAtom({ run, audit, atom, endpoints, endpointsByName, keysByNam
       cfg.minScore = 0;
       cfg.thresholds = {};
     }
-    const ctx = buildContext({ run, atom, resultId: result.id, cfg, endpoint, endpointsByName, keysByName, keysById, signal: controller.signal });
+    const ctx = endpoint
+      ? buildContext({ run, atom, resultId: result.id, cfg, endpoint, endpointsByName, keysByName, keysById, signal: controller.signal })
+      : { test: { id: null, name: atom.name, type: atom.type }, config: cfg, signal: controller.signal, log: (level, message, data) => log(run.id, result.id, level, message, data), aliasOf: (n) => n };
     await ctx.log('info', `Starte ${type.label}: ${atom.name}${atom.repeats > 1 ? ` (${atom.repeats} Wiederholungen)` : ''}`);
     const abortPromise = new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('Abgebrochen (Zeitlimit, Lauf abgebrochen oder Plattform gesperrt)'))));
     const attempts = [];

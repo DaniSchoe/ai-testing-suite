@@ -1,4 +1,4 @@
-// Prüfungen: Ziel, Vorlagen/Pakete in fester Version, Modelle mit Pfad, Schwellwerte, Baseline, Zeitplan, Freigaben und Kill-Switch.
+// Prüfungen: Ziel, Vorlagen in fester Version, Modelle mit Pfad, Schwellwerte, Baseline, Zeitplan, Freigaben und Kill-Switch.
 import { CronExpressionParser } from 'cron-parser';
 import { logAudit } from '../audit.js';
 import { hasPermission, requirePermission } from '../auth.js';
@@ -37,22 +37,14 @@ export default async function auditRoutes(app) {
     if (!key || !canSeeKey(user, key)) throw err('Dieser API-Key steht dir nicht zur Verfügung', 403);
   }
 
-  // Eingabe in Positionen auflösen: Vorlagenversionen oder Paketversionen (werden mit ihren festen Versionen übernommen).
+  // Eingabe in Positionen auflösen: Vorlagenversionen (feste Versionen).
   async function resolveItems(user, raw, existing = []) {
-    if (!Array.isArray(raw) || !raw.length) throw err('Mindestens eine Vorlage oder ein Paket auswählen');
+    if (!Array.isArray(raw) || !raw.length) throw err('Mindestens eine Vorlage auswählen');
     const out = [];
     const known = new Set(existing.map((i) => i.template_version_id));
     for (const r of raw) {
       const ids = [];
-      if (r.pack_version_id) {
-        const pv = await one(
-          `select v.id, v.status, v.items, p.tenant_id, p.origin, p.team_id, p.owner_id from pack_versions v join packs p on p.id = v.pack_id where v.id = $1`,
-          [r.pack_version_id],
-        );
-        if (!pv || !(await canSeeTemplate(user, pv))) throw err('Paket nicht gefunden', 404);
-        if (pv.status !== 'published') throw err('Pakete können nur in veröffentlichter Version verwendet werden');
-        for (const it of pv.items) ids.push({ template_version_id: it.template_version_id, pack_version_id: pv.id });
-      } else if (r.template_version_id) ids.push({ template_version_id: r.template_version_id, thresholds: r.thresholds, endpoint_id: r.endpoint_id });
+      if (r.template_version_id) ids.push({ template_version_id: r.template_version_id, thresholds: r.thresholds, endpoint_id: r.endpoint_id });
       else throw err('Position ohne Vorlage');
       for (const it of ids) {
         const v = await one(
@@ -62,7 +54,7 @@ export default async function auditRoutes(app) {
         if (!v || !(await canSeeTemplate(user, v))) throw err('Vorlage nicht gefunden', 404);
         if (v.status !== 'published' && !known.has(v.id)) throw err(`Vorlage „${v.name}“ ist nicht veröffentlicht`);
         const thresholds = it.thresholds === undefined ? (v.spec?.suggested_thresholds ?? []) : validateThresholds(it.thresholds);
-        out.push({ template_version_id: v.id, ...(it.pack_version_id ? { pack_version_id: it.pack_version_id } : {}), ...(it.endpoint_id ? { endpoint_id: it.endpoint_id } : {}), thresholds });
+        out.push({ template_version_id: v.id, ...(it.endpoint_id ? { endpoint_id: it.endpoint_id } : {}), thresholds });
       }
     }
     return out;
@@ -204,7 +196,7 @@ export default async function auditRoutes(app) {
     if (!item) throw err('Position nicht gefunden', 404);
     const described = (await describeItems(a.items))[idx];
     if (!described.update_available) throw err('Es gibt keine neuere veröffentlichte Version');
-    const items = a.items.map((it, i) => (i === idx ? { ...it, template_version_id: described.update_available.version_id, pack_version_id: undefined } : it));
+    const items = a.items.map((it, i) => (i === idx ? { ...it, template_version_id: described.update_available.version_id } : it));
     await query('update audits set items = $2, updated_at = now() where id = $1', [a.id, JSON.stringify(items)]);
     await logAudit(request, 'audit.adopt_version', 'audit', a.id, { template: described.key, from: described.version, to: described.update_available.version });
     return withRights(request.user, await visible(request.user, a.id));
@@ -345,15 +337,36 @@ export default async function auditRoutes(app) {
   });
 
   // --- Freigaben ---
-  app.get('/api/approvals', viewer, async (request) => {
-    const status = request.query.status || null;
-    return many(
-      `select ap.*, a.name as audit_name, p.name as platform_name, p.environment, coalesce(u.display_name, u.username) as requested_by_name, coalesce(d.display_name, d.username) as decided_by_name
+  // Eine Freigabe sehen Antragsteller, zugewiesene Person, Mitglieder des zugewiesenen Teams mit Freigaberecht und Administratoren.
+  // Ohne Zuweisung sehen sie alle mit Freigaberecht. Entscheiden dürfen nur die Berechtigten (nicht der Antragsteller).
+  const mayDecide = (user, ap) => {
+    if (!(user.is_admin || hasPermission(user, 'runs.prod'))) return false;
+    if (user.is_admin) return true;
+    if (ap.assigned_user_id) return ap.assigned_user_id === user.id;
+    if (ap.assigned_team_id) return (user.teams ?? []).some((t) => t.id === ap.assigned_team_id);
+    return true;
+  };
+  const mayView = (user, ap) => ap.requested_by === user.id || mayDecide(user, ap);
+
+  async function listApprovals(user, { status = null, platformId = null } = {}) {
+    const rows = await many(
+      `select ap.*, a.name as audit_name, p.name as platform_name, p.environment, coalesce(u.display_name, u.username) as requested_by_name, coalesce(d.display_name, d.username) as decided_by_name,
+         t.name as assigned_team_name, coalesce(au.display_name, au.username) as assigned_user_name
        from approvals ap join audits a on a.id = ap.audit_id left join platforms p on p.id = ap.platform_id
        left join users u on u.id = ap.requested_by left join users d on d.id = ap.decided_by
-       where ap.tenant_id = $1 and ($2::text is null or ap.status = $2) order by ap.requested_at desc limit 200`,
-      [request.user.tenant_id, status],
+       left join teams t on t.id = ap.assigned_team_id left join users au on au.id = ap.assigned_user_id
+       where ap.tenant_id = $1 and ($2::text is null or ap.status = $2) and ($3::uuid is null or ap.platform_id = $3) order by ap.requested_at desc limit 200`,
+      [user.tenant_id, status, platformId],
     );
+    return rows.filter((ap) => mayView(user, ap)).map((ap) => ({ ...ap, can_decide: ap.status === 'pending' && ap.requested_by !== user.id && mayDecide(user, ap) }));
+  }
+
+  app.get('/api/approvals', viewer, async (request) => listApprovals(request.user, { status: request.query.status || null, platformId: request.query.platform_id || null }));
+
+  // Anzahl offener Freigaben, die der angemeldete User entscheiden kann (Hinweis in der Navigation).
+  app.get('/api/approvals/summary', viewer, async (request) => {
+    const open = await listApprovals(request.user, { status: 'pending', platformId: request.query.platform_id || null });
+    return { pending: open.filter((ap) => ap.can_decide).length };
   });
 
   app.post('/api/audits/:id/approvals', starter, async (request) => {
@@ -361,9 +374,14 @@ export default async function auditRoutes(app) {
     const b = request.body ?? {};
     const pending = await one(`select id from approvals where audit_id = $1 and status = 'pending'`, [a.id]);
     if (pending) throw err('Für diese Prüfung liegt bereits ein offener Antrag vor', 409);
+    const team = b.assigned_team_id ? await one('select id from teams where id = $1', [b.assigned_team_id]) : null;
+    if (b.assigned_team_id && !team) throw err('Team nicht gefunden');
+    const assignee = b.assigned_user_id ? await one('select id from users where id = $1', [b.assigned_user_id]) : null;
+    if (b.assigned_user_id && !assignee) throw err('Person nicht gefunden');
+    if (assignee?.id === request.user.id) throw err('Vier-Augen-Prinzip: Der Antrag kann nicht an die antragstellende Person gehen');
     const row = await one(
-      `insert into approvals (tenant_id, audit_id, platform_id, requested_by, request_note, window_from, window_to, limits, runs_allowed)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning *`,
+      `insert into approvals (tenant_id, audit_id, platform_id, requested_by, request_note, window_from, window_to, limits, runs_allowed, assigned_team_id, assigned_user_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) returning *`,
       [
         request.user.tenant_id,
         a.id,
@@ -374,6 +392,8 @@ export default async function auditRoutes(app) {
         b.window_to ? new Date(b.window_to) : null,
         JSON.stringify(effectiveLimits(b.limits)),
         Math.min(Math.max(Number(b.runs_allowed) || 1, 1), 1000),
+        team?.id ?? null,
+        assignee?.id ?? null,
       ],
     );
     await logAudit(request, 'approval.request', 'approval', row.id, { audit: a.name });
@@ -385,6 +405,7 @@ export default async function auditRoutes(app) {
     const ap = await one(`select * from approvals where id = $1 and tenant_id = $2`, [request.params.id, request.user.tenant_id]);
     if (!ap) throw err('Freigabe nicht gefunden', 404);
     if (ap.status !== 'pending') throw err('Der Antrag ist bereits entschieden', 409);
+    if (!mayDecide(request.user, ap)) throw err('Dieser Antrag ist einem anderen Team bzw. einer anderen Person zugewiesen', 403);
     if (ap.requested_by === request.user.id) throw err('Vier-Augen-Prinzip: Eigene Anträge können nicht selbst freigegeben werden', 403);
     const b = request.body ?? {};
     if (!['approve', 'reject'].includes(b.decision)) throw err('Entscheidung muss approve oder reject sein');
