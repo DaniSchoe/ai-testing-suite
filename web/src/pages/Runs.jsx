@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Empty, EnvBadge, getEnv, Loading, OUTCOME_LABELS, PageHead, qs, StatusBadge, Tabs, useApi, fmt } from '../lib.jsx';
+import { Empty, EnvBadge, getPlatform, Loading, OUTCOME_LABELS, PageHead, qs, StatusBadge, Tabs, useApi, fmt } from '../lib.jsx';
 import { Calendar } from './Schedules.jsx';
 
 const outcomeText = (o) =>
@@ -11,12 +11,11 @@ const outcomeText = (o) =>
 export function Runs() {
   const [params, setParams] = useSearchParams();
   const [tab, setTab] = useState('list');
-  const [filters, setFilters] = useState({ audit_id: '', platform_id: '', status: '', days: '30', drafts: '' });
+  const [filters, setFilters] = useState({ audit_id: '', platform_id: getPlatform() ?? '', status: '', days: '30', drafts: '' });
   const [page, setPage] = useState(1);
   const search = params.get('search') ?? '';
   const options = useApi('/api/run-filters');
-  const env = getEnv();
-  const list = useApi(`/api/runs${qs({ ...filters, page, search, environment: env })}`, { interval: 10000 });
+  const list = useApi(`/api/runs${qs({ ...filters, page, search })}`, { interval: 10000 });
   const set = (patch) => (setFilters((f) => ({ ...f, ...patch })), setPage(1));
   const pages = list.data ? Math.max(1, Math.ceil(list.data.total / list.data.pageSize)) : 1;
 
@@ -41,14 +40,6 @@ export function Runs() {
               {(options.data?.audits ?? []).map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name}
-                </option>
-              ))}
-            </select>
-            <select className="inline" value={filters.platform_id} onChange={(e) => set({ platform_id: e.target.value })} aria-label="Plattform">
-              <option value="">Alle Plattformen</option>
-              {(options.data?.platforms ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
                 </option>
               ))}
             </select>

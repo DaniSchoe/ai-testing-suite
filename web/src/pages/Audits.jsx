@@ -9,7 +9,7 @@ import {
   describeSchedule,
   Empty,
   EnvBadge,
-  getEnv,
+  getPlatform,
   ErrorBox,
   Field,
   fmt,
@@ -29,6 +29,7 @@ import {
   TYPE_LABELS,
 } from '../lib.jsx';
 import { ThresholdRows } from './Catalog.jsx';
+import { ApprovalsPanel } from './Approvals.jsx';
 import { ScheduleList } from './Schedules.jsx';
 
 const outcomeSummary = (o) =>
@@ -41,8 +42,9 @@ export function Audits() {
   const list = useApi('/api/audits', { interval: 15000 });
   const [starting, setStarting] = useState(null);
   const [tab, setTab] = useState('audits');
-  const env = getEnv();
-  const rows = (list.data ?? []).filter((a) => env === 'all' || a.platform_environment === env);
+  const platformId = getPlatform();
+  const rows = (list.data ?? []).filter((a) => !platformId || a.platform_id === platformId);
+  const pending = useApi(can(user, 'runs.prod') ? '/api/approvals/summary' : null, { interval: 30000 });
   return (
     <>
       <PageHead
@@ -62,10 +64,12 @@ export function Audits() {
         onChange={setTab}
         tabs={[
           ['audits', 'Prüfungen'],
+          ['approvals', pending.data?.pending ? `Freigaben (${pending.data.pending} offen)` : 'Freigaben'],
           ['schedules', 'Zeitpläne'],
         ]}
       />
       {tab === 'schedules' && <ScheduleList />}
+      {tab === 'approvals' && <ApprovalsPanel />}
       {tab === 'audits' && <Loading state={list}>
         {() =>
           rows.length === 0 ? (
@@ -128,11 +132,15 @@ export function Audits() {
 
 // Vorabprüfung vor dem Start: nicht anwendbare Kombinationen, Dauer, Freigabebedarf.
 export function StartDialog({ audit, onClose }) {
+  const user = useUser();
   const navigate = useNavigate();
   const pre = useApi(`/api/audits/${audit.id}/preflight`);
   const keys = useApi('/api/api-keys');
   const [keyId, setKeyId] = useState('');
   const [note, setNote] = useState('');
+  const [assignee, setAssignee] = useState('');
+  const teams = useApi('/api/teams');
+  const directory = useApi('/api/user-directory');
   const [run, error, busy] = useAction();
   const p = pre.data;
   const start = () =>
@@ -142,7 +150,7 @@ export function StartDialog({ audit, onClose }) {
     });
   const request = () =>
     run(async () => {
-      await api(`/api/audits/${audit.id}/approvals`, { method: 'POST', body: { note } });
+      await api(`/api/audits/${audit.id}/approvals`, { method: 'POST', body: { note, assigned_team_id: assignee.startsWith('team:') ? assignee.slice(5) : undefined, assigned_user_id: assignee.startsWith('user:') ? assignee.slice(5) : undefined } });
       pre.reload();
     });
   return (
@@ -205,6 +213,25 @@ export function StartDialog({ audit, onClose }) {
                   <Field label="Begründung für den Antrag">
                     <input value={note} onChange={(e) => setNote(e.target.value)} />
                   </Field>
+                  <Field label="Zuweisen an" hint="Nur die zugewiesene Person bzw. Prüfer des Teams sehen den Antrag. Ohne Auswahl sehen ihn alle Prüfer.">
+                    <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+                      <option value="">Alle Prüfer</option>
+                      <optgroup label="Team">
+                        {(teams.data ?? []).map((t) => (
+                          <option key={t.id} value={`team:${t.id}`}>
+                            {t.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Person">
+                        {(directory.data ?? []).filter((u) => u.id !== user.id).map((u) => (
+                          <option key={u.id} value={`user:${u.id}`}>
+                            {u.name ?? u.display_name ?? u.username}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </Field>
                   <button className="btn" onClick={request} disabled={busy}>
                     Freigabe beantragen
                   </button>
@@ -234,7 +261,7 @@ const EMPTY = {
   name: '',
   description: '',
   tags: '',
-  platform_id: '',
+  platform_id: getPlatform() ?? '',
   api_key_id: '',
   maintainer_id: '',
   visibility: 'private',

@@ -1065,3 +1065,121 @@ details > summary {
 .content > .toolbar {
   margin-bottom: 12px;
 }
+
+.nav .nav-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.nav .nav-warn {
+  margin-left: auto;
+  display: inline-flex;
+  color: var(--warn, #c77d12);
+}
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.tile {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  color: inherit;
+  text-decoration: none;
+}
+.tile:hover {
+  border-color: var(--primary);
+}
+.tile .tile-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: var(--primary-soft, rgba(80, 100, 220, 0.12));
+  color: var(--primary);
+  margin-bottom: 8px;
+}
+.tile h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.topo {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 12px;
+}
+.topo-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 560px;
+  overflow: auto;
+}
+.topo-canvas {
+  position: relative;
+  min-height: 560px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  background: var(--surface);
+}
+.topo-node {
+  position: absolute;
+  width: 170px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+  cursor: grab;
+  user-select: none;
+  font-size: 13px;
+}
+.topo-node.selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(80, 100, 220, 0.25);
+}
+.topo-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: grab;
+  font-size: 13px;
+  background: var(--surface);
+}
+.topo-chip.placed {
+  opacity: 0.45;
+}
+.topo-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.topo-port {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: crosshair;
+}
+.goal-row {
+  cursor: pointer;
+}
+@media (max-width: 800px) {
+  .topo {
+    grid-template-columns: 1fr;
+  }
+}

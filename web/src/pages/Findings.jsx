@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Play } from 'lucide-react';
-import { api, can, Card, Empty, ErrorBox, Field, fmt, Loading, Modal, PageHead, PATH_LABELS, qs, SEVERITY_LABELS, SeverityBadge, useAction, useApi, useUser, useUserDirectory } from '../lib.jsx';
+import { api, can, getPlatform, Card, Empty, ErrorBox, Field, fmt, Loading, Modal, PageHead, PATH_LABELS, qs, SEVERITY_LABELS, SeverityBadge, useAction, useApi, useUser, useUserDirectory } from '../lib.jsx';
 
 const STATUS = {
   open: 'Offen',
@@ -13,9 +13,8 @@ const STATUS = {
 const RETEST = { passed: 'Nachtest bestanden', still_failing: 'Nachtest: weiterhin Befund' };
 
 export default function Findings() {
-  const [filters, setFilters] = useState({ status: '', severity: '', platform_id: '', q: '', open: '1' });
+  const [filters, setFilters] = useState({ status: '', severity: '', platform_id: getPlatform() ?? '', q: '', open: '1' });
   const list = useApi(`/api/findings${qs(filters)}`, { interval: 30000 });
-  const platforms = useApi('/api/platforms');
   const [selected, setSelected] = useState(null);
   const set = (patch) => setFilters((f) => ({ ...f, ...patch }));
   return (
@@ -38,14 +37,6 @@ export default function Findings() {
           {Object.entries(STATUS).map(([k, v]) => (
             <option key={k} value={k}>
               {v}
-            </option>
-          ))}
-        </select>
-        <select className="inline" value={filters.platform_id} onChange={(e) => set({ platform_id: e.target.value })} aria-label="Plattform">
-          <option value="">Alle Plattformen</option>
-          {(platforms.data ?? []).map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
             </option>
           ))}
         </select>

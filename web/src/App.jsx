@@ -2,13 +2,12 @@ import { useEffect, useState } from 'react';
 import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   Boxes,
-  ClipboardCheck,
+  AlertTriangle,
   Database,
   FileText,
   FlaskConical,
   History as HistoryIcon,
   KeyRound,
-  Landmark,
   LayoutGrid,
   Layers,
   LogOut,
@@ -26,7 +25,7 @@ import {
   Users,
   Building2,
 } from 'lucide-react';
-import { api, can, getEnv, getTenant, initials, setEnv, setTenant, useApi, UserContext, useTheme } from './lib.jsx';
+import { api, can, getPlatform, getTenant, initials, setPlatform, setPlatformQuiet, setTenant, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Findings from './pages/Findings.jsx';
 import { ReportDetail, Reports } from './pages/Reports.jsx';
@@ -34,8 +33,7 @@ import { AuditEditor, Audits } from './pages/Audits.jsx';
 import { Runs } from './pages/Runs.jsx';
 import RunDetail from './pages/RunDetail.jsx';
 import Sovereignty from './pages/Sovereignty.jsx';
-import Approvals from './pages/Approvals.jsx';
-import { Catalog, PackDetail, TemplateDetail } from './pages/Catalog.jsx';
+import { Catalog, TemplateDetail } from './pages/Catalog.jsx';
 import { DatasetDetail, Datasets } from './pages/Datasets.jsx';
 import { PlatformDetail, Platforms } from './pages/Platforms.jsx';
 import Models from './pages/admin/Models.jsx';
@@ -52,27 +50,20 @@ import ModelDetail from './pages/ModelDetail.jsx';
 const any = (...p) => (user) => p.some((x) => can(user, x));
 const NAV = [
   {
-    title: null,
-    items: [
-      ['/', LayoutGrid, 'Dashboard', any('suite.view'), { end: true }],
-      ['/findings', ShieldAlert, 'Findings', any('suite.view'), { badge: 'findings' }],
-      ['/reports', FileText, 'Berichte', any('suite.view')],
-    ],
     label: 'Übersicht',
+    items: [['/', LayoutGrid, 'Dashboard', any('suite.view'), { end: true }]],
   },
   {
     label: 'Prüfen',
     items: [
-      ['/audits', FlaskConical, 'Prüfungen', any('tests.manage', 'runs.start')],
+      ['/audits', FlaskConical, 'Prüfungen', any('tests.manage', 'runs.start'), { warn: 'approvals' }],
       ['/runs', HistoryIcon, 'Läufe', any('suite.view'), { badge: 'runs' }],
-      ['/sovereignty', Landmark, 'Souveränität', any('suite.view')],
-      ['/approvals', ClipboardCheck, 'Freigaben', any('runs.start', 'runs.prod'), { badge: 'approvals' }],
     ],
   },
   {
     label: 'Katalog',
     items: [
-      ['/catalog', Store, 'Vorlagen & Pakete', any('tests.manage', 'catalog.publish')],
+      ['/catalog', Store, 'Vorlagen', any('tests.manage', 'catalog.publish')],
       ['/datasets', Database, 'Datensätze', any('tests.manage')],
     ],
   },
@@ -80,8 +71,8 @@ const NAV = [
     label: 'Ziele',
     items: [
       ['/platforms', Layers, 'Plattformen', any('endpoints.manage', 'tests.manage', 'runs.start')],
-      ['/models', Boxes, 'Modellkatalog', any('endpoints.manage')],
-      ['/sizing', Ruler, 'Sizing', any('endpoints.manage', 'runs.start')],
+      ['/models', Boxes, 'Modellportfolio', any('endpoints.manage')],
+      ['/sizing', Ruler, 'Sizing', any('endpoints.manage', 'runs.start'), { tag: 'Beta' }],
     ],
   },
   {
@@ -122,6 +113,20 @@ function NoAccess({ user }) {
   );
 }
 
+// Plattformauswahl oben rechts: begrenzt Dashboard und alle Listen auf die gewählte Plattform.
+function PlatformSwitch({ platforms, current }) {
+  if (!platforms.length) return <span className="tag">Keine Plattform</span>;
+  return (
+    <select className="inline" value={current ?? ''} onChange={(e) => setPlatform(e.target.value)} aria-label="Plattform">
+      {platforms.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name} ({p.environment === 'dev' ? 'Dev' : 'Prod'})
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function TenantSwitch({ user }) {
   const tenants = user.tenants ?? [];
   if (tenants.length < 2) return <span className="tag">{user.tenant?.name}</span>;
@@ -145,12 +150,11 @@ export default function App() {
   const [query, setQuery] = useState('');
   // Aktive Läufe als Zähler in der Navigation (wie "Meine Aufgaben" in der Vorlage).
   const active = useApi(can(user, 'suite.view') ? '/api/runs?status=active&limit=50' : null, { interval: 10000 });
-  const findingStats = useApi(can(user, 'findings.manage') ? '/api/findings/stats' : null, { interval: 60000 });
-  const pendingApprovals = useApi(can(user, 'runs.prod') ? '/api/approvals?status=pending' : null, { interval: 30000 });
+  const platformList = useApi(can(user, 'suite.view') ? '/api/platforms' : null);
+  const pendingApprovals = useApi(can(user, 'runs.prod') ? '/api/approvals/summary' : null, { interval: 30000 });
   const badges = {
     runs: (active.data?.runs ?? []).filter((r) => r.status === 'running' || r.status === 'queued').length,
-    findings: findingStats.data?.open ?? 0,
-    approvals: pendingApprovals.data?.length ?? 0,
+    approvals: pendingApprovals.data?.pending ?? 0,
   };
 
   useEffect(() => {
@@ -160,6 +164,11 @@ export default function App() {
 
   if (!user) return null;
   if (!can(user, 'suite.view')) return <NoAccess user={user} />;
+  if (!platformList.data && !platformList.error) return null;
+  const platforms = platformList.data ?? [];
+  // Gewählte Plattform aus dem Browser; ist sie unbekannt, gilt die erste. Seiten lesen sie über getPlatform().
+  const current = platforms.find((p) => p.id === getPlatform())?.id ?? platforms[0]?.id ?? null;
+  if (current !== getPlatform()) setPlatformQuiet(current);
   const name = user.display_name ?? user.username;
   const roleLabel = user.env_admin ? 'Administrator' : user.roles.map((r) => r.name).join(', ') || 'Ohne Rolle';
 
@@ -181,6 +190,12 @@ export default function App() {
                   {items.map(([to, Icon, label, , opts = {}]) => (
                     <NavLink key={to} to={to} end={opts.end}>
                       <Icon size={18} /> {label}
+                      {opts.tag && <span className="tag nav-tag">{opts.tag}</span>}
+                      {opts.warn && badges[opts.warn] > 0 && (
+                        <span className="nav-warn" title={`${badges[opts.warn]} offene Freigaben warten auf dich`} aria-label="Offene Freigaben">
+                          <AlertTriangle size={15} />
+                        </span>
+                      )}
                       {opts.badge && badges[opts.badge] > 0 && <span className="count">{badges[opts.badge]}</span>}
                     </NavLink>
                   ))}
@@ -230,11 +245,7 @@ export default function App() {
             </form>
             <div className="spacer" />
             <TenantSwitch user={user} />
-            <select className="inline" value={getEnv()} onChange={(e) => setEnv(e.target.value)} aria-label="Umgebung">
-              <option value="all">Alle Umgebungen</option>
-              <option value="dev">Dev</option>
-              <option value="prod">Prod</option>
-            </select>
+            <PlatformSwitch platforms={platforms} current={current} />
             <span className="app-version" title="Version der Anwendung">v{user.version}</span>
           </header>
           <main className="content">
@@ -249,10 +260,8 @@ export default function App() {
               <Route path="/runs" element={<Runs />} />
               <Route path="/runs/:id" element={<RunDetail />} />
               <Route path="/sovereignty" element={<Sovereignty />} />
-              <Route path="/approvals" element={<Approvals />} />
               <Route path="/catalog" element={<Catalog />} />
               <Route path="/catalog/templates/:id" element={<TemplateDetail />} />
-              <Route path="/catalog/packs/:id" element={<PackDetail />} />
               <Route path="/datasets" element={<Datasets />} />
               <Route path="/datasets/:id" element={<DatasetDetail />} />
               <Route path="/platforms" element={<Platforms />} />

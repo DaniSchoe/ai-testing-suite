@@ -6,7 +6,7 @@ import { Card, EnvBadge, KindBadge, useApi } from '../lib.jsx';
 export default function ModelDetail() {
   const { name } = useParams();
   const models = useApi('/api/models');
-  const rows = (models.data ?? []).filter((m) => (m.alias ?? m.name) === name);
+  const rows = (models.data ?? []).filter((m) => m.portfolio_id && (m.alias ?? m.name) === name);
   return (
     <>
       <div className="page-head">
@@ -22,7 +22,7 @@ export default function ModelDetail() {
       </div>
       <div className="two-col">
         <Card title="Angeboten über">
-          {rows.length === 0 && <div className="empty">Modell nicht im Katalog gefunden</div>}
+          {rows.length === 0 && <div className="empty">Modell nicht im Portfolio gefunden</div>}
           {rows.map((m) => (
             <div key={`${m.endpoint_id}:${m.name}`} className="meta-row">
               <div>
@@ -35,7 +35,7 @@ export default function ModelDetail() {
             </div>
           ))}
           <p className="sub" style={{ marginTop: 12 }}>
-            Bearbeiten lässt sich das Modell im <Link to="/admin/models">Modellkatalog</Link>.
+            Bearbeiten lässt sich das Modell im <Link to="/models">Modellportfolio</Link>.
           </p>
         </Card>
         <Card title="Weitere Auswertungen">

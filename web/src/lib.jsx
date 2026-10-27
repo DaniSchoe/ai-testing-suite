@@ -1,6 +1,6 @@
 // Gemeinsame Helfer: API-Zugriff, Formatierung, Theme, kleine UI-Bausteine.
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { Bot, Cpu, Globe, Lock, Plug, Route, Users as UsersIcon, X } from 'lucide-react';
+import { Activity, Boxes, Bot, Braces, Brain, Building2, Code2, Cpu, Database, FlaskConical, Gauge, Globe, HeartPulse, KeyRound, Lightbulb, Lock, MemoryStick, Plug, Route, ScanText, ShieldAlert, Users as UsersIcon, X } from 'lucide-react';
 
 // Mandant und Umgebung gelten für die ganze Oberfläche; ein Wechsel lädt die Seite neu.
 const store = {
@@ -25,13 +25,17 @@ export const setTenant = (id) => {
   store.set('tenant', id);
   window.location.assign('/');
 };
-export const getEnv = () => store.get('env', 'all');
-export const setEnv = (env) => {
-  store.set('env', env === 'all' ? null : env);
-  window.location.reload();
+// Die gewählte Plattform begrenzt Dashboard und alle Listen; die Umgebung (Dev/Prod) ergibt sich aus der Plattform.
+export const getPlatform = () => store.get('platform');
+export const setPlatform = (id) => {
+  store.set('platform', id);
+  window.location.assign('/');
 };
-// Query-Zusatz für Endpunkte, die nach Umgebung filtern.
-export const envParam = (prefix = '?') => (getEnv() === 'all' ? '' : `${prefix}environment=${getEnv()}`);
+export const setPlatformQuiet = (id) => store.set('platform', id);
+export const getEnv = () => 'all';
+// Query-Zusatz für Endpunkte, die nach Plattform filtern.
+export const platformParam = (prefix = '?') => (getPlatform() ? `${prefix}platform_id=${getPlatform()}` : '');
+export const envParam = platformParam;
 export const qs = (params) => {
   const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== 'all')).toString();
   return q ? `?${q}` : '';
@@ -169,9 +173,30 @@ export const TYPE_LABELS = {
   security: 'Security / DLP',
   access: 'Zugriff',
   mcp: 'MCP',
+  network: 'Netzwerk-Isolation',
   structured: 'Tool-Calling / JSON',
   thinking: 'Thinking vs. Non-Thinking',
 };
+
+// Symbol je Testart, wie in den Vorlagen-Kacheln.
+export const TYPE_ICONS = {
+  smoke: HeartPulse,
+  performance: Gauge,
+  load: Activity,
+  quality: Brain,
+  coding: Code2,
+  ocr: ScanText,
+  security: ShieldAlert,
+  access: KeyRound,
+  mcp: Plug,
+  structured: Braces,
+  thinking: Lightbulb,
+  network: Globe,
+};
+export function TypeIcon({ type, size = 16 }) {
+  const Icon = TYPE_ICONS[type] ?? FlaskConical;
+  return <Icon size={size} />;
+}
 
 export const OUTCOME_LABELS = {
   passed: 'Bestanden',
@@ -317,9 +342,15 @@ export function JsonField({ label, value, onChange, rows = 14, hint }) {
 
 // Endpoint-Arten mit eigenem Icon, damit sie in Listen schnell unterscheidbar sind.
 export const KIND_META = {
-  ai_proxy: { label: 'AI Proxy', Icon: Route, color: 'var(--primary)' },
-  llm: { label: 'LLM-Endpoint', Icon: Cpu, color: 'var(--ok, #1a9b5f)' },
+  ai_proxy: { label: 'AI Gateway', Icon: Route, color: 'var(--primary)' },
+  llm: { label: 'Inferenzserver', Icon: Cpu, color: 'var(--ok, #1a9b5f)' },
   mcp: { label: 'MCP', Icon: Plug, color: 'var(--warn, #c77d12)' },
+  datacenter: { label: 'Rechenzentrum', Icon: Building2, color: 'var(--text-2)' },
+  kubernetes: { label: 'Kubernetes', Icon: Boxes, color: 'var(--primary)' },
+  gpu: { label: 'GPU-Server', Icon: MemoryStick, color: 'var(--warn, #c77d12)' },
+  vector_db: { label: 'Vektor-Datenbank', Icon: Database, color: 'var(--text-2)' },
+  iam: { label: 'Identitätsmanagement', Icon: KeyRound, color: 'var(--text-2)' },
+  observability: { label: 'Observability', Icon: Activity, color: 'var(--text-2)' },
 };
 export const FLAVOR_LABEL = { openai: 'OpenAI-compatible', claude: 'Claude' };
 
@@ -329,7 +360,6 @@ export function KindBadge({ kind, flavor }) {
   return (
     <span className="tag kind-tag" style={{ color: meta.color }}>
       <Icon size={13} /> <span style={{ color: 'var(--text)' }}>{meta.label}</span>
-      {kind === 'llm' && flavor && <span className="sub"> · {FLAVOR_LABEL[flavor]}</span>}
     </span>
   );
 }

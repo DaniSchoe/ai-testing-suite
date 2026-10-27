@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, X } from 'lucide-react';
-import { api, can, Card, Empty, EnvBadge, ErrorBox, Field, fmt, LifecycleBadge, Loading, Modal, PageHead, Tabs, useAction, useApi, useUser } from '../lib.jsx';
+import { api, can, getPlatform, qs, Card, Empty, EnvBadge, ErrorBox, Field, fmt, LifecycleBadge, Loading, Modal, PageHead, Tabs, useAction, useApi, useUser } from '../lib.jsx';
 
-export default function Approvals() {
+export function ApprovalsPanel() {
   const user = useUser();
   const [tab, setTab] = useState('pending');
-  const list = useApi(`/api/approvals${tab === 'pending' ? '?status=pending' : ''}`, { interval: 15000 });
+  const list = useApi(`/api/approvals${qs({ status: tab === 'pending' ? 'pending' : '', platform_id: getPlatform() })}`, { interval: 15000 });
   const [deciding, setDeciding] = useState(null);
   const [run, error] = useAction();
   const approver = can(user, 'runs.prod');
@@ -18,9 +18,9 @@ export default function Approvals() {
     });
   return (
     <>
-      <PageHead title="Freigaben">
-        Läufe gegen Prod-Plattformen und Lasttests brauchen eine Freigabe nach dem Vier-Augen-Prinzip: Wer beantragt, entscheidet nicht. Eine Freigabe gilt für eine Prüfung, ein Zeitfenster, eine Anzahl Läufe und Lastgrenzen.
-      </PageHead>
+      <p className="sub" style={{ marginTop: 0 }}>
+        Läufe gegen Prod-Plattformen und Lasttests brauchen eine Freigabe nach dem Vier-Augen-Prinzip: Wer beantragt, entscheidet nicht. Eine Freigabe gilt für eine Prüfung, ein Zeitfenster, eine Anzahl Läufe und Lastgrenzen. Anträge sehen nur die zugewiesene Person bzw. die Prüfer des zugewiesenen Teams.
+      </p>
       <ErrorBox error={error} />
       <Tabs
         value={tab}
@@ -42,6 +42,7 @@ export default function Approvals() {
                     <th>Prüfung</th>
                     <th>Ziel</th>
                     <th>Beantragt</th>
+                    <th>Zugewiesen an</th>
                     <th>Stand</th>
                     <th>Umfang</th>
                     <th />
@@ -61,6 +62,7 @@ export default function Approvals() {
                         {ap.requested_by_name}
                         <div>{fmt.date(ap.requested_at)}</div>
                       </td>
+                      <td className="sub">{ap.assigned_user_name ?? ap.assigned_team_name ?? 'Alle Prüfer'}</td>
                       <td>
                         <LifecycleBadge status={ap.status} />
                         {ap.decided_by_name && <div className="sub">{ap.decided_by_name}</div>}
@@ -74,7 +76,7 @@ export default function Approvals() {
                       </td>
                       <td className="num">
                         {approver && ap.status === 'pending' && (
-                          <button className="btn sm primary" onClick={() => setDeciding(ap)} disabled={ap.requested_by === user.id} title={ap.requested_by === user.id ? 'Vier-Augen-Prinzip: Eigene Anträge entscheidet eine andere Person' : ''}>
+                          <button className="btn sm primary" onClick={() => setDeciding(ap)} disabled={!ap.can_decide} title={ap.requested_by === user.id ? 'Vier-Augen-Prinzip: Eigene Anträge entscheidet eine andere Person' : ''}>
                             Entscheiden
                           </button>
                         )}

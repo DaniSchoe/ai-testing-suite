@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Check, Download, RefreshCw, Send, Sparkles } from 'lucide-react';
-import { api, can, Card, download, Empty, ErrorBox, fmt, LifecycleBadge, Loading, OutcomeBadge, PageHead, pctText, useAction, useApi, useUser } from '../lib.jsx';
+import { api, can, getPlatform, qs, Card, download, Empty, ErrorBox, fmt, LifecycleBadge, Loading, OutcomeBadge, PageHead, pctText, useAction, useApi, useUser } from '../lib.jsx';
 
 export function Reports() {
   const user = useUser();
   const [status, setStatus] = useState('');
-  const list = useApi(`/api/reports${status ? `?status=${status}` : ''}`);
+  const list = useApi(`/api/reports${qs({ status, platform_id: getPlatform() })}`);
   return (
     <>
       <PageHead title="Berichte">

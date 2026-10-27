@@ -1,41 +1,15 @@
-import { useState } from 'react';
-import { Empty, Field, useApi } from '../lib.jsx';
+import { Empty, getPlatform, useApi } from '../lib.jsx';
 import SizingView from './SizingView.jsx';
 
-// Sizing gehört zur Plattform: Auswahl oben, darunter Konfiguration, Live-Werte und Messungen dieser Plattform.
+// Sizing gehört zur Plattform: Konfiguration, Live-Werte und Messungen der oben gewählten Plattform. Beta.
 export default function Sizing() {
   const platforms = useApi('/api/platforms');
-  const [id, setId] = useState(() => {
-    try {
-      return localStorage.getItem('sizing-platform') || '';
-    } catch {
-      return '';
-    }
-  });
   const list = platforms.data ?? [];
-  const current = list.find((p) => p.id === id) ?? list[0];
+  const current = list.find((p) => p.id === getPlatform()) ?? list[0];
   return (
     <>
-      <div style={{ maxWidth: 360, marginBottom: 12 }}>
-        <Field label="Plattform">
-          <select
-            value={current?.id ?? ''}
-            onChange={(e) => {
-              setId(e.target.value);
-              try {
-                localStorage.setItem('sizing-platform', e.target.value);
-              } catch {
-                /* Speicher nicht verfügbar */
-              }
-            }}
-          >
-            {list.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.environment})
-              </option>
-            ))}
-          </select>
-        </Field>
+      <div className="hint" style={{ marginBottom: 12 }}>
+        <span className="tag nav-tag">Beta</span> Das Sizing befindet sich in der Erprobung; Ergebnisse sind Richtwerte.
       </div>
       {current ? <SizingView key={current.id} platformId={current.id} /> : <Empty>Noch keine Plattform.</Empty>}
     </>

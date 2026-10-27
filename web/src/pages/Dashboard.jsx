@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Info, Lock } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, FileText, Gauge, Info, Landmark, Lock, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { RadarProfile, TrendLines } from '../components/Charts.jsx';
-import { Card, Empty, EnvBadge, envParam, fmt, Loading, Modal, OutcomeBadge, PageHead, PATH_LABELS, pctText, SeverityBadge, StatusBadge, TYPE_LABELS, useApi } from '../lib.jsx';
+import { Card, Empty, EnvBadge, getPlatform, fmt, KIND_META, Loading, Modal, OutcomeBadge, PageHead, PATH_LABELS, pctText, SeverityBadge, StatusBadge, TYPE_LABELS, useApi } from '../lib.jsx';
 
 const DIMENSIONS = [
   ['quality', 'Qualität'],
@@ -21,7 +21,7 @@ const RATING = {
 
 export default function Dashboard() {
   const [params, setParams] = useSearchParams();
-  const platform = params.get('platform');
+  const platform = getPlatform();
   const model = params.get('model');
   const [days, setDays] = useState(30);
   const [scales, setScales] = useState(false);
@@ -44,13 +44,28 @@ export default function Dashboard() {
           </div>
         }
       >
-        Drei Ebenen: Portfolio aller Plattformen, eine Plattform im Detail, ein Modell auf einer Plattform. Es zählen nur Läufe von Prüfungen, keine Testläufe.
+        Zentraler Einstieg für die oben gewählte Plattform: Findings, Berichte und Souveränität öffnest du über die Kacheln. Es zählen nur Läufe von Prüfungen, keine Testläufe.
       </PageHead>
-      {!platform && <Portfolio days={days} go={go} />}
+      {!platform && <Empty>Noch keine Plattform. Lege unter Ziele › Plattformen eine an.</Empty>}
       {platform && !model && <PlatformLevel id={platform} days={days} go={go} />}
       {platform && model && <ModelLevel platformId={platform} model={model} days={days} go={go} />}
       {scales && <ScalesDialog onClose={() => setScales(false)} />}
     </>
+  );
+}
+
+function Tile({ to, Icon, title, value, sub, bad }) {
+  return (
+    <Link className="tile" to={to}>
+      <span className="tile-icon">
+        <Icon size={18} />
+      </span>
+      <h3>{title}</h3>
+      <div className="kpi-value" style={bad ? { color: 'var(--bad, #dc2626)' } : undefined}>
+        {value}
+      </div>
+      <div className="sub">{sub}</div>
+    </Link>
   );
 }
 
@@ -63,101 +78,6 @@ function Kpi({ label, value, sub, bad }) {
       </div>
       {sub && <div className="kpi-sub">{sub}</div>}
     </section>
-  );
-}
-
-function Portfolio({ days, go }) {
-  const data = useApi(`/api/dashboard/portfolio?days=${days}${envParam('&')}`, { interval: 60000 });
-  return (
-    <Loading state={data}>
-      {(d) => (
-        <>
-          <div className="grid kpis">
-            <Kpi label="Plattformen" value={d.totals.platforms} />
-            <Kpi label="Bestehensquote" value={pctText(d.totals.pass_rate)} sub={`${d.totals.tests} Messungen`} />
-            <Kpi label="Anforderungen erfüllt" value={pctText(d.totals.slo.rate)} sub={`${d.totals.slo.fulfilled} von ${d.totals.slo.total} Schwellwerten`} />
-            <Kpi label="Offene Findings" value={d.totals.open_findings} sub={`${d.totals.critical_findings} kritisch`} bad={d.totals.critical_findings > 0} />
-            <Kpi label="Freigaben offen" value={d.totals.pending_approvals} />
-            <Kpi label="Berichte in Prüfung" value={d.totals.reports_in_review} />
-          </div>
-          {d.platforms.length === 0 ? (
-            <Empty>Keine Plattformen in dieser Umgebung. Lege unter Ziele › Plattformen eine an.</Empty>
-          ) : (
-            <Card title="Plattformen" flush>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Plattform</th>
-                      <th>Komponenten</th>
-                      <th className="num">Bestehensquote</th>
-                      <th className="num">Anforderungen</th>
-                      <th>Findings</th>
-                      <th>Letzter Lauf</th>
-                      <th className="num">SEAL min.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {d.platforms.map((p) => (
-                      <tr key={p.id} onClick={() => go({ platform: p.id })} style={{ cursor: 'pointer' }}>
-                        <td>
-                          <span className="title-link">{p.name}</span> <EnvBadge env={p.environment} />
-                          {p.locked && (
-                            <span className="badge failed" style={{ marginLeft: 6 }}>
-                              <Lock size={11} /> gesperrt
-                            </span>
-                          )}
-                        </td>
-                        <td>
-                          <span className={`badge ${p.components.up === p.components.total ? 'passed' : 'failed'}`}>
-                            {p.components.up}/{p.components.total} erreichbar
-                          </span>
-                        </td>
-                        <td className="num">{pctText(p.pass_rate)}</td>
-                        <td className="num">{pctText(p.slo.rate)}</td>
-                        <td>
-                          {p.open_findings === 0 ? (
-                            <span className="sub">keine</span>
-                          ) : (
-                            Object.entries(p.findings)
-                              .filter(([, n]) => n)
-                              .map(([s, n]) => (
-                                <span key={s} style={{ marginRight: 4 }}>
-                                  {n}× <SeverityBadge severity={s} />
-                                </span>
-                              ))
-                          )}
-                        </td>
-                        <td>{p.last_run ? <StatusBadge status={p.last_run.status} /> : '–'}</td>
-                        <td className="num">{p.sovereignty_min ?? '–'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
-          <Card title="Letzte Läufe" flush>
-            <table>
-              <tbody>
-                {d.recent_runs.map((r) => (
-                  <tr key={r.id}>
-                    <td>
-                      <Link to={`/runs/${r.id}`}>{r.label}</Link>
-                    </td>
-                    <td className="sub">{r.platform_name}</td>
-                    <td>
-                      <StatusBadge status={r.status} />
-                    </td>
-                    <td className="sub">{fmt.ago(r.finished_at ?? r.created_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
-        </>
-      )}
-    </Loading>
   );
 }
 
@@ -207,16 +127,26 @@ function PlatformLevel({ id, days, go }) {
     <Loading state={data}>
       {(d) => (
         <>
-          <Back onClick={() => go({})}>Portfolio</Back>
           <h2 style={{ margin: '0 0 12px' }}>
             {d.platform.name} <EnvBadge env={d.platform.environment} />
             {d.platform.locked && <span className="badge failed" style={{ marginLeft: 8 }}>gesperrt: {d.platform.locked_reason}</span>}
           </h2>
           {d.view === 'customer' && <div className="hint">Kundenansicht: Rohdaten und Fehlermeldungen sind ausgeblendet.</div>}
+          <div className="tile-grid" style={{ marginBottom: 14 }}>
+            <Tile to="/findings" Icon={ShieldAlert} title="Findings" bad={Boolean(d.findings.open.critical)}
+              value={Object.values(d.findings.open).reduce((a, b) => a + b, 0)}
+              sub={d.findings.open.critical ? `${d.findings.open.critical} kritisch` : 'offen'} />
+            <Tile to="/reports" Icon={FileText} title="Berichte" value={d.reports?.total ?? 0} sub={`${d.reports?.approved ?? 0} freigegeben`} />
+            <Tile to="/sovereignty" Icon={Landmark} title="Souveränität"
+              value={d.sovereignty?.goals?.filter((g) => g.status === 'ok').length ?? 0} sub={`von ${d.sovereignty?.goals?.length ?? 0} Zielen erfüllt`} />
+            <Tile to="/sovereignty" Icon={ShieldCheck} title="SEAL-Stufe"
+              value={d.sovereignty?.overall != null ? `SEAL-${d.sovereignty.overall}` : '–'}
+              sub={`Ziel mindestens SEAL-${d.sovereignty?.min_level ?? '–'}`} bad={d.sovereignty?.overall != null && d.sovereignty.overall < (d.sovereignty?.min_level ?? 0)} />
+            <Tile to={`/platforms/${d.platform.id}?tab=assessment`} Icon={Gauge} title="Einstufung"
+              value={d.assessment ? `${d.assessment.security.score ?? '–'} / ${d.assessment.production.score ?? '–'}` : '–'} sub="Sicherheit / Produktionsreife" />
+          </div>
           <div className="grid kpis">
             <Kpi label="Anforderungen erfüllt" value={pctText(d.slo.rate)} sub={`${d.slo.fulfilled} von ${d.slo.total} (95 %: ${pctText(d.slo.ci95?.[0])}–${pctText(d.slo.ci95?.[1])})`} />
-            <Kpi label="Offene Findings" value={Object.values(d.findings.open).reduce((a, b) => a + b, 0)} bad={Boolean(d.findings.open.critical)} />
-            <Kpi label="Souveränität gesamt" value={d.sovereignty?.overall != null ? `SEAL-${d.sovereignty.overall}` : '–'} sub={`Ziel mindestens SEAL-${d.sovereignty?.min_level ?? '–'}`} />
             <Kpi label="Modelle" value={d.models.length} />
           </div>
           <Card title="Komponenten" flush>
@@ -225,9 +155,9 @@ function PlatformLevel({ id, days, go }) {
                 {(d.status?.components ?? []).map((c) => (
                   <tr key={c.endpoint_id}>
                     <td>{c.name}</td>
-                    <td className="sub">{c.kind}</td>
+                    <td className="sub">{KIND_META[c.kind]?.label ?? c.kind}</td>
                     <td>
-                      <span className={`badge ${c.status === 'up' ? 'passed' : 'failed'}`}>{c.status === 'up' ? 'erreichbar' : 'gestört'}</span>
+                      {c.status === 'n/a' ? <span className="sub">nicht überwacht</span> : <span className={`badge ${c.status === 'up' ? 'passed' : 'failed'}`}>{c.status === 'up' ? 'erreichbar' : 'gestört'}</span>}
                     </td>
                     <td className="sub">{c.version ?? ''}</td>
                     <td className="sub">{c.error}</td>
@@ -254,7 +184,7 @@ function PlatformLevel({ id, days, go }) {
                   </thead>
                   <tbody>
                     {d.models.map((m) => (
-                      <tr key={m.alias} onClick={() => go({ platform: id, model: m.alias })} style={{ cursor: 'pointer' }}>
+                      <tr key={m.alias} onClick={() => go({ model: m.alias })} style={{ cursor: 'pointer' }}>
                         <td>
                           <span className="title-link">{m.alias}</span>
                           <div className="sub">{m.capabilities.join(', ')}</div>
@@ -396,7 +326,7 @@ function ModelLevel({ platformId, model, days, go }) {
         const trend = d.trend.map((t) => ({ day: t.at, Qualität: t.quality, Sicherheit: t.security }));
         return (
           <>
-            <Back onClick={() => go({ platform: platformId })}>{d.platform.name}</Back>
+            <Back onClick={() => go({})}>{d.platform.name}</Back>
             <h2 style={{ margin: '0 0 4px' }}>
               {d.model} <EnvBadge env={d.platform.environment} />
             </h2>

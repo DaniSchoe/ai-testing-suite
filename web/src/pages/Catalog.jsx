@@ -18,6 +18,7 @@ import {
   pctText,
   Tabs,
   TYPE_LABELS,
+  TypeIcon,
   useAction,
   useApi,
   useTeams,
@@ -35,16 +36,16 @@ const REQUIRES = [
 ];
 const METRIC_HINTS = ['score', 'error_rate', 'latency_ms_p95', 'ttft_ms_p95', 'tokens_per_s_avg', 'false_allow', 'leak_rate'];
 const OPS = ['>=', '>', '<=', '<', '=='];
+const TARGET_LABELS = { platform: 'Plattform', llm: 'LLM', data: 'Daten', process: 'Prozesse' };
+const DEFAULT_TARGET = { smoke: 'platform', load: 'platform', access: 'platform', mcp: 'platform', network: 'platform' };
 
 const OriginBadge = ({ origin }) => <span className={`tag ${origin === 'official' ? 'official' : ''}`}>{ORIGIN_LABELS[origin] ?? origin}</span>;
 
 export function Catalog() {
   const user = useUser();
-  const [tab, setTab] = useState('templates');
-  const [filters, setFilters] = useState({ q: '', type: '', origin: '', use_case: '', status: '' });
+  const [filters, setFilters] = useState({ q: '', type: '', target: '', origin: '', use_case: '', status: '' });
   const query = new URLSearchParams(Object.entries(filters).filter(([, v]) => v)).toString();
-  const templates = useApi(tab === 'templates' ? `/api/catalog/templates?${query}` : null);
-  const packs = useApi(tab === 'packs' ? '/api/catalog/packs' : null);
+  const templates = useApi(`/api/catalog/templates?${query}`);
   const [creating, setCreating] = useState(null);
   const editor = can(user, 'tests.manage');
   const navigate = useNavigate();
@@ -53,162 +54,98 @@ export function Catalog() {
   return (
     <>
       <PageHead
-        title="Vorlagen & Pakete"
+        title="Vorlagen"
         action={
           editor && (
             <div className="btn-row">
               <button className="btn" onClick={() => setCreating('import')}>
                 <Upload size={15} /> Importieren
               </button>
-              <button className="btn primary" onClick={() => setCreating(tab === 'packs' ? 'pack' : 'template')}>
-                <Plus size={15} /> {tab === 'packs' ? 'Neues Paket' : 'Neue Vorlage'}
+              <button className="btn primary" onClick={() => setCreating('template')}>
+                <Plus size={15} /> Neue Vorlage
               </button>
             </div>
           )
         }
       >
-        Vorlagen beschreiben, was geprüft wird (Datensatz, Bewertung, Anforderungen). Pakete bündeln Vorlagen zu einem Prüfumfang, etwa für ein Rahmenwerk. Beides ist versioniert und durchläuft Entwurf, Prüfung und Veröffentlichung.
+        Vorlagen beschreiben, was geprüft wird (Datensatz, Bewertung, Anforderungen) und worauf sich der Test richtet: Plattform, LLM, Daten oder Prozesse. Sie sind versioniert und durchlaufen Entwurf, Prüfung und Veröffentlichung.
       </PageHead>
-      <Tabs
-        value={tab}
-        onChange={setTab}
-        tabs={[
-          ['templates', 'Vorlagen'],
-          ['packs', 'Prüfpakete'],
-        ]}
-      />
-      {tab === 'templates' && (
-        <>
-          <div className="toolbar">
-            <input type="search" placeholder="Suchen…" value={filters.q} onChange={(e) => set({ q: e.target.value })} />
-            <select className="inline" value={filters.type} onChange={(e) => set({ type: e.target.value })} aria-label="Testart">
-              <option value="">Alle Testarten</option>
-              {Object.entries(TYPE_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
+      <div className="toolbar">
+        <input type="search" placeholder="Suchen…" value={filters.q} onChange={(e) => set({ q: e.target.value })} />
+        <select className="inline" value={filters.type} onChange={(e) => set({ type: e.target.value })} aria-label="Testart">
+          <option value="">Alle Testarten</option>
+          {Object.entries(TYPE_LABELS).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+        <select className="inline" value={filters.target} onChange={(e) => set({ target: e.target.value })} aria-label="Test-Ziel">
+          <option value="">Alle Test-Ziele</option>
+          {Object.entries(TARGET_LABELS).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+        <select className="inline" value={filters.use_case} onChange={(e) => set({ use_case: e.target.value })} aria-label="Einsatzprofil">
+          <option value="">Alle Profile</option>
+          {Object.entries(USE_CASE_LABELS).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+        <select className="inline" value={filters.origin} onChange={(e) => set({ origin: e.target.value })} aria-label="Herkunft">
+          <option value="">Alle Herkünfte</option>
+          {Object.entries(ORIGIN_LABELS).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+        <select className="inline" value={filters.status} onChange={(e) => set({ status: e.target.value })} aria-label="Status">
+          <option value="">Alle Stände</option>
+          <option value="published">Veröffentlicht</option>
+          <option value="draft">Entwurf</option>
+          <option value="review">In Prüfung</option>
+          <option value="deprecated">Veraltet</option>
+        </select>
+      </div>
+      <Loading state={templates}>
+        {(rows) =>
+          rows.length === 0 ? (
+            <Empty>Keine Vorlagen gefunden.</Empty>
+          ) : (
+            <div className="tile-grid">
+              {rows.map((t) => (
+                <Link key={t.id} className="tile" to={`/catalog/templates/${t.id}`}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                    <span className="tile-icon" style={{ marginBottom: 0 }} title={TYPE_LABELS[t.type] ?? t.type}>
+                      <TypeIcon type={t.type} size={18} />
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <h3 style={{ margin: 0 }}>{t.name}</h3>
+                      <div className="sub">{TYPE_LABELS[t.type] ?? t.type}</div>
+                    </div>
+                  </div>
+                  <div className="sub" style={{ minHeight: 36 }}>
+                    {t.description}
+                  </div>
+                  <div className="btn-row" style={{ marginTop: 8, gap: 6 }}>
+                    <span className="mono">{t.latest.version}</span>
+                    <LifecycleBadge status={t.latest.status} />
+                    <span className="tag">{TARGET_LABELS[t.target] ?? t.target}</span>
+                    <OriginBadge origin={t.origin} />
+                  </div>
+                </Link>
               ))}
-            </select>
-            <select className="inline" value={filters.use_case} onChange={(e) => set({ use_case: e.target.value })} aria-label="Einsatzprofil">
-              <option value="">Alle Profile</option>
-              {Object.entries(USE_CASE_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select className="inline" value={filters.origin} onChange={(e) => set({ origin: e.target.value })} aria-label="Herkunft">
-              <option value="">Alle Herkünfte</option>
-              {Object.entries(ORIGIN_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select className="inline" value={filters.status} onChange={(e) => set({ status: e.target.value })} aria-label="Status">
-              <option value="">Alle Stände</option>
-              <option value="published">Veröffentlicht</option>
-              <option value="draft">Entwurf</option>
-              <option value="review">In Prüfung</option>
-              <option value="deprecated">Veraltet</option>
-            </select>
-          </div>
-          <Loading state={templates}>
-            {(rows) =>
-              rows.length === 0 ? (
-                <Empty>Keine Vorlagen gefunden.</Empty>
-              ) : (
-                <div className="card table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Vorlage</th>
-                        <th>Art</th>
-                        <th>Profile</th>
-                        <th>Kategorien</th>
-                        <th>Version</th>
-                        <th>Nutzung</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((t) => (
-                        <tr key={t.id}>
-                          <td style={{ minWidth: 240 }}>
-                            <Link className="title-link" to={`/catalog/templates/${t.id}`}>
-                              {t.name}
-                            </Link>{' '}
-                            <OriginBadge origin={t.origin} />
-                            {t.security && (
-                              <span className="badge failed" style={{ marginLeft: 4 }}>
-                                Security
-                              </span>
-                            )}
-                            <div className="sub">{t.description}</div>
-                          </td>
-                          <td>{TYPE_LABELS[t.type] ?? t.type}</td>
-                          <td className="sub">{t.use_cases.map((u) => USE_CASE_LABELS[u]).join(', ') || '–'}</td>
-                          <td className="sub">{t.categories.map((c) => `${c.framework} ${c.key}`).join(', ') || '–'}</td>
-                          <td>
-                            <span className="mono">{t.latest.version}</span> <LifecycleBadge status={t.latest.status} />
-                            {t.latest.requires.length > 0 && <div className="sub">braucht {t.latest.requires.join(', ')}</div>}
-                          </td>
-                          <td className="sub">
-                            {t.usage.audits} Prüfungen
-                            <div>Erfolgsquote {pctText(t.usage.pass_rate)}</div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )
-            }
-          </Loading>
-        </>
-      )}
-      {tab === 'packs' && (
-        <Loading state={packs}>
-          {(rows) =>
-            rows.length === 0 ? (
-              <Empty>Keine Prüfpakete.</Empty>
-            ) : (
-              <div className="card table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Paket</th>
-                      <th>Rahmenwerk</th>
-                      <th>Vorlagen</th>
-                      <th>Version</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((p) => (
-                      <tr key={p.id}>
-                        <td>
-                          <Link className="title-link" to={`/catalog/packs/${p.id}`}>
-                            {p.name}
-                          </Link>{' '}
-                          <OriginBadge origin={p.origin} />
-                          <div className="sub">{p.description}</div>
-                        </td>
-                        <td>{p.framework ?? '–'}</td>
-                        <td>{p.latest.items.length}</td>
-                        <td>
-                          <span className="mono">{p.latest.version}</span> <LifecycleBadge status={p.latest.status} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          }
-        </Loading>
-      )}
+            </div>
+          )
+        }
+      </Loading>
       {creating === 'template' && <TemplateForm onClose={() => setCreating(null)} onSaved={(t) => navigate(`/catalog/templates/${t.id}`)} />}
-      {creating === 'pack' && <PackForm onClose={() => setCreating(null)} onSaved={(p) => navigate(`/catalog/packs/${p.id}`)} />}
-      {creating === 'import' && <ImportDialog onClose={() => setCreating(null)} onDone={() => (templates.reload(), packs.reload())} />}
+      {creating === 'import' && <ImportDialog onClose={() => setCreating(null)} onDone={() => templates.reload()} />}
     </>
   );
 }
@@ -334,7 +271,7 @@ function CategoryPicker({ value, onChange }) {
 function TemplateForm({ onClose, onSaved }) {
   const user = useUser();
   const teams = useTeams();
-  const [form, setForm] = useState({ name: '', description: '', type: 'quality', origin: 'private', team_id: '', tags: '', security: false, use_cases: [] });
+  const [form, setForm] = useState({ name: '', description: '', type: 'quality', origin: 'private', team_id: '', tags: '', target: 'llm', use_cases: [] });
   const [spec, setSpec] = useState({ config: {}, requires: [], suggested_thresholds: [] });
   const [categoryIds, setCategoryIds] = useState([]);
   const [run, error, busy] = useAction();
@@ -369,8 +306,17 @@ function TemplateForm({ onClose, onSaved }) {
           <input value={form.name} onChange={(e) => set({ name: e.target.value })} />
         </Field>
         <Field label="Testart">
-          <select value={form.type} onChange={(e) => set({ type: e.target.value })}>
+          <select value={form.type} onChange={(e) => set({ type: e.target.value, target: form.type === e.target.value ? form.target : DEFAULT_TARGET[e.target.value] ?? 'llm' })}>
             {Object.entries(TYPE_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Test-Ziel" hint="Worauf richtet sich der Test?">
+          <select value={form.target} onChange={(e) => set({ target: e.target.value })}>
+            {Object.entries(TARGET_LABELS).map(([k, v]) => (
               <option key={k} value={k}>
                 {v}
               </option>
@@ -412,10 +358,6 @@ function TemplateForm({ onClose, onSaved }) {
               {v}
             </label>
           ))}
-          <label className="checkbox">
-            <input type="checkbox" checked={form.security} onChange={(e) => set({ security: e.target.checked })} />
-            Security-Vorlage (zweistufige Freigabe)
-          </label>
         </div>
       </Field>
       <CategoryPicker value={categoryIds} onChange={setCategoryIds} />
@@ -466,8 +408,7 @@ function LifecycleActions({ base, version, canEdit, onChanged, setError }) {
   const reviewer = can(user, 'catalog.publish');
   const act = async (action, body) => {
     try {
-      const res = await api(`${base}/versions/${version.version}/${action}`, { method: 'POST', body });
-      if (res?.awaiting === 'security') alert('Fachliche Prüfung erfasst. Es fehlt noch die Sicherheitsfreigabe einer zweiten Person mit der Berechtigung security.payloads.');
+      await api(`${base}/versions/${version.version}/${action}`, { method: 'POST', body });
       onChanged();
     } catch (e) {
       setError(e.message);
@@ -567,8 +508,7 @@ export function TemplateDetail() {
                 </div>
               }
             >
-              {t.description} · {TYPE_LABELS[t.type] ?? t.type}
-              {t.security ? ' · Security-Vorlage' : ''}
+              {t.description} · {TYPE_LABELS[t.type] ?? t.type} · Test-Ziel: {TARGET_LABELS[t.target] ?? t.target}
               {t.owner_name ? ` · von ${t.owner_name}` : ''}
             </PageHead>
             <ErrorBox error={error} />
@@ -598,7 +538,6 @@ export function TemplateDetail() {
                       <td className="sub">
                         {v.submitted_by_name && <div>eingereicht: {v.submitted_by_name}</div>}
                         {v.reviewed_by_name && <div>geprüft: {v.reviewed_by_name}</div>}
-                        {v.security_reviewed_by_name && <div>Sicherheit: {v.security_reviewed_by_name}</div>}
                       </td>
                       <td className="num" onClick={(e) => e.stopPropagation()}>
                         <LifecycleActions base={`/api/catalog/templates/${t.id}`} version={v} canEdit={t.can_edit} onChanged={detail.reload} setError={setError} />
@@ -665,6 +604,31 @@ export function TemplateDetail() {
                           </div>
                         ))}
                       </div>
+                    )}
+                  </Card>
+                  <Card title="Verwendete Datensätze" flush>
+                    {(t.datasets ?? []).length === 0 ? (
+                      <div className="empty">Diese Vorlage verwendet keinen Datensatz.</div>
+                    ) : (
+                      <table>
+                        <tbody>
+                          {t.datasets.map((d) => (
+                            <tr key={d.key}>
+                              <td>
+                                <Link to={`/datasets/${d.id ?? d.key}`}>{d.name ?? d.key}</Link>
+                                <div className="sub">
+                                  {d.kind}
+                                  {d.sensitivity ? ` · ${d.sensitivity}` : ''}
+                                </div>
+                              </td>
+                              <td className="sub">
+                                {d.version && <span className="mono">{d.version}</span>}
+                                {d.cases != null && <div>{d.cases} Fälle</div>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     )}
                   </Card>
                   <Card title="Zuletzt gemessen" flush>
@@ -756,205 +720,6 @@ function TestRunDialog({ template, version, onClose }) {
   );
 }
 
-// ----------------------------------------------------------------------------------------------------------------- Pakete
-
-function PackForm({ onClose, onSaved }) {
-  const templates = useApi('/api/catalog/templates?status=published');
-  const [form, setForm] = useState({ name: '', description: '', framework: '' });
-  const [items, setItems] = useState([]);
-  const [run, error, busy] = useAction();
-  const set = (patch) => setForm((f) => ({ ...f, ...patch }));
-  const save = () =>
-    run(async () => {
-      onSaved(await api('/api/catalog/packs', { method: 'POST', body: { ...form, items: items.map((k) => ({ template_key: k })) } }));
-    });
-  return (
-    <Modal
-      title="Neues Prüfpaket"
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>
-            Abbrechen
-          </button>
-          <button className="btn primary" disabled={busy || !form.name.trim() || !items.length} onClick={save}>
-            Als Entwurf anlegen
-          </button>
-        </>
-      }
-    >
-      <ErrorBox error={error} />
-      <Field label="Name">
-        <input value={form.name} onChange={(e) => set({ name: e.target.value })} />
-      </Field>
-      <Field label="Beschreibung">
-        <input value={form.description} onChange={(e) => set({ description: e.target.value })} />
-      </Field>
-      <Field label="Rahmenwerk (optional)">
-        <input value={form.framework} placeholder="AIC4, OWASP LLM Top 10 …" onChange={(e) => set({ framework: e.target.value })} />
-      </Field>
-      <TemplatePicker templates={templates.data ?? []} value={items} onChange={setItems} />
-    </Modal>
-  );
-}
-
-function TemplatePicker({ templates, value, onChange }) {
-  return (
-    <Field label="Vorlagen (veröffentlichte Versionen)">
-      <div className="pick-list" style={{ maxHeight: 260, overflow: 'auto' }}>
-        {templates.map((t) => (
-          <label key={t.id} className="checkbox" style={{ display: 'flex' }}>
-            <input type="checkbox" checked={value.includes(t.key)} onChange={(e) => onChange(e.target.checked ? [...value, t.key] : value.filter((k) => k !== t.key))} />
-            {t.name} <span className="sub mono">{t.latest.version}</span>
-          </label>
-        ))}
-      </div>
-    </Field>
-  );
-}
-
-export function PackDetail() {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const detail = useApi(`/api/catalog/packs/${id}`);
-  const templates = useApi('/api/catalog/templates?status=published');
-  const [editing, setEditing] = useState(null);
-  const [run, error, , setError] = useAction();
-
-  const exportVersion = (p, v, format) =>
-    run(async () => {
-      const text = await api(`/api/catalog/packs/${p.id}/versions/${v.version}/export?format=${format}&datasets=1`, { raw: true });
-      download(`${p.key}-${v.version}.${format === 'json' ? 'json' : 'yaml'}`, text);
-    });
-
-  return (
-    <Loading state={detail}>
-      {(p) => {
-        const open = p.versions.find((v) => ['draft', 'review'].includes(v.status));
-        return (
-          <>
-            <PageHead
-              title={
-                <>
-                  {p.name} <OriginBadge origin={p.origin} />
-                </>
-              }
-              action={
-                p.can_edit && (
-                  <div className="btn-row">
-                    {!open && (
-                      <button className="btn" onClick={() => run(async () => (await api(`/api/catalog/packs/${p.id}/versions`, { method: 'POST', body: { bump: 'minor' } }), detail.reload()))}>
-                        <Plus size={15} /> Neue Version
-                      </button>
-                    )}
-                    <button
-                      className="btn ghost danger"
-                      aria-label="Löschen"
-                      onClick={() =>
-                        confirm('Paket löschen?') &&
-                        run(async () => {
-                          await api(`/api/catalog/packs/${p.id}`, { method: 'DELETE' });
-                          navigate('/catalog');
-                        })
-                      }
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                )
-              }
-            >
-              {p.description} {p.framework ? `· ${p.framework}` : ''}
-            </PageHead>
-            <ErrorBox error={error} />
-            {p.versions.map((v) => (
-              <Card
-                key={v.id}
-                title={
-                  <>
-                    Version <span className="mono">{v.version}</span> <LifecycleBadge status={v.status} />
-                  </>
-                }
-                sub={v.review_note ? `Anmerkung: ${v.review_note}` : v.changelog}
-                action={
-                  <div className="btn-row">
-                    <LifecycleActions base={`/api/catalog/packs/${p.id}`} version={v} canEdit={p.can_edit} onChanged={detail.reload} setError={setError} />
-                    {v.status === 'draft' && p.can_edit && (
-                      <button className="btn sm" onClick={() => setEditing(v)}>
-                        Vorlagen ändern
-                      </button>
-                    )}
-                    <button className="btn sm" onClick={() => exportVersion(p, v, 'yaml')}>
-                      <Download size={13} /> YAML
-                    </button>
-                    <button className="btn sm" onClick={() => exportVersion(p, v, 'json')}>
-                      <Download size={13} /> JSON
-                    </button>
-                  </div>
-                }
-                flush
-              >
-                <table>
-                  <tbody>
-                    {v.items.map((it) => (
-                      <tr key={it.template_version_id}>
-                        <td>{it.template_key}</td>
-                        <td className="mono">{it.version}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Card>
-            ))}
-            {editing && (
-              <PackItemsEditor
-                pack={p}
-                version={editing}
-                templates={templates.data ?? []}
-                onClose={() => setEditing(null)}
-                onSaved={() => (setEditing(null), detail.reload())}
-              />
-            )}
-          </>
-        );
-      }}
-    </Loading>
-  );
-}
-
-function PackItemsEditor({ pack, version, templates, onClose, onSaved }) {
-  const [items, setItems] = useState(version.items.map((i) => i.template_key));
-  const [run, error, busy] = useAction();
-  return (
-    <Modal
-      title={`${pack.name} ${version.version}: Vorlagen`}
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>
-            Abbrechen
-          </button>
-          <button
-            className="btn primary"
-            disabled={busy || !items.length}
-            onClick={() =>
-              run(async () => {
-                await api(`/api/catalog/packs/${pack.id}/versions/${version.version}`, { method: 'PUT', body: { items: items.map((k) => ({ template_key: k })) } });
-                onSaved();
-              })
-            }
-          >
-            Speichern
-          </button>
-        </>
-      }
-    >
-      <ErrorBox error={error} />
-      <TemplatePicker templates={templates} value={items} onChange={setItems} />
-    </Modal>
-  );
-}
-
 // ----------------------------------------------------------------------------------------------------------------- Import
 
 function ImportDialog({ onClose, onDone }) {
@@ -971,7 +736,7 @@ function ImportDialog({ onClose, onDone }) {
     });
   return (
     <Modal
-      title="Vorlage oder Paket importieren"
+      title="Vorlage importieren"
       onClose={onClose}
       footer={
         <>
@@ -1007,11 +772,6 @@ function ImportDialog({ onClose, onDone }) {
               Vorlage {t.key} {t.version} {t.unchanged ? '(unverändert)' : `(${t.status})`}
             </div>
           ))}
-          {result.pack && (
-            <div>
-              Paket {result.pack.key} {result.pack.version ?? ''} {result.pack.unchanged ? '(unverändert)' : `(${result.pack.status})`}
-            </div>
-          )}
           {result.warnings.map((w, i) => (
             <div key={i}>⚠ {w}</div>
           ))}
