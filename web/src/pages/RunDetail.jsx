@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, FileText, RefreshCw, ShieldCheck, Sparkles, Square } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, FileText, RefreshCw, ShieldCheck, Sparkles, Square, Trash2 } from 'lucide-react';
 import {
   api,
   can,
@@ -43,6 +43,13 @@ export default function RunDetail() {
       await api(`/api/runs/${id}/analysis`, { method: 'POST' });
       run.reload();
     });
+  const navigate = useNavigate();
+  const remove = () =>
+    confirm('Lauf löschen? Damit gehen auch alle erzeugten Daten verloren: Ergebnisse, Logs und Nachweise. Das lässt sich nicht rückgängig machen.') &&
+    act(async () => {
+      await api(`/api/runs/${id}`, { method: 'DELETE' });
+      navigate('/runs');
+    });
   const cancel = () =>
     act(async () => {
       await api(`/api/runs/${id}/cancel`, { method: 'POST' });
@@ -65,6 +72,11 @@ export default function RunDetail() {
                   <Link className="btn" to={`/reports/${r.report.id}`}>
                     <FileText size={15} /> Bericht
                   </Link>
+                )}
+                {user.is_admin && !isActive && (
+                  <button className="btn danger" onClick={remove}>
+                    <Trash2 size={14} /> Löschen
+                  </button>
                 )}
                 {isActive && (r.user_id === user.id ? can(user, 'runs.start') : can(user, 'runs.manage_all')) && (
                   <button className="btn danger" onClick={cancel}>
@@ -137,7 +149,7 @@ function Gate({ run }) {
       {g?.reasons?.length > 0 && (
         <ul className="sub" style={{ margin: '8px 0 0 16px' }}>
           {g.reasons.map((x, i) => (
-            <li key={i}>{typeof x === 'string' ? x : x.message ?? JSON.stringify(x)}</li>
+            <li key={i}>{typeof x === 'string' ? x : x.message ?? `${OUTCOME_LABELS[x.outcome] ?? x.outcome}: ${x.count}`}</li>
           ))}
         </ul>
       )}

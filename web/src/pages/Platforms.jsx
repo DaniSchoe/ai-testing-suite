@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Lock, LockOpen, Plus, RefreshCw, Trash2 } from 'lucide-react';
-import { api, can, Card, EnvBadge, Empty, ErrorBox, Field, fmt, KIND_META, Loading, Modal, PageHead, StatusBadge, Tabs, useAction, useApi, useUser } from '../lib.jsx';
+import { api, can, Card, EnvBadge, Empty, ErrorBox, Field, fmt, KIND_META, Loading, STATUS_KINDS, Modal, PageHead, StatusBadge, Tabs, useAction, useApi, useUser } from '../lib.jsx';
 import Components from './admin/Components.jsx';
 import TopologyEditor from '../components/TopologyEditor.jsx';
 import { AssessmentView } from '../components/Assessment.jsx';
@@ -240,7 +240,7 @@ function Overview({ platform, status }) {
           </tr>
         </thead>
         <tbody>
-          {(status.data?.components ?? []).map((c) => (
+          {(status.data?.components ?? []).filter((c) => STATUS_KINDS.includes(c.kind)).map((c) => (
             <tr key={c.endpoint_id}>
               <td>{c.name}</td>
               <td>{KIND_META[c.kind]?.label ?? c.kind}</td>
@@ -252,7 +252,7 @@ function Overview({ platform, status }) {
               <td>{fmt.ms(c.latency_ms)}</td>
             </tr>
           ))}
-          {status.data?.components.length === 0 && (
+          {status.data && !status.data.components.some((c) => STATUS_KINDS.includes(c.kind)) && (
             <tr>
               <td colSpan={5} className="empty">
                 Noch keine Komponenten.

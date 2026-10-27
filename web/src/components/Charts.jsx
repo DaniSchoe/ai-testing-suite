@@ -3,6 +3,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
   LineChart,
   PolarAngleAxis,
@@ -83,6 +84,28 @@ export function DailyBars({ data, series, height = 240 }) {
         </ResponsiveContainer>
       </div>
     </>
+  );
+}
+
+// Einfache Balken je Kategorie. data: [{ name, value }], eine Farbe je Balken (series-Palette), Einheit im Tooltip.
+export function ValueBars({ data, unit = '', height = 220, colors }) {
+  const fmtVal = (v) => (v === null || v === undefined ? '–' : `${Math.round(v * 10) / 10}${unit}`);
+  return (
+    <div style={{ width: '100%', height }}>
+      <ResponsiveContainer>
+        <BarChart data={data} margin={{ top: 8, right: 4, left: -8, bottom: 0 }} barCategoryGap="30%">
+          <CartesianGrid vertical={false} stroke="var(--grid)" />
+          <XAxis dataKey="name" {...axis} interval={0} />
+          <YAxis {...axis} width={48} />
+          <Tooltip cursor={{ fill: 'var(--surface-hover)' }} content={<ChartTooltip valueFormatter={fmtVal} />} />
+          <Bar dataKey="value" name="Wert" maxBarSize={56} radius={[4, 4, 0, 0]}>
+            {data.map((d, i) => (
+              <Cell key={d.name} fill={colors?.[i] ?? SERIES[i % SERIES.length]} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 

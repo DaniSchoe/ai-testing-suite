@@ -354,6 +354,8 @@ export const KIND_META = {
   iam: { label: 'Identitätsmanagement', Icon: KeyRound, color: 'var(--text-2)' },
   observability: { label: 'Observability', Icon: Activity, color: 'var(--text-2)' },
 };
+// Nur Komponenten mit eigenem Endpunkt erscheinen in der Status-Sicht.
+export const STATUS_KINDS = ['llm', 'ai_proxy', 'iam'];
 export const FLAVOR_LABEL = { openai: 'OpenAI-compatible', claude: 'Claude' };
 
 export function KindBadge({ kind, flavor }) {

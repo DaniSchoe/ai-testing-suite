@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { Building2, ChevronRight, Network, Pencil, Plus, Trash2, Users as UsersIcon } from 'lucide-react';
-import { api, can, Empty, ErrorBox, Field, Loading, Modal, PageHead, setTenant, Tabs, useAction, useApi, useUser } from '../../lib.jsx';
-import Teams, { TeamEditor } from './Teams.jsx';
-import Tenants from './Tenants.jsx';
+import { api, can, Empty, ErrorBox, Field, Loading, Modal, PageHead, setTenant, useAction, useApi, useUser } from '../../lib.jsx';
+import { TeamEditor } from './Teams.jsx';
 
 // Organisation als Hierarchie: Mandant -> Abteilung -> Teams. Bearbeitet wird nur im aktuellen Mandanten.
 function DepartmentEditor({ department, onClose, onSaved }) {
@@ -41,12 +40,53 @@ function DepartmentEditor({ department, onClose, onSaved }) {
   );
 }
 
-function Tree() {
+function TenantForm({ tenant, onClose, onSaved }) {
+  const [form, setForm] = useState({ name: tenant.name ?? '', key: tenant.key ?? '', description: tenant.description ?? '' });
+  const [run, error, busy] = useAction();
+  const save = () =>
+    run(async () => {
+      await api(tenant.id ? `/api/tenants/${tenant.id}` : '/api/tenants', { method: tenant.id ? 'PUT' : 'POST', body: form });
+      onSaved();
+    });
+  return (
+    <Modal
+      title={tenant.id ? 'Mandant bearbeiten' : 'Neuer Mandant'}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            Abbrechen
+          </button>
+          <button className="btn primary" disabled={busy || !form.name.trim()} onClick={save}>
+            Speichern
+          </button>
+        </>
+      }
+    >
+      <ErrorBox error={error} />
+      <Field label="Name">
+        <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      </Field>
+      {!tenant.id && (
+        <Field label="Kürzel (optional)" hint="Wird aus dem Namen gebildet, wenn leer.">
+          <input value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} />
+        </Field>
+      )}
+      <Field label="Beschreibung">
+        <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+      </Field>
+    </Modal>
+  );
+}
+
+function Tree({ newTenant, onNewTenantClosed }) {
   const user = useUser();
   const org = useApi('/api/organization');
   const users = useApi(can(user, 'users.manage') || can(user, 'teams.manage') ? '/api/members' : null);
   const [dept, setDept] = useState(null);
   const [team, setTeam] = useState(null);
+  const [tenant, setTenantEdit] = useState(null);
+  const manageTenants = can(user, 'tenants.manage');
   const [run, error] = useAction();
   const edit = can(user, 'teams.manage');
   const teamList = useApi(edit ? '/api/teams' : null);
@@ -60,6 +100,12 @@ function Tree() {
     confirm(`Team „${t.name}“ löschen? Die User bleiben erhalten.`) &&
     run(async () => {
       await api(`/api/teams/${t.id}`, { method: 'DELETE' });
+      org.reload();
+    });
+  const removeTenant = (t) =>
+    confirm(`Mandant „${t.name}“ mit allen Plattformen, Prüfungen, Läufen und Findings löschen? Das lässt sich nicht rückgängig machen.`) &&
+    run(async () => {
+      await api(`/api/tenants/${t.id}`, { method: 'DELETE' });
       org.reload();
     });
   const openTeam = (t) => setTeam(teamList.data?.find((x) => x.id === t.id) ?? { members: [], ...t });
@@ -99,6 +145,18 @@ function Tree() {
                     {t.current ? <span className="tag">aktuell</span> : null}
                     {t.description && <span className="sub">{t.description}</span>}
                     <span className="btn-row org-actions">
+                      {manageTenants && (
+                        <>
+                          <button className="btn sm ghost" onClick={() => setTenantEdit(t)} aria-label={`${t.name} bearbeiten`}>
+                            <Pencil size={14} />
+                          </button>
+                          {t.key !== 'default' && (
+                            <button className="btn sm ghost danger" onClick={() => removeTenant(t)} aria-label={`${t.name} löschen`}>
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </>
+                      )}
                       {t.current && edit && (
                         <>
                           <button className="btn sm" onClick={() => setDept({})}>
@@ -161,6 +219,17 @@ function Tree() {
           )
         }
       </Loading>
+      {(tenant || newTenant) && (
+        <TenantForm
+          tenant={tenant ?? {}}
+          onClose={() => (setTenantEdit(null), onNewTenantClosed())}
+          onSaved={() => {
+            setTenantEdit(null);
+            onNewTenantClosed();
+            org.reload();
+          }}
+        />
+      )}
       {dept && (
         <DepartmentEditor
           department={dept}
@@ -190,15 +259,22 @@ function Tree() {
 
 export default function Organization() {
   const user = useUser();
-  const [tab, setTab] = useState('tree');
-  const tabs = [['tree', 'Hierarchie'], ['teams', 'Teams & Mitglieder'], ...(can(user, 'tenants.manage') ? [['tenants', 'Mandanten']] : [])];
+  const [creating, setCreating] = useState(false);
   return (
     <>
-      <PageHead title="Organization">Mandant, Abteilung und Teams. Ein Mandant trennt alle Daten vollständig von anderen; Abteilungen gruppieren Teams.</PageHead>
-      <Tabs value={tab} onChange={setTab} tabs={tabs} />
-      {tab === 'tree' && <Tree />}
-      {tab === 'teams' && <Teams />}
-      {tab === 'tenants' && <Tenants />}
+      <PageHead
+        title="Organization"
+        action={
+          can(user, 'tenants.manage') && (
+            <button className="btn primary" onClick={() => setCreating(true)}>
+              <Plus size={15} /> Neuer Mandant
+            </button>
+          )
+        }
+      >
+        Mandant, Abteilung und Teams. Ein Mandant trennt alle Daten vollständig von anderen; Abteilungen gruppieren Teams.
+      </PageHead>
+      <Tree newTenant={creating} onNewTenantClosed={() => setCreating(false)} />
     </>
   );
 }

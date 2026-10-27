@@ -88,6 +88,16 @@ export default async function runRoutes(app) {
     return { ok: true };
   });
 
+  // Nur Administratoren: der Lauf samt Ergebnissen, Logs und Nachweisen wird endgültig gelöscht.
+  app.delete('/api/runs/:id', { preHandler: requirePermission('suite.view') }, async (request) => {
+    if (!request.user.is_admin) throw err('Nur Administratoren dürfen Läufe löschen', 403);
+    const run = await loadRun(request);
+    if (['queued', 'running'].includes(run.status)) throw err('Der Lauf ist noch aktiv; bitte zuerst abbrechen', 409);
+    await query('delete from runs where id = $1', [run.id]);
+    await logAudit(request, 'run.delete', 'run', run.id, { label: run.label, status: run.status });
+    return { ok: true };
+  });
+
   app.post('/api/runs/:id/cancel', starter, async (request) => {
     const run = await loadRun(request);
     if (run.user_id !== request.user.id && !hasPermission(request.user, 'runs.manage_all')) throw err('Nur eigene Läufe können abgebrochen werden', 403);

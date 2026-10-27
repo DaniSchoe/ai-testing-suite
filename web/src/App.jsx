@@ -38,6 +38,7 @@ import Sizing from './pages/Sizing.jsx';
 import Credentials from './pages/Credentials.jsx';
 import Users from './pages/admin/Users.jsx';
 import Organization from './pages/admin/Organization.jsx';
+import AnalysisSettings from './pages/admin/AnalysisSettings.jsx';
 import Archive from './pages/admin/Archive.jsx';
 import InfoPage from './pages/admin/Info.jsx';
 import Roles from './pages/admin/Roles.jsx';
@@ -263,6 +264,7 @@ export default function App() {
               <Route path="/admin/tenants" element={<Navigate to="/admin/organization" replace />} />
               <Route path="/admin/organization" element={<Organization />} />
               <Route path="/admin/users" element={<Users />} />
+              <Route path="/admin/analysis" element={<AnalysisSettings />} />
               <Route path="/admin/archive" element={<Archive />} />
               <Route path="/admin/roles" element={<Roles />} />
               <Route path="/admin/audit-log" element={<AuditLog />} />

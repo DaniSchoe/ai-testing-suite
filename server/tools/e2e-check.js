@@ -521,4 +521,22 @@ r = await admin('/api/audit-log?action=platform.lock');
 assert.ok(r.data.rows.length >= 1);
 step('Audit-Log enthält Freigaben und Kill-Switch');
 
-console.log('0.6.0 End-to-End-Prüfung erfolgreich');
+// ------------------------------------------------------------------ 0.7.0: Läufe löschen, Dashboard, KI-Analyse nur für Admins
+r = await admin(`/api/dashboard/platforms/${dev.id}`);
+ok(r);
+assert.ok(Array.isArray(r.data.speed) && 'gateway' in r.data.ttft_by_path && 'direct' in r.data.ttft_by_path, 'Dashboard: Geschwindigkeit je Modell und TTFT nach Weg');
+assert.ok(r.data.vram.gpus >= 2 && r.data.vram.total_gb >= 160, 'Dashboard: VRAM aus den GPUs an Servern');
+assert.equal((await alice('/api/settings/analysis')).status, 403, 'KI-Analyse-Einstellung nur für Administratoren');
+ok(await admin('/api/settings/analysis'));
+r = await admin('/api/runs?days=365');
+ok(r);
+const victim = r.data.runs.find((x) => ['passed', 'failed', 'error', 'cancelled'].includes(x.status));
+assert.ok(victim, 'Es gibt einen beendeten Lauf');
+assert.equal((await alice(`/api/runs/${victim.id}`, { method: 'DELETE' })).status, 403, 'Löschen nur für Administratoren');
+ok(await admin(`/api/runs/${victim.id}`, { method: 'DELETE' }), 'Lauf löschen');
+assert.equal((await admin(`/api/runs/${victim.id}`)).status, 404, 'Lauf samt Daten gelöscht');
+r = await admin('/api/audit-log?action=run.delete');
+assert.ok(r.data.rows.length >= 1, 'Löschen steht im Audit-Log');
+step('Läufe löschen, Dashboard-Geschwindigkeit und VRAM, KI-Analyse nur für Admins');
+
+console.log('0.7.0 End-to-End-Prüfung erfolgreich');

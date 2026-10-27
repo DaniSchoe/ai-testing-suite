@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, FileText, Gauge, Info, Landmark, Lock, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { RadarProfile, TrendLines } from '../components/Charts.jsx';
-import { Card, Empty, EnvBadge, getPlatform, fmt, KIND_META, Loading, Modal, OutcomeBadge, PageHead, PATH_LABELS, pctText, SeverityBadge, StatusBadge, TYPE_LABELS, useApi } from '../lib.jsx';
+import { AlertTriangle, ArrowLeft, Boxes, FileText, Gauge, Info, Landmark, Lock, MemoryStick, ShieldAlert, ShieldCheck, Target } from 'lucide-react';
+import { RadarProfile, TrendLines, ValueBars } from '../components/Charts.jsx';
+import { Card, Empty, EnvBadge, getPlatform, fmt, KIND_META, Loading, Modal, OutcomeBadge, PageHead, PATH_LABELS, pctText, SeverityBadge, STATUS_KINDS, StatusBadge, TYPE_LABELS, useApi } from '../lib.jsx';
 
 const DIMENSIONS = [
   ['quality', 'Qualität'],
@@ -121,6 +121,9 @@ function Suitability({ items }) {
   );
 }
 
+const fmtGb = (gb) => (gb >= 1000 ? `${Math.round(gb / 10) / 100} TB` : `${Math.round(gb)} GB`);
+const speedOf = (d, alias) => d.speed.find((s) => s.alias === alias) ?? {};
+
 function PlatformLevel({ id, days, go }) {
   const data = useApi(`/api/dashboard/platforms/${id}?days=${days}`, { interval: 60000 });
   return (
@@ -144,15 +147,28 @@ function PlatformLevel({ id, days, go }) {
               sub={`Ziel mindestens SEAL-${d.sovereignty?.min_level ?? '–'}`} bad={d.sovereignty?.overall != null && d.sovereignty.overall < (d.sovereignty?.min_level ?? 0)} />
             <Tile to={`/platforms/${d.platform.id}?tab=assessment`} Icon={Gauge} title="Einstufung"
               value={d.assessment ? `${d.assessment.security.score ?? '–'} / ${d.assessment.production.score ?? '–'}` : '–'} sub="Sicherheit / Produktionsreife" />
+            <Tile to="/audits" Icon={Target} title="Anforderungen erfüllt" value={pctText(d.slo.rate)} sub={`${d.slo.fulfilled} von ${d.slo.total} (95 %: ${pctText(d.slo.ci95?.[0])}–${pctText(d.slo.ci95?.[1])})`} />
+            <Tile to="/models" Icon={Boxes} title="Modelle" value={d.models.length} sub="mit Messungen im Zeitraum" />
+            <Tile to={`/platforms/${d.platform.id}`} Icon={MemoryStick} title="VRAM gesamt"
+              value={d.vram?.gpus ? fmtGb(d.vram.total_gb) : '–'}
+              sub={d.vram?.gpus ? `${d.vram.gpus} GPU in ${d.vram.servers} Server` : 'Keine GPU an einem Server eingepflegt'} />
           </div>
-          <div className="grid kpis">
-            <Kpi label="Anforderungen erfüllt" value={pctText(d.slo.rate)} sub={`${d.slo.fulfilled} von ${d.slo.total} (95 %: ${pctText(d.slo.ci95?.[0])}–${pctText(d.slo.ci95?.[1])})`} />
-            <Kpi label="Modelle" value={d.models.length} />
+          <div className="two-col">
+            <Card title="Token/s je Modell" sub="Mittlerer Durchsatz aus Performance- und Lasttests aller getesteten Modelle.">
+              {d.speed.some((s) => s.tokens_per_s !== null) ? <ValueBars data={d.speed.filter((s) => s.tokens_per_s !== null).map((s) => ({ name: s.alias, value: s.tokens_per_s }))} unit=" Token/s" /> : <Empty>Noch keine Performance-Messung</Empty>}
+            </Card>
+            <Card title="Mittlere TTFT nach Weg" sub="Zeit bis zum ersten Token bei Anfragen über das Gateway und direkt an die Inferenz.">
+              {d.ttft_by_path.gateway !== null || d.ttft_by_path.direct !== null ? (
+                <ValueBars data={[{ name: 'Über Gateway', value: d.ttft_by_path.gateway }, { name: 'Direkt zur Inferenz', value: d.ttft_by_path.direct }]} unit=" ms" colors={['var(--series-1)', 'var(--series-2)']} />
+              ) : (
+                <Empty>Noch keine TTFT-Messung</Empty>
+              )}
+            </Card>
           </div>
           <Card title="Komponenten" flush>
             <table>
               <tbody>
-                {(d.status?.components ?? []).map((c) => (
+                {(d.status?.components ?? []).filter((c) => STATUS_KINDS.includes(c.kind)).map((c) => (
                   <tr key={c.endpoint_id}>
                     <td>{c.name}</td>
                     <td className="sub">{KIND_META[c.kind]?.label ?? c.kind}</td>
@@ -179,7 +195,8 @@ function PlatformLevel({ id, days, go }) {
                         <th key={k}>{l}</th>
                       ))}
                       <th>Eignung</th>
-                      <th>Auffälligkeiten</th>
+                      <th>TTFT</th>
+                      <th>Token/s</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -197,10 +214,8 @@ function PlatformLevel({ id, days, go }) {
                         <td>
                           <Suitability items={m.suitability} />
                         </td>
-                        <td className="sub">
-                          {m.failed > 0 && `${m.failed} von ${m.tests} nicht bestanden`}
-                          {m.regressions > 0 && ` · ${m.regressions} Regression(en)`}
-                        </td>
+                        <td>{speedOf(d, m.alias).ttft_ms !== null && speedOf(d, m.alias).ttft_ms !== undefined ? `${Math.round(speedOf(d, m.alias).ttft_ms)} ms` : <span className="sub">–</span>}</td>
+                        <td>{speedOf(d, m.alias).tokens_per_s !== null && speedOf(d, m.alias).tokens_per_s !== undefined ? speedOf(d, m.alias).tokens_per_s : <span className="sub">–</span>}</td>
                       </tr>
                     ))}
                   </tbody>

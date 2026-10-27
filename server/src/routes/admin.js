@@ -263,8 +263,12 @@ export default async function adminRoutes(app) {
 
   // --- Modellkatalog ---
   // Modell für die KI-Analyse der Testläufe (eine Einstellung für die ganze Anwendung).
-  app.get('/api/settings/analysis', viewer, async (request) => (await getAnalysisSetting(request.user.tenant_id)) ?? { endpoint_id: null, model: null });
+  app.get('/api/settings/analysis', viewer, async (request) => {
+    if (!request.user.is_admin) throw Object.assign(new Error('Nur für Administratoren'), { statusCode: 403 });
+    return (await getAnalysisSetting(request.user.tenant_id)) ?? { endpoint_id: null, model: null };
+  });
   app.put('/api/settings/analysis', endpointAdmin, async (request, reply) => {
+    if (!request.user.is_admin) return reply.code(403).send({ error: 'Nur für Administratoren' });
     const { endpoint_id, model } = request.body ?? {};
     if (!endpoint_id && !model) {
       await setAnalysisSetting(request.user.tenant_id, null, request.user.id);

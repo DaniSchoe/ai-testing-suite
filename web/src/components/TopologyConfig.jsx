@@ -310,23 +310,14 @@ function IamConfig({ node, m }) {
 
 const BARS = { datacenter: DatacenterConfig, server: ServerConfig, interconnect: InterconnectConfig, kubernetes: KubernetesConfig, llm: InferenceConfig, ai_proxy: GatewayConfig, iam: IamConfig };
 
-export default function ConfigBar({ node, m, onRemove }) {
+export default function ConfigBar({ node, m }) {
   const Bar = BARS[node.kind];
   return (
-    <div className="topo-config card">
-      <div className="cfg-head">
-        <strong>{node.name}</strong>
-        <span className="sub">{m.kindLabel(node.kind)}</span>
-        <span style={{ flex: 1 }} />
-        {m.editable && (
-          <button className="btn sm ghost danger" onClick={onRemove}>
-            Aus Topologie nehmen
-          </button>
-        )}
+    <fieldset disabled={!m.editable} className="cfg-body">
+      <div className="sub" style={{ marginBottom: 10 }}>
+        {m.kindLabel(node.kind)}
       </div>
-      <fieldset disabled={!m.editable} className="cfg-body">
-        {Bar ? <Bar node={node} m={m} /> : <div className="hint">Für diese Komponentenart gibt es keine weitere Konfiguration. Angaben pflegst du im Inventar.</div>}
-      </fieldset>
-    </div>
+      {Bar ? <Bar node={node} m={m} /> : <div className="hint">Für diese Komponentenart gibt es keine weitere Konfiguration. Angaben pflegst du im Inventar.</div>}
+    </fieldset>
   );
 }

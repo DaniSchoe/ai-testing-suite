@@ -2,27 +2,23 @@
 // Ein Klick auf eine Komponente öffnet unter der Ebene ihre Konfigurationsleiste. Verbindungen werden gestrichelt gezeichnet;
 // verbundene Komponenten stehen in benachbarten Ebenen untereinander (siehe topologyLayout.js).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Plus, Save } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Save, X } from 'lucide-react';
 import { api, Card, ErrorBox, KIND_META, Loading, Modal, useAction, useApi } from '../lib.jsx';
 import ConfigBar from './TopologyConfig.jsx';
 import { assignColumns } from './topologyLayout.js';
 
 const COL_W = 196;
 const COL_GAP = 16;
+const OPTIONAL = ['mcp', 'database', 'observability', 'iam'];
 
 const hasPlaced = (layout) => layout && typeof layout.placed === 'object' && layout.placed !== null;
 
-// Startzustand: gespeicherte Platzierung; bei älteren Plattformen (freie Positionen) kommen alle Komponenten in ihre Ebene.
+// Startzustand: gespeicherte Platzierung. Neue Komponenten erscheinen nie von selbst, jede wird manuell hinzugefügt.
 function initialPlaced(platform, layers) {
   const out = Object.fromEntries(layers.map((l) => [l.key, []]));
   const known = new Set(platform.endpoints.map((e) => e.id));
   if (hasPlaced(platform.layout)) {
     for (const l of layers) out[l.key] = (platform.layout.placed[l.key] ?? []).filter((id) => known.has(id));
-  } else {
-    for (const e of platform.endpoints) {
-      const layer = layers.find((l) => l.kinds.includes(e.kind));
-      if (layer) out[layer.key].push(e.id);
-    }
   }
   return out;
 }
@@ -128,7 +124,6 @@ function Editor({ platform, editable, onSaved, presets }) {
   function addNode(layerKey, id) {
     setPlaced((p) => ({ ...p, [layerKey]: [...(p[layerKey] ?? []), id] }));
     setCollapsed((c) => ({ ...c, [layerKey]: false }));
-    setSelected(id);
     setAdding(null);
     touch();
   }
@@ -177,10 +172,12 @@ function Editor({ platform, editable, onSaved, presets }) {
         const ea = cards.current[a]?.getBoundingClientRect();
         const eb = cards.current[b]?.getBoundingClientRect();
         if (!ea || !eb) return null;
-        const x1 = ea.left + ea.width / 2 - box.left;
-        const y1 = ea.bottom - box.top;
-        const x2 = eb.left + eb.width / 2 - box.left;
-        const y2 = eb.top - box.top;
+        // Die Linie verbindet die untere Kante des oberen mit der oberen Kante des unteren Elements.
+        const [top, bottom] = ea.top <= eb.top ? [ea, eb] : [eb, ea];
+        const x1 = top.left + top.width / 2 - box.left;
+        const y1 = top.bottom - box.top;
+        const x2 = bottom.left + bottom.width / 2 - box.left;
+        const y2 = bottom.top - box.top;
         const dy = Math.max(24, (y2 - y1) / 2);
         return { key: `${a}|${b}`, d: `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}` };
       })
@@ -222,11 +219,87 @@ function Editor({ platform, editable, onSaved, presets }) {
   }
 
   const candidates = (layer) => endpoints.filter((e) => layer.kinds.includes(e.kind) && !isPlaced(e.id));
+  const selNode = selected ? byId.get(selected) : null;
+  const optionalCount = OPTIONAL.reduce((n, k) => n + (placed[k] ?? []).length, 0);
+  const [optionalOpen, setOptionalOpen] = useState(optionalCount > 0);
+  // Oben das AI Gateway, unten das Rechenzentrum. Optionale Komponenten stehen in einem eigenen, aufklappbaren Bereich darunter.
+  const mainLayers = layers.filter((l) => !OPTIONAL.includes(l.key)).reverse();
+  const optionalLayers = layers.filter((l) => OPTIONAL.includes(l.key));
+
+  const renderLayer = (layer) => {
+    const nodes = placedOf(layer.key);
+    const closed = Boolean(collapsed[layer.key]);
+    const meta = KIND_META[layer.kinds[0]];
+    return (
+      <section key={layer.key} className="topo-layer">
+        <header>
+          <button className="btn sm ghost" onClick={() => setCollapsed((c) => ({ ...c, [layer.key]: !closed }))} aria-expanded={!closed} aria-label={`${layer.label} ${closed ? 'ausklappen' : 'einklappen'}`}>
+            {closed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+          </button>
+          {meta && <meta.Icon size={15} style={{ color: meta.color }} />}
+          <strong>{layer.label}</strong>
+          {layer.optional && <span className="tag">optional</span>}
+          <span className="sub">{nodes.length ? `${nodes.length} Komponente${nodes.length > 1 ? 'n' : ''}` : ''}</span>
+          <span style={{ flex: 1 }} />
+          {editable && (
+            <button className="btn sm" onClick={() => setAdding(layer)} aria-label={`${layer.label}: Komponente hinzufügen`}>
+              <Plus size={14} />
+            </button>
+          )}
+        </header>
+        {!closed && (
+          <>
+            <div className="topo-row" style={{ gridTemplateColumns: `repeat(${colCount}, ${COL_W}px)` }}>
+              {nodes.map((n) => (
+                <div
+                  key={n.id}
+                  ref={(el) => (el ? (cards.current[n.id] = el) : delete cards.current[n.id])}
+                  role="button"
+                  tabIndex={0}
+                  className={`topo-card${selected === n.id ? ' selected' : ''}`}
+                  style={{ gridColumn: (columns.get(n.id) ?? 0) + 1 }}
+                  onClick={() => setSelected(n.id)}
+                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setSelected(n.id))}
+                >
+                  <span className="topo-card-title">{n.name}</span>
+                  <span className="sub">{summaryOf(n, model, served)}</span>
+                  {n.kind === 'server' && gpusOf(n.id).length > 0 && (
+                    <span className="topo-gpus">
+                      {gpusOf(n.id).map((g) => (
+                        <span key={g.id} className="tag" title={model.gpuLabel(g)}>
+                          {g.name}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                  {n.kind === 'interconnect' && (n.spec?.bundles ?? []).length > 0 && (
+                    <span className="topo-gpus">
+                      {n.spec.bundles.map((b) => (
+                        <span key={b.id} className="tag">
+                          {b.name}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                  {editable && (
+                    <button className="topo-x" aria-label={`${n.name} entfernen`} title="Aus der Topologie entfernen" onClick={(e) => (e.stopPropagation(), removeNode(n.id))}>
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {nodes.length === 0 && <div className="topo-empty">Noch keine Komponenten zugewiesen...</div>}
+          </>
+        )}
+      </section>
+    );
+  };
 
   return (
     <Card
       title="Topologie"
-      sub="Feste Ebenen vom Rechenzentrum bis zum IAM. Füge mit „+“ Komponenten aus dem Inventar hinzu und klicke eine Komponente an, um sie darunter zu konfigurieren."
+      sub="Feste Ebenen, oben das AI Gateway, unten das Rechenzentrum. Füge mit „+“ Komponenten aus dem Inventar hinzu und klicke eine Komponente an, um sie zu konfigurieren."
       action={
         <span className="btn-row" style={{ flexWrap: 'nowrap' }}>
           <label className="checkbox">
@@ -255,71 +328,40 @@ function Editor({ platform, editable, onSaved, presets }) {
               ))}
             </svg>
           )}
-          {layers.map((layer) => {
-            const nodes = placedOf(layer.key);
-            const closed = Boolean(collapsed[layer.key]);
-            const sel = nodes.find((n) => n.id === selected);
-            const meta = KIND_META[layer.kinds[0]];
-            return (
-              <section key={layer.key} className="topo-layer">
-                <header>
-                  <button className="btn sm ghost" onClick={() => setCollapsed((c) => ({ ...c, [layer.key]: !closed }))} aria-expanded={!closed} aria-label={`${layer.label} ${closed ? 'ausklappen' : 'einklappen'}`}>
-                    {closed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-                  </button>
-                  {meta && <meta.Icon size={15} style={{ color: meta.color }} />}
-                  <strong>{layer.label}</strong>
-                  {layer.optional && <span className="tag">optional</span>}
-                  <span className="sub">{nodes.length ? `${nodes.length} Komponente${nodes.length > 1 ? 'n' : ''}` : 'leer'}</span>
-                  <span style={{ flex: 1 }} />
-                  {editable && (
-                    <button className="btn sm" onClick={() => setAdding(layer)} aria-label={`${layer.label}: Komponente hinzufügen`}>
-                      <Plus size={14} />
-                    </button>
-                  )}
-                </header>
-                {!closed && (
-                  <>
-                    <div className="topo-row" style={{ gridTemplateColumns: `repeat(${colCount}, ${COL_W}px)` }}>
-                      {nodes.map((n) => (
-                        <button
-                          key={n.id}
-                          ref={(el) => (el ? (cards.current[n.id] = el) : delete cards.current[n.id])}
-                          className={`topo-card${selected === n.id ? ' selected' : ''}`}
-                          style={{ gridColumn: (columns.get(n.id) ?? 0) + 1 }}
-                          onClick={() => setSelected(selected === n.id ? null : n.id)}
-                        >
-                          <span className="topo-card-title">{n.name}</span>
-                          <span className="sub">{summaryOf(n, model, served)}</span>
-                          {n.kind === 'server' && gpusOf(n.id).length > 0 && (
-                            <span className="topo-gpus">
-                              {gpusOf(n.id).map((g) => (
-                                <span key={g.id} className="tag" title={model.gpuLabel(g)}>
-                                  {g.name}
-                                </span>
-                              ))}
-                            </span>
-                          )}
-                          {n.kind === 'interconnect' && (n.spec?.bundles ?? []).length > 0 && (
-                            <span className="topo-gpus">
-                              {n.spec.bundles.map((b) => (
-                                <span key={b.id} className="tag">
-                                  {b.name}
-                                </span>
-                              ))}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                    {nodes.length === 0 && <div className="sub topo-empty">Noch keine Komponente. Mit „+“ aus dem Inventar hinzufügen.</div>}
-                    {sel && <ConfigBar key={sel.id} node={sel} m={model} onRemove={() => removeNode(sel.id)} />}
-                  </>
-                )}
-              </section>
-            );
-          })}
+          {mainLayers.map(renderLayer)}
+          <section className="topo-optional">
+            <header>
+              <button className="btn sm ghost" onClick={() => setOptionalOpen((o) => !o)} aria-expanded={optionalOpen} aria-label="Optionale Komponenten ein- oder ausklappen">
+                {optionalOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+              </button>
+              <strong>Optionale Komponenten</strong>
+              <span className="sub">MCP, Datenbanken, Observability, IAM{optionalCount ? ` · ${optionalCount} zugewiesen` : ''}</span>
+            </header>
+            {optionalOpen && <div className="topo-optional-body">{optionalLayers.map(renderLayer)}</div>}
+          </section>
         </div>
       </div>
+      {selNode && (
+        <Modal
+          title={`${selNode.name} konfigurieren`}
+          onClose={() => setSelected(null)}
+          footer={
+            <>
+              {editable && (
+                <button className="btn danger" onClick={() => removeNode(selNode.id)}>
+                  Aus Topologie nehmen
+                </button>
+              )}
+              <span style={{ flex: 1 }} />
+              <button className="btn primary" onClick={() => setSelected(null)}>
+                Fertig
+              </button>
+            </>
+          }
+        >
+          <ConfigBar key={selNode.id} node={selNode} m={model} />
+        </Modal>
+      )}
       {adding && (
         <Modal title={`${adding.label}: Komponente hinzufügen`} onClose={() => setAdding(null)}>
           {candidates(adding).length === 0 ? (

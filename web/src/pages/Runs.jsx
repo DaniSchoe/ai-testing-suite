@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Empty, EnvBadge, getPlatform, Loading, OUTCOME_LABELS, PageHead, qs, StatusBadge, Tabs, useApi, fmt } from '../lib.jsx';
+import { Trash2 } from 'lucide-react';
+import { api, Empty, EnvBadge, getPlatform, Loading, OUTCOME_LABELS, PageHead, qs, StatusBadge, Tabs, useApi, useUser, fmt } from '../lib.jsx';
 import { Calendar } from './Schedules.jsx';
 
 const outcomeText = (o) =>
@@ -9,6 +10,7 @@ const outcomeText = (o) =>
     .join(' · ');
 
 export function Runs() {
+  const user = useUser();
   const [params, setParams] = useSearchParams();
   const [tab, setTab] = useState('list');
   const [filters, setFilters] = useState({ audit_id: '', platform_id: getPlatform() ?? '', status: '', days: '30', drafts: '' });
@@ -17,6 +19,15 @@ export function Runs() {
   const options = useApi('/api/run-filters');
   const list = useApi(`/api/runs${qs({ ...filters, page, search })}`, { interval: 10000 });
   const set = (patch) => (setFilters((f) => ({ ...f, ...patch })), setPage(1));
+  const remove = async (r) => {
+    if (!confirm(`Lauf „${r.label}“ löschen? Damit gehen auch alle erzeugten Daten verloren: Ergebnisse, Logs und Nachweise. Das lässt sich nicht rückgängig machen.`)) return;
+    try {
+      await api(`/api/runs/${r.id}`, { method: 'DELETE' });
+      list.reload();
+    } catch (e) {
+      alert(e.message);
+    }
+  };
   const pages = list.data ? Math.max(1, Math.ceil(list.data.total / list.data.pageSize)) : 1;
 
   return (
@@ -78,6 +89,7 @@ export function Runs() {
                           <th>Status</th>
                           <th>Ergebnis</th>
                           <th>Auslöser</th>
+                          {user.is_admin && <th />}
                         </tr>
                       </thead>
                       <tbody>
@@ -103,6 +115,15 @@ export function Runs() {
                             <td className="sub">
                               {r.user_name ?? 'Zeitplan'} · {r.trigger}
                             </td>
+                            {user.is_admin && (
+                              <td className="num">
+                                {!['queued', 'running'].includes(r.status) && (
+                                  <button className="btn sm ghost danger" onClick={() => remove(r)} aria-label="Lauf löschen">
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>

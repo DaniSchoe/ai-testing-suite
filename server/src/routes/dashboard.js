@@ -5,6 +5,10 @@ import { envFilter, heatmap, latestResults, NORMALIZATION, scorecard, sloOf, sui
 import { assess, sovereignty } from '../assessment.js';
 import { percentile } from '../evaluate.js';
 import { platformStatus } from '../snapshot.js';
+import { GPU_TYPES } from '../inventory.js';
+
+const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+const round1 = (x) => (x === null ? null : Math.round(x * 10) / 10);
 
 const err = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const dayOf = (d) => new Date(d).toISOString().slice(0, 10);
@@ -129,6 +133,23 @@ export default async function dashboardRoutes(app) {
     } catch {
       /* Status ist optional */
     }
+    // Geschwindigkeit je Modell (mittlere TTFT, Token/s) und mittlere TTFT nach Weg; nur Performance- und Lastergebnisse.
+    const perf = rows.filter((r) => ['performance', 'load'].includes(r.type));
+    const ttftOf = (rs) => avg(rs.flatMap((r) => r.samples?.ttft_ms ?? []).filter((x) => typeof x === 'number'));
+    const tpsOf = (rs) => avg(rs.map((r) => r.metrics?.tokens_per_s_avg).filter((x) => typeof x === 'number'));
+    const speed = aliases.map((alias) => ({ alias, ttft_ms: round1(ttftOf(perf.filter((r) => r.model_alias === alias))), tokens_per_s: round1(tpsOf(perf.filter((r) => r.model_alias === alias))) }));
+    const ttftByPath = { gateway: round1(ttftOf(perf.filter((r) => r.path === 'gateway'))), direct: round1(ttftOf(perf.filter((r) => r.path === 'direct'))) };
+    // VRAM der Plattform: GPUs, die einem Server zugeordnet sind.
+    const gpuRows = await many(
+      `select e.id, e.spec, l.to_id as server_id from endpoints e join platform_links l on l.from_id = e.id and l.kind = 'hosted_in'
+       join endpoints s on s.id = l.to_id and s.kind = 'server' where e.platform_id = $1 and e.kind = 'gpu'`,
+      [platform.id],
+    );
+    const vram = {
+      total_gb: gpuRows.reduce((n, g) => n + (Number(g.spec?.memory_gb) || Number(g.spec?.custom?.memory_gb) || GPU_TYPES[g.spec?.gpu_type]?.memory_gb || 0), 0),
+      gpus: gpuRows.length,
+      servers: new Set(gpuRows.map((g) => g.server_id)).size,
+    };
     const [routesRows, findingsRows, topFindings, trend, mk, lastSnapshot, assessment, reportCounts] = await Promise.all([
       many(`select g.name as gateway, b.name as backend, r.models from platform_routes r join endpoints g on g.id = r.gateway_endpoint_id join endpoints b on b.id = r.backend_endpoint_id where r.platform_id = $1`, [platform.id]),
       many(`select severity, count(*)::int as n from findings where platform_id = $1 and status in ('open', 'in_progress') group by 1`, [platform.id]),
@@ -158,6 +179,9 @@ export default async function dashboardRoutes(app) {
       findings: { open: Object.fromEntries(findingsRows.map((f) => [f.severity, f.n])), top: topFindings },
       slo: { ...sloOf(rows), failing: failing.slice(0, 10) },
       models,
+      speed,
+      ttft_by_path: ttftByPath,
+      vram,
       heatmap: await heatmap(t, { platformId: platform.id, days }),
       trend: trend.map((d) => ({ day: dayOf(d.day), passed: d.passed, total: d.total, rate: d.total ? d.passed / d.total : null })),
       markers: mk,
