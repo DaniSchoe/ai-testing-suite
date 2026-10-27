@@ -27,6 +27,14 @@ async function upsertPlatform(p) {
   );
 }
 
+async function upsertComponent(platform, c) {
+  return one(
+    `insert into endpoints (tenant_id, platform_id, name, kind, spec, metrics_url) values ($1, $2, $3, $4, $5, $6)
+     on conflict (tenant_id, name) do update set platform_id = excluded.platform_id, spec = excluded.spec, metrics_url = excluded.metrics_url returning *`,
+    [tenant.id, platform.id, c.name, c.kind, JSON.stringify(c.spec), c.metrics_url ?? null],
+  );
+}
+
 async function upsertEndpoint(platform, e) {
   const key = e.api_key ? await upsertKey({ name: `${e.name} Key`, description: 'Demo-Key', secret: e.api_key, admin_only: true }) : null;
   const row = await one(
@@ -52,26 +60,62 @@ for (const env of ['dev', 'prod']) {
     name: `Mock-Plattform${suffix}`,
     description: 'LiteLLM-Gateway, vLLM und MCP als Mock für Entwicklung und CI',
     environment: env,
-    sovereignty: { min_level: 2, goals: { 'SOV-3': { level: 3, note: 'Modelle laufen im eigenen Rechenzentrum' }, 'SOV-4': { level: 3 }, 'SOV-6': { level: 2, note: 'Open-Weights-Modelle, Gateway quelloffen' } } },
+    sovereignty: { min_level: 2, overrides: {} },
   });
   const gateway = await upsertEndpoint(platform, { name: `LiteLLM (Mock)${suffix}`, kind: 'ai_proxy', base_url: MOCK_URL, api_key: 'sk-admin', default_model: 'mock-small' });
   const mcp = await upsertEndpoint(platform, { name: `MCP Gateway (Mock)${suffix}`, kind: 'mcp', base_url: `${MOCK_URL}/mcp`, api_key: 'sk-admin' });
   // vLLM ohne Auth; das Modell heißt dort anders als im Gateway und bekommt deshalb einen Alias.
   const vllm = await upsertEndpoint(platform, { name: `vLLM Qwen3 (Mock)${suffix}`, kind: 'llm', base_url: `${MOCK_URL}/vllm-qwen`, default_model: 'qwen3-32b' });
   await query(`update endpoint_models set alias = 'qwen3-32b' where endpoint_id = $1 and name = 'Qwen/Qwen3-32B'`, [vllm.id]);
-  // Metadaten des Modellkatalogs (Lizenz, Herkunft, Fähigkeiten).
-  await query(`update endpoint_models set license = 'Apache-2.0', provider = 'Alibaba Cloud', origin = 'CN', open_weights = true, revision = 'a9c98e6', quantization = 'bf16', capabilities = '{tools,json,reasoning}', context_length = 32768 where endpoint_id = $1`, [vllm.id]);
-  await query(`update endpoint_models set capabilities = '{tools,json}', license = 'MIT', provider = 'Mock AG', origin = 'DE', open_weights = true, revision = 'mock-1' where endpoint_id = $1 and name = 'mock-small'`, [gateway.id]);
-  await query(`update endpoint_models set capabilities = '{tools,json,vision}', license = 'proprietär', provider = 'Mock AG', origin = 'DE', open_weights = false where endpoint_id = $1 and name = 'mock-large'`, [gateway.id]);
-  await query(`update endpoint_models set capabilities = '{tools,json,reasoning}', license = 'Apache-2.0', provider = 'Alibaba Cloud', origin = 'CN', open_weights = true, revision = 'a9c98e6' where endpoint_id = $1 and name = 'qwen3-32b'`, [gateway.id]);
   await query(`insert into platform_routes (platform_id, gateway_endpoint_id, backend_endpoint_id, models) values ($1, $2, $3, '{qwen3-32b}') on conflict do nothing`, [platform.id, gateway.id, vllm.id]);
   // Metrik-Endpunkte des Mock-Servers, damit Lasttests Messwerte der Komponenten erfassen.
   await query(
     `insert into platform_sizing (platform_id, config) values ($1, $2) on conflict (platform_id) do nothing`,
     [platform.id, JSON.stringify({ metrics: Object.fromEntries(['gpu', 'inference', 'gateway'].map((k) => [k, { urls: [`${MOCK_URL}/metrics/${k}`], api_key_id: null }])) })],
   );
+  await query(`update endpoints set spec = $2 where id = $1`, [gateway.id, JSON.stringify({ product: 'litellm', instances: 2 })]);
+  await query(`update endpoints set spec = $2, metrics_url = $3 where id = $1`, [vllm.id, JSON.stringify({ provider: 'vllm', hosting: 'self', served_models: ['Qwen/Qwen3-32B'] }), `${MOCK_URL}/metrics/inference`]);
+  // Inventar: Rechenzentrum, Kubernetes, zwei GPUs (eine mit MIG) und ihre Zuordnung.
+  const dc = await upsertComponent(platform, { name: `Rechenzentrum Frankfurt${suffix}`, kind: 'datacenter', spec: { provider: 'on_prem', on_prem: true, region: 'Frankfurt', country: 'DE', certifications: ['ISO 27001', 'BSI C5'], renewable_energy: true, pue: 1.3 } });
+  const k8s = await upsertComponent(platform, { name: `Kubernetes${suffix}`, kind: 'kubernetes', spec: { operation: 'self_managed', distribution: 'rke2', version: '1.31', certifications: [] } });
+  const gpu1 = await upsertComponent(platform, { name: `GPU H100 #1${suffix}`, kind: 'gpu', metrics_url: `${MOCK_URL}/metrics/gpu`, spec: { gpu_type: 'h100', memory_gb: 80, mig: { enabled: true, layout: [{ profile: '3g.40gb', slices: 3, memory_gb: 40 }, { profile: '4g.40gb', slices: 4, memory_gb: 40 }] } } });
+  const gpu2 = await upsertComponent(platform, { name: `GPU H100 #2${suffix}`, kind: 'gpu', metrics_url: `${MOCK_URL}/metrics/gpu`, spec: { gpu_type: 'h100', memory_gb: 80, mig: { enabled: false, layout: [] } } });
+  await query('delete from platform_links where platform_id = $1', [platform.id]);
+  const link = (kind, from, to, data = {}) => query('insert into platform_links (platform_id, kind, from_id, to_id, data) values ($1, $2, $3, $4, $5)', [platform.id, kind, from.id, to.id, JSON.stringify(data)]);
+  await link('hosted_in', k8s, dc);
+  await link('cluster', gpu1, k8s);
+  await link('cluster', gpu2, k8s);
+  await link('hosted_in', gpu1, dc);
+  await link('hosted_in', gpu2, dc);
+  await link('runs_on', vllm, gpu2);
   platforms[env] = { platform, gateway, vllm, mcp };
 }
+
+// Modellportfolio: fachliche Modelle aus den gefundenen Modellen der Endpoints (mehrere Endpoints können dasselbe Modell liefern).
+async function portfolioModel(name, meta, members) {
+  const p = await one(
+    `insert into portfolio_models (tenant_id, name, provider, license, origin, open_weights, revision, quantization, capabilities, context_length, visibility)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'global')
+     on conflict (tenant_id, name) do update set provider = excluded.provider, license = excluded.license, origin = excluded.origin, open_weights = excluded.open_weights,
+       revision = excluded.revision, quantization = excluded.quantization, capabilities = excluded.capabilities, context_length = excluded.context_length returning *`,
+    [tenant.id, name, meta.provider, meta.license, meta.origin, meta.open_weights, meta.revision ?? null, meta.quantization ?? null, meta.capabilities, meta.context_length ?? null],
+  );
+  for (const [endpointId, modelName] of members) {
+    await query(
+      `update endpoint_models set portfolio_id = $3, alias = $4, license = $5, provider = $6, origin = $7, open_weights = $8, revision = $9, quantization = $10, capabilities = $11, context_length = $12
+       where endpoint_id = $1 and name = $2`,
+      [endpointId, modelName, p.id, p.name, p.license, p.provider, p.origin, p.open_weights, p.revision, p.quantization, p.capabilities, p.context_length],
+    );
+  }
+}
+const both = (pick) => ['dev', 'prod'].map((env) => pick(platforms[env]));
+await portfolioModel('mock-small', { provider: 'Mock AG', license: 'MIT', origin: 'DE', open_weights: true, revision: 'mock-1', capabilities: ['tools', 'json'] }, both((p) => [p.gateway.id, 'mock-small']));
+await portfolioModel('mock-large', { provider: 'Mock AG', license: 'proprietär', origin: 'DE', open_weights: false, capabilities: ['tools', 'json', 'vision'] }, both((p) => [p.gateway.id, 'mock-large']));
+await portfolioModel(
+  'qwen3-32b',
+  { provider: 'Alibaba Cloud', license: 'Apache-2.0', origin: 'CN', open_weights: true, revision: 'a9c98e6', quantization: 'bf16', capabilities: ['tools', 'json', 'reasoning'], context_length: 32768 },
+  both((p) => [p.vllm.id, 'Qwen/Qwen3-32B']).concat(both((p) => [p.gateway.id, 'qwen3-32b'])),
+);
 
 // Modell für die KI-Analyse der Läufe (Einstellung je Mandant).
 await query(`insert into app_settings (key, value) values ($1, $2) on conflict (key) do nothing`, [`analysis_model:${tenant.id}`, JSON.stringify({ endpoint_id: platforms.dev.gateway.id, model: 'mock-large' })]);

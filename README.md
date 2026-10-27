@@ -7,14 +7,15 @@ Baseline-Vergleich, Nachweise mit Hash, Findings, Prüfberichte und ein Dashboar
 
 - **Node.js** (Fastify) und **PostgreSQL**, Job-Queue und Zeitpläne ebenfalls in Postgres (pg-boss)
 - **Keycloak-Login** (OIDC); **Mandanten**, Rollen, Berechtigungen und Teams werden in der App gepflegt
-- **Ziele**: Plattformen (Dev/Prod) mit Gateway, Modell-Servern und MCP-Servern, Topologie, Status, Kill-Switch, Souveränitätszielen und Sizing
+- **Ziele**: Plattformen (Dev/Prod) mit Inventar (Rechenzentrum, Kubernetes, GPU-Server mit MIG, Inferenzserver, AI Gateway, MCP u. a.), Drag-&-Drop-Topologie, Status, Kill-Switch, Einstufung (Sicherheit, Produktionsreife, Souveränität) und Sizing (Beta). Oben rechts wählst du die Plattform, die Dashboard und alle Listen begrenzt
 - **Datensätze**: versionierte Fälle, Dokumente und Bilder mit Hash, Sprache und Sensitivität (Angriffs-Payloads nur mit eigener Berechtigung)
-- **Testkatalog**: versionierte Vorlagen und Prüfpakete (Entwurf → Prüfung → Veröffentlicht → Veraltet), Vier-Augen-Freigabe, zweite Stufe für Security-Vorlagen, Import/Export als YAML/JSON, Zuordnung zu AIC4, OWASP LLM Top 10 und SOV
+- **Testkatalog**: versionierte Vorlagen mit Test-Ziel (Plattform, LLM, Daten, Prozesse) als Kacheln (Entwurf → Prüfung → Veröffentlicht → Veraltet), Vier-Augen-Freigabe, Import/Export als YAML/JSON, Zuordnung zu AIC4, OWASP LLM Top 10 und SOV; Plattformtest „Netzwerk-Isolation“ (Air-Gap)
+- **Modellportfolio**: Modelle erscheinen nicht automatisch; du wählst gefundene Modelle der Endpoints aus und bündelst sie unter einem Namen
 - **Prüfungen** verbinden Ziel, Vorlagen in fester Version, Modelle mit Pfad (direkt/Gateway), Schwellwerte, Wiederholungen, Baseline, A/B-Vergleich, Gate und Zeitplan
 - **Läufe** mit Ergebnisklassen (bestanden, Qualitätsabweichung, Sicherheitsbefund, technischer Fehler, nicht anwendbar), Snapshot der Plattform, Nachweisen mit Kettenhash und KI-Analyse
-- **Freigaben** für Prod-Läufe und Lasttests nach dem Vier-Augen-Prinzip mit Zeitfenster, Laufzahl und Lastgrenzen; Kill-Switch sperrt eine Plattform sofort
+- **Freigaben** (Tab in *Prüfungen*) für Prod-Läufe und Lasttests nach dem Vier-Augen-Prinzip mit Zeitfenster, Laufzahl und Lastgrenzen, optional einem Team oder einer Person zugewiesen; ein Warnsymbol an *Prüfungen* zeigt offene Anträge; Kill-Switch sperrt eine Plattform sofort
 - **Findings** mit Schwere, Status, Verantwortlichem und Nachtest; **Berichte** mit Freigabe und Export
-- **Dashboard** Portfolio → Plattform → Modell mit Scorecard (Konfidenzintervalle), Eignungsprofilen, OWASP-Heatmap, Trend mit Änderungsmarkern und Souveränität (SEAL)
+- **Dashboard** der gewählten Plattform mit Kacheln zu Findings, Berichten, Souveränität und SEAL-Stufe, Scorecard (Konfidenzintervalle), Eignungsprofilen, OWASP-Heatmap und Trend mit Änderungsmarkern; darunter die Modellebene
 - **CLI und Gate** für CI/CD mit Service-Token; Exit-Code 0 bestanden, 1 nicht bestanden
 - **Hell-, Dunkel- und System-Modus**, **Helm-Chart** für Kubernetes
 
@@ -94,7 +95,7 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
   vollen Zugriff haben. Zählt nur, wenn Keycloak die E-Mail als bestätigt meldet (`email_verified`).
 - **Rollen** sind global definiert und werden je Mandant vergeben (*Verwaltung › Mitglieder & Teams*). Mitgeliefert:
   *Administrator*, *Engagement Lead* (Prod-Freigaben, Berichte, Findings, Mitglieder), *Test Engineer*,
-  *Red Teamer* (sieht Angriffs-Payloads), *Reviewer* (gibt Vorlagen, Pakete und Berichte frei), *Kunden-Viewer*
+  *Red Teamer* (sieht Angriffs-Payloads), *Reviewer* (gibt Vorlagen und Berichte frei), *Kunden-Viewer*
   (nur Plattform- und Berichtsebene) und *Service Account* (CI/CD). Weitere Rollen sind frei definierbar.
 - **Vier-Augen-Prinzip** gilt für Katalogfreigaben, Prod-Läufe und Berichte: Wer einreicht oder beantragt, entscheidet nicht – auch nicht in einem Ein-Personen-Setup.
 - **Service-Tokens** (`sat_…`, *Verwaltung › Zugangsdaten*) gelten für einen Mandanten und dürfen Prüfungen starten und Ergebnisse lesen.
@@ -123,7 +124,7 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
 Der Weg zu einem belastbaren Ergebnis, am Beispiel OCR:
 
 1. **Datensatz** hochladen (*Katalog › Datensätze*): Dokumente als Bilder und eine CSV/JSONL mit den erwarteten Feldern samt Typ (Zahl mit Toleranz, Datum, IBAN, Wahrheitswert, Stichwörter, exakt).
-2. **Vorlage** anlegen (*Katalog › Vorlagen & Pakete*): Testart OCR, Datensatz in fester Version, Voraussetzung „Vision“, Gewichte je Feld. Ein Reviewer gibt sie frei.
+2. **Vorlage** anlegen (*Katalog › Vorlagen*): Testart OCR, Datensatz in fester Version, Voraussetzung „Vision“, Gewichte je Feld. Ein Reviewer gibt sie frei.
 3. **Prüfung** anlegen (*Prüfen › Prüfungen*): Plattform, Vorlage, Modelle, Schwellwerte (z. B. `score >= 0.9`), Wiederholungen, Zeitplan.
 4. **Lauf** starten. Modelle ohne Vision gelten als „nicht anwendbar“, nicht als Fehler. Das Ergebnis geht gegen die Schwellwerte und die Baseline; der Bericht entsteht automatisch.
 

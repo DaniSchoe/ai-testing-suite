@@ -1,4 +1,4 @@
-// End-to-End-Prüfung von Version 0.4.0 gegen einen laufenden Server (Dev-Modus) und den Mock: Datensätze, Testkatalog mit
+// End-to-End-Prüfung von Version 0.5.0 gegen einen laufenden Server (Dev-Modus) und den Mock: Datensätze, Testkatalog mit
 // Freigabeprozess, Import/Export, Prüfungen, Läufe, Freigaben für Prod, Kill-Switch, Findings mit Nachtest, Berichte,
 // Nachweise, Gate für CI/CD, Dashboard und Mandantentrennung.
 // Voraussetzung: mock-llm.js läuft, Seed wurde ausgeführt. Aufruf: node tools/e2e-check.js [http://localhost:8080]
@@ -141,16 +141,15 @@ step('Vier-Augen-Prinzip für Freigaben');
 const attackDs = (await rita('/api/datasets')).data.find((d) => d.key === 'security-owasp-llm-de');
 assert.ok(attackDs, 'Offizieller Angriffsdatensatz sichtbar');
 assert.equal((await alice('/api/catalog/templates', { method: 'POST', body: { name: `Sec ${suffix}`, type: 'security', spec: { dataset: { key: 'security-owasp-llm-de', version: '1.0.0' }, config: {} } } })).status, 403, 'Security-Datensatz braucht security.payloads');
-r = await rita('/api/catalog/templates', { method: 'POST', body: { name: `Sec ${suffix}`, type: 'security', security: true, spec: { dataset: { key: 'security-owasp-llm-de', version: '1.0.0' }, config: {}, suggested_thresholds: [{ metric: 'score', op: '>=', value: 0.5 }] } } });
+r = await rita('/api/catalog/templates', { method: 'POST', body: { name: `Sec ${suffix}`, type: 'security', spec: { dataset: { key: 'security-owasp-llm-de', version: '1.0.0' }, config: {}, suggested_thresholds: [{ metric: 'score', op: '>=', value: 0.5 }] } } });
 ok(r, 'Security-Vorlage');
 const secTpl = r.data;
 ok(await rita(`/api/catalog/templates/${secTpl.id}/versions/1.0.0/submit`, { method: 'POST' }));
 r = await bob(`/api/catalog/templates/${secTpl.id}/versions/1.0.0/approve`, { method: 'POST' });
 ok(r);
-assert.equal(r.data.awaiting, 'security', 'Erste Stufe: fachliche Freigabe');
-assert.equal((await bob(`/api/catalog/templates/${secTpl.id}/versions/1.0.0/approve`, { method: 'POST' })).status, 403, 'Zweite Stufe nicht durch dieselbe Person / ohne security.payloads');
-ok(await admin(`/api/catalog/templates/${secTpl.id}/versions/1.0.0/approve`, { method: 'POST' }), 'Sicherheitsfreigabe');
-step('Security-Vorlagen: zweistufige Freigabe');
+assert.equal(r.data.awaiting, undefined, 'Keine zusätzliche Sicherheitsstufe mehr');
+assert.equal(r.data.status, 'published', 'Eine Freigabe genügt');
+step('Security-Vorlagen: normale Freigabe (keine zusätzliche Stufe)');
 
 // Update-Hinweis bei neuer Version: Prüfung bleibt auf ihrer Version.
 r = await alice('/api/audits', {
@@ -263,6 +262,19 @@ ok(r);
 assert.equal((await carol(`/api/approvals/${r.data.id}/decision`, { method: 'POST', body: { decision: 'approve' } })).status, 403, 'Eigenen Antrag nicht freigeben');
 ok(await admin(`/api/approvals/${r.data.id}/decision`, { method: 'POST', body: { decision: 'reject', note: 'nicht nötig' } }));
 step('Eigener Antrag kann nicht selbst entschieden werden');
+
+// Zuweisung: Antrag an eine bestimmte Person; andere sehen ihn nicht.
+r = await alice(`/api/audits/${prodAudit.id}/approvals`, { method: 'POST', body: { assigned_user_id: people.carol.id, note: 'für Carol' } });
+ok(r, 'Antrag mit Zuweisung');
+const assigned = r.data;
+assert.equal(assigned.assigned_user_id, people.carol.id);
+assert.ok((await carol('/api/approvals?status=pending')).data.some((a) => a.id === assigned.id && a.can_decide), 'Zugewiesene Person sieht und entscheidet');
+assert.ok((await carol('/api/approvals/summary')).data.pending >= 1, 'Hinweis in der Navigation');
+assert.ok(!(await bob('/api/approvals?status=pending')).data.some((a) => a.id === assigned.id), 'Andere ohne Zuweisung sehen den Antrag nicht');
+assert.equal((await bob(`/api/approvals/${assigned.id}/decision`, { method: 'POST', body: { decision: 'approve' } })).status, 403, 'Nur die zugewiesene Person entscheidet');
+assert.equal((await alice(`/api/audits/${prodAudit.id}/approvals`, { method: 'POST', body: { assigned_user_id: people.alice.id } })).status, 409, 'Offener Antrag vorhanden');
+ok(await carol(`/api/approvals/${assigned.id}/decision`, { method: 'POST', body: { decision: 'reject', note: 'später' } }));
+step('Freigaben: Zuweisung an Person, Sichtbarkeit und Hinweis');
 
 // Kill-Switch.
 ok(await carol(`/api/platforms/${dev.id}/lock`, { method: 'POST', body: { reason: 'Test des Kill-Switch' } }));
@@ -392,6 +404,73 @@ assert.ok(r.data.some((t) => t.key.startsWith('rechnen-') && t.latest.status ===
 assert.equal((await adminB('/api/catalog/import', { method: 'POST', body: { content: 'schema: fremd/v9\nkind: template\n', format: 'yaml' } })).status, 400);
 step('Export/Import (YAML/JSON, mit Datensatz) und Mandantentrennung');
 
+// ------------------------------------------------------------------ 0.5.0: Inventar, Topologie, Einstufung, Portfolio
+const presets = (await carol('/api/inventory/presets')).data;
+assert.ok(presets.gpu_types['rtx-pro-6000'] && presets.gpu_types.b300 && presets.hosting_providers.length > 5, 'Voreinstellungen für das Inventar');
+const spec = (kind, extra) => ({ name: `${kind}-${suffix}`, kind, platform_id: dev.id, spec: extra });
+assert.equal((await admin('/api/endpoints', { method: 'POST', body: spec('datacenter', { provider: 'gibtsnicht' }) })).status, 400, 'Unbekannter Hosting-Anbieter');
+assert.equal((await admin('/api/endpoints', { method: 'POST', body: spec('gpu', { gpu_type: 'h100', mig: { enabled: true, layout: [{ profile: '7g.80gb', slices: 7 }, { profile: '1g.10gb', slices: 1 }] } }) })).status, 400, 'MIG: höchstens 7 Slices');
+r = await admin('/api/endpoints', { method: 'POST', body: spec('gpu', { gpu_type: 'custom', custom: { name: 'AMD MI300X', memory_gb: 192, mig_capable: false } }) });
+ok(r, 'Eigener GPU-Typ');
+const customGpu = r.data.endpoint;
+assert.equal(customGpu.base_url, null, 'GPU hat keine URL');
+r = await admin('/api/endpoints', { method: 'POST', body: spec('datacenter', { provider: 'hetzner', country: 'de', region: 'Falkenstein', certifications: ['ISO 27001'] }) });
+ok(r, 'Rechenzentrum');
+const newDc = r.data.endpoint;
+assert.equal(newDc.spec.country, 'DE');
+const devFull = (await admin(`/api/platforms/${dev.id}`)).data;
+assert.ok(devFull.links.length >= 5 && devFull.endpoints.some((e) => e.kind === 'gpu' && e.spec.mig.enabled), 'Seed-Inventar mit MIG-GPU');
+const vllmEp = devFull.endpoints.find((e) => e.kind === 'llm');
+const migGpu = devFull.endpoints.find((e) => e.kind === 'gpu' && e.spec.mig.enabled);
+const gateway = devFull.endpoints.find((e) => e.kind === 'ai_proxy');
+const links = devFull.links.map((l) => ({ kind: l.kind, from_id: l.from_id, to_id: l.to_id, data: l.data }));
+assert.equal((await admin(`/api/platforms/${dev.id}/topology`, { method: 'PUT', body: { links: [{ kind: 'runs_on', from_id: vllmEp.id, to_id: newDc.id }] } })).status, 400, 'Inferenzserver läuft nicht auf einem Rechenzentrum');
+assert.equal((await admin(`/api/platforms/${dev.id}/topology`, { method: 'PUT', body: { links: [{ kind: 'runs_on', from_id: vllmEp.id, to_id: migGpu.id, data: { mig_slice: 5 } }] } })).status, 400, 'MIG-Instanz existiert nicht');
+r = await admin(`/api/platforms/${dev.id}/topology`, {
+  method: 'PUT',
+  body: { links: [...links.filter((l) => l.kind !== 'runs_on'), { kind: 'runs_on', from_id: vllmEp.id, to_id: migGpu.id, data: { mig_slice: 1 } }], routes: [{ gateway_endpoint_id: gateway.id, backend_endpoint_id: vllmEp.id, models: ['qwen3-32b'] }], layout: { [vllmEp.id]: { x: 100, y: 40 } }, served_models: { [vllmEp.id]: ['Qwen/Qwen3-32B'] } },
+});
+ok(r, 'Topologie speichern');
+assert.equal(r.data.links.find((l) => l.kind === 'runs_on').data.mig_slice, 1);
+assert.deepEqual(r.data.layout[vllmEp.id], { x: 100, y: 40 });
+r = await admin(`/api/platforms/${dev.id}/assessment`);
+ok(r, 'Einstufung');
+assert.equal(r.data.sovereignty.goals.length, 8);
+assert.ok(r.data.security.checks.length >= 6 && r.data.production.checks.length >= 8);
+const sov2 = r.data.sovereignty.goals.find((g) => g.key === 'SOV-2');
+assert.ok(sov2.checks.some((c) => c.id === 'location' && c.status === 'pass'), 'Standort DE aus dem Inventar');
+assert.equal((await admin(`/api/platforms/${dev.id}/sovereignty`, { method: 'PUT', body: { min_level: 2, overrides: { 'SOV-8': { level: 3 } } } })).status, 400, 'Überschreiben braucht Begründung');
+r = await admin(`/api/platforms/${dev.id}/sovereignty`, { method: 'PUT', body: { min_level: 2, overrides: { 'SOV-8': { level: 3, reason: 'Nachweis liegt als Zertifikat vor' } } } });
+ok(r, 'Überschreiben mit Begründung');
+assert.equal(r.data.overrides['SOV-8'].reason, 'Nachweis liegt als Zertifikat vor');
+r = await admin(`/api/platforms/${dev.id}/assessment`);
+const sov8 = r.data.sovereignty.goals.find((g) => g.key === 'SOV-8');
+assert.equal(sov8.effective, 3);
+assert.equal(sov8.override.level, 3);
+assert.equal((await carol(`/api/dashboard/platforms/${dev.id}`)).data.reports.total >= 0, true, 'Dashboard liefert Berichtszähler');
+step('Inventar, Topologie mit MIG, Einstufung und Überschreiben mit Begründung');
+
+// Modellportfolio: nur ausgewählte Modelle werden getestet.
+r = await admin('/api/portfolio');
+ok(r);
+assert.ok(['mock-small', 'mock-large', 'qwen3-32b'].every((n) => r.data.some((m) => m.name === n)), 'Portfolio aus Seed');
+const qwen = r.data.find((m) => m.name === 'qwen3-32b');
+assert.ok(qwen.members.length >= 2, 'Ein Portfolio-Modell bündelt mehrere gefundene Modelle');
+assert.equal((await admin('/api/portfolio', { method: 'POST', body: { name: `leer-${suffix}`, members: [] } })).status, 400, 'Ohne gefundenes Modell kein Portfolio-Modell');
+assert.equal((await admin('/api/portfolio', { method: 'POST', body: { name: `doppelt-${suffix}`, members: [{ endpoint_id: qwen.members[0].endpoint_id, model_name: qwen.members[0].model_name }] } })).status, 400, 'Bereits zugeordnetes Modell');
+r = await admin('/api/portfolio/candidates');
+ok(r);
+assert.ok(!r.data.some((c) => c.model_name === 'mock-small'), 'Zugeordnete Modelle sind keine Kandidaten');
+assert.equal((await kurt('/api/portfolio/candidates')).status, 403);
+step('Modellportfolio: Auswahl gefundener Modelle');
+
+// Netzwerk-Test als Plattform-Vorlage mit Test-Ziel.
+r = await admin('/api/catalog/templates?target=platform');
+ok(r);
+assert.ok(r.data.some((t) => t.key === 'network-isolation' && t.target === 'platform'), 'Vorlage Netzwerk-Isolation');
+assert.equal((await admin('/api/catalog/packs')).status, 404, 'Pakete entfallen');
+step('Vorlagen mit Test-Ziel, Pakete entfernt');
+
 // ------------------------------------------------------------------ Audit-Log
 r = await admin('/api/audit-log?q=approval');
 ok(r);
@@ -401,4 +480,4 @@ r = await admin('/api/audit-log?action=platform.lock');
 assert.ok(r.data.rows.length >= 1);
 step('Audit-Log enthält Freigaben und Kill-Switch');
 
-console.log('0.4.0 End-to-End-Prüfung erfolgreich');
+console.log('0.5.0 End-to-End-Prüfung erfolgreich');

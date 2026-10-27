@@ -447,7 +447,6 @@ function General({ form, set, editable }) {
 
 function Scope({ form, set, editable, auditId, onAdopted }) {
   const templates = useApi('/api/catalog/templates?status=published');
-  const packs = useApi('/api/catalog/packs');
   const [adding, setAdding] = useState(false);
   const [run, error] = useAction();
   const move = (i, patch) => set({ items: form.items.map((it, j) => (j === i ? { ...it, ...patch } : it)) });
@@ -465,7 +464,7 @@ function Scope({ form, set, editable, auditId, onAdopted }) {
       action={
         editable && (
           <button className="btn sm" onClick={() => setAdding(true)}>
-            <Plus size={13} /> Vorlage oder Paket
+            <Plus size={13} /> Vorlage
           </button>
         )
       }
@@ -510,7 +509,6 @@ function Scope({ form, set, editable, auditId, onAdopted }) {
       {adding && (
         <AddItems
           templates={templates.data ?? []}
-          packs={packs.data ?? []}
           onClose={() => setAdding(false)}
           onAdd={(add) => (set({ items: [...form.items, ...add] }), setAdding(false))}
         />
@@ -519,32 +517,23 @@ function Scope({ form, set, editable, auditId, onAdopted }) {
   );
 }
 
-function AddItems({ templates, packs, onAdd, onClose }) {
+function AddItems({ templates, onAdd, onClose }) {
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState([]);
   const shown = templates.filter((t) => `${t.name} ${t.key}`.toLowerCase().includes(q.toLowerCase()));
-  const publishedPacks = packs.filter((p) => p.latest.status === 'published');
   const toggle = (key) => setPicked((p) => (p.includes(key) ? p.filter((k) => k !== key) : [...p, key]));
   function add() {
     const out = [];
     for (const key of picked) {
-      if (key.startsWith('pack:')) {
-        const pack = publishedPacks.find((p) => p.id === key.slice(5));
-        for (const it of pack.latest.items) {
-          const t = templates.find((x) => x.key === it.template_key);
-          out.push({ template_version_id: it.template_version_id, name: t?.name ?? it.template_key, key: it.template_key, version: it.version, type: t?.type, requires: [] });
-        }
-      } else {
-        const t = templates.find((x) => x.id === key);
-        const spec = t.latest;
-        out.push({ template_version_id: spec.id, name: t.name, key: t.key, version: spec.version, type: t.type, requires: spec.requires });
-      }
+      const t = templates.find((x) => x.id === key);
+      const spec = t.latest;
+      out.push({ template_version_id: spec.id, name: t.name, key: t.key, version: spec.version, type: t.type, requires: spec.requires });
     }
     onAdd(out);
   }
   return (
     <Modal
-      title="Vorlagen und Pakete hinzufügen"
+      title="Vorlagen hinzufügen"
       onClose={onClose}
       footer={
         <>
@@ -558,19 +547,6 @@ function AddItems({ templates, packs, onAdd, onClose }) {
       }
     >
       <input type="search" placeholder="Suchen…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
-      {publishedPacks.length > 0 && (
-        <>
-          <div className="nav-section">Prüfpakete</div>
-          <div className="pick-list">
-            {publishedPacks.map((p) => (
-              <label key={p.id}>
-                <input type="checkbox" checked={picked.includes(`pack:${p.id}`)} onChange={() => toggle(`pack:${p.id}`)} />
-                <span style={{ fontWeight: 600 }}>{p.name}</span> <span className="sub">{p.latest.items.length} Vorlagen</span>
-              </label>
-            ))}
-          </div>
-        </>
-      )}
       <div className="nav-section">Vorlagen</div>
       <div className="pick-list" style={{ maxHeight: 340 }}>
         {shown.map((t) => (
@@ -589,7 +565,7 @@ function ModelsTab({ form, set, editable }) {
   const platform = useApi(form.platform_id ? `/api/platforms/${form.platform_id}` : null);
   const aliases = useMemo(() => {
     const names = new Set();
-    for (const e of platform.data?.endpoints ?? []) for (const m of e.models ?? []) if (m.available) names.add(m.alias ?? m.name);
+    for (const e of platform.data?.endpoints ?? []) for (const m of e.models ?? []) if (m.available && m.portfolio_id) names.add(m.alias ?? m.name);
     return [...names].sort();
   }, [platform.data]);
   const selected = new Map(form.models.map((m) => [m.alias, m.path]));

@@ -49,7 +49,7 @@ Postgres ist die einzige Abhängigkeit: Daten, Sessions und die Job-Queue samt C
 | `runs.manage_all` | Läufe und Zeitpläne anderer abbrechen/ändern |
 | `endpoints.manage` | Plattformen und Komponenten, Modellkatalog, Sizing, KI-Analyse-Modell |
 | `users.manage`, `teams.manage` | Mitglieder, Rollenvergabe (nur eigene Rechte), Teams, Service-Tokens |
-| `catalog.publish` | Vorlagen und Pakete im Review prüfen und veröffentlichen |
+| `catalog.publish` | Vorlagen im Review prüfen und veröffentlichen |
 | `security.payloads` | Angriffs-Datensätze, Prompts und Antworten aus Security-Tests sehen; zweite Freigabestufe für Security-Vorlagen |
 | `runs.prod` | Prod-Läufe und Lasttests freigeben, Plattform sperren (Kill-Switch) |
 | `reports.approve` | Prüfberichte freigeben, KI-Entwurf übernehmen |
@@ -67,7 +67,7 @@ Zeitpläne laufen mit den Rechten ihres Besitzers (gesperrt oder ohne `runs.star
 
 Jede Anfrage gehört zu einem Mandanten (`X-Tenant-Id`, sonst der erste des Users; `user.tenant_id`). Plattformen, Komponenten,
 Datensätze und Vorlagen (eigene), Prüfungen, Zugangsdaten, Läufe, Findings, Berichte, Freigaben und Zeitpläne tragen `tenant_id`;
-alle Abfragen filtern darauf. Offizielle Vorlagen, Pakete, Datensätze und Kategorien haben `tenant_id is null` und sind für alle
+alle Abfragen filtern darauf. Offizielle Vorlagen, Datensätze und Kategorien haben `tenant_id is null` und sind für alle
 lesbar, aber schreibgeschützt. Die Umgebung (Dev/Prod/alle) ist eine Ansicht der Oberfläche (`?environment=`), keine Berechtigung.
 
 ### API-Keys
@@ -84,7 +84,7 @@ vLLM-Endpunkte brauchen keine Berechtigung; dort bleibt der API-Key leer.
 Secrets (API-Keys) werden mit AES-256-GCM verschlüsselt gespeichert,
 der Schlüssel wird aus `APP_SECRET` abgeleitet.
 
-## Modellkatalog
+## Modellportfolio
 
 LiteLLM und vLLM benennen dasselbe Modell unterschiedlich (z. B. `qwen3-32b` im Gateway,
 `Qwen/Qwen3-32B` am vLLM-Endpunkt), und es gibt einen vLLM-Endpunkt pro Modell. Deshalb:
@@ -167,12 +167,12 @@ Exit-Code. Service-Tokens (`sat_…`) sind je Mandant, nur Hash gespeichert, wid
 
 ## Dashboard
 
-Drei Ebenen: Portfolio → Plattform → Modell (`dashboard.js`, `/api/dashboard/*`). Es zählen nur Läufe von Prüfungen, keine Testläufe.
+Die gewählte Plattform (Auswahl oben rechts) und darunter das Modell (`dashboard.js`, `/api/dashboard/*`). Kacheln führen zu Findings, Berichten und Souveränität. Es zählen nur Läufe von Prüfungen, keine Testläufe.
 Die **Scorecard** hat fünf Dimensionen (Qualität, Sicherheit, Performance, Effizienz, Souveränität) mit dokumentierter Normalisierung
 (`/api/dashboard/normalization`, Version 1): Fallzahlen werden gepoolt und mit Wilson-Intervall ausgewiesen, Perzentile über Rohproben
 (nie Mittel von Perzentilen), „geringe Aussagekraft“ bei kleinen Stichproben. **Eignungsprofile** (Chat, Coding, OCR, Agent) gewichten die
 Dimensionen; unter 60 % Abdeckung heißt das Ergebnis „zu wenig Daten“. Die OWASP-Heatmap trennt Blockaden durch das Gateway von Verweigerungen des Modells.
-**Souveränität**: je Ziel SOV-1 bis SOV-8 eine deklarierte Stufe SEAL-0 bis 4 an der Plattform; aus der Bestehensquote (≥95 % → 4, ≥80 % → 3, ≥60 % → 2, ≥30 % → 1) leitet das System eine gemessene Stufe ab; wirksam ist das Minimum.
+**Souveränität und Einstufung** (`assessment.js`, `/api/platforms/:id/assessment`): Die Einstufung entsteht aus Inventar, Topologie, Modellportfolio, Betriebszustand und neuesten Tests, nicht mehr aus Erklärungen. Jeder Bereich (Sicherheit, Produktionsreife, SOV-1 bis SOV-8) besteht aus Prüfpunkten mit Status (erfüllt, teilweise, nicht erfüllt, unbekannt), Gewicht und Begründung. Punktzahl = gewichteter Anteil (erfüllt 1, teilweise 0,5; unbekannte Punkte zählen nicht), bei unter 40 % Abdeckung gibt es keine Einstufung. SEAL je Ziel aus der Punktzahl (≥95 % → 4, ≥80 % → 3, ≥60 % → 2, ≥30 % → 1); ein nicht erfülltes Prüfkriterium mit Gewicht ≥ 3 begrenzt das Ziel auf SEAL-2. Ein Ziel lässt sich mit Begründung überschreiben (Person und Zeitpunkt werden festgehalten); die Überschreibung ersetzt die abgeleitete Stufe.
 Die Kundenansicht blendet Rohdaten und Fehlermeldungen aus.
 
 ## Datenmodell
@@ -183,12 +183,13 @@ Die Kundenansicht blendet Rohdaten und Fehlermeldungen aus.
 | `users`, `roles`, `user_roles` | Personen (aus Keycloak), Rollen mit Berechtigungen, Zuordnung je Mandant |
 | `teams`, `team_members` | Teams und Mitglieder |
 | `service_tokens` | Tokens für CI/CD (Hash, Präfix, Ablauf, Widerruf) |
-| `platforms`, `platform_routes` | Ziele (Umgebung, Sperre, Souveränitätsziele) und Topologie Gateway → Backend |
+| `platforms`, `platform_routes` | Ziele (Umgebung, Sperre, Mindeststufe und Überschreibungen der Souveränität, Layout der Topologie) und Routen Gateway → Inferenzserver |
 | `endpoints`, `endpoint_models` | Komponenten einer Plattform (AI Proxy, LLM, MCP) und abgefragte Modelle mit Alias und Metadaten |
 | `api_keys` | API-Key-Sammlung (verschlüsselt) mit Teams/Usern |
 | `datasets`, `dataset_versions`, `dataset_cases`, `dataset_files` | versionierte Datensätze |
 | `templates`, `template_versions`, `categories`, `template_version_categories` | Vorlagen mit Versionen und Rahmenwerks-Kategorien |
-| `packs`, `pack_versions` | Prüfpakete |
+| `platform_links` | Zuordnungen im Inventar: `hosted_in` (GPU/Kubernetes → Rechenzentrum), `cluster` (GPU → Kubernetes), `runs_on` (Inferenzserver → GPU, `data.mig_slice` für MIG) |
+| `portfolio_models`, `portfolio_model_teams` | Modellportfolio; `endpoint_models.portfolio_id` ordnet gefundene Modelle zu |
 | `audits`, `audit_teams` | Prüfungen |
 | `schedules` | Cron oder einmaliger Zeitpunkt je Prüfung |
 | `approvals` | Anträge und Freigaben für Prod und Last |
@@ -208,6 +209,10 @@ Key) eine Analyse: Bewertung, Einordnung der Ergebnisse (Schwellen, Baseline, Sc
 Empfehlungen. Der Worker schickt dafür eine verkürzte Fassung der Ergebnisse (`analysisBrief.js`) und speichert
 den Text in `runs.analysis` (`analysis_status`: pending, done, error, skipped). Ein Fehler dabei lässt den Lauf
 nie scheitern; `POST /api/runs/:id/analysis` erzeugt die Analyse neu.
+
+## Inventar und Topologie
+
+Die Komponenten einer Plattform bilden ein Inventar (`endpoints`, Spalte `spec` je Art, `inventory.js`/`inventorySpec.js`): Rechenzentrum (Anbieter, On-Prem, Region, Zertifikate wie NIST oder C5), Kubernetes (selbst betrieben oder managed, Distribution), GPU-Server (H100, H200, RTX PRO 6000, B100, B200, B300 oder eigener Typ; jede GPU ein Eintrag, optional MIG-Layout und DCGM-Endpunkt), Inferenzserver (selbst betrieben oder Managed Service wie ChatGPT oder Claude), AI Gateway sowie MCP, Vektor-DB, IAM und Observability. Die Topologie (`PUT /api/platforms/:id/topology`) legt per Drag & Drop fest, wo Komponenten stehen, auf welcher GPU bzw. MIG-Instanz ein Inferenzserver läuft, welche Modelle er bereitstellt und welche Modelle das Gateway an ihn routet.
 
 ## Plattform
 

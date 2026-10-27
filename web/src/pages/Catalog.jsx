@@ -10,6 +10,7 @@ import {
   ErrorBox,
   Field,
   fmt,
+  getPlatform,
   JsonField,
   LifecycleBadge,
   Loading,
@@ -666,11 +667,11 @@ export function TemplateDetail() {
 function TestRunDialog({ template, version, onClose }) {
   const navigate = useNavigate();
   const platforms = useApi('/api/platforms');
-  const [platformId, setPlatformId] = useState('');
+  const [platformId, setPlatformId] = useState(getPlatform() ?? '');
   const platform = useApi(platformId ? `/api/platforms/${platformId}` : null);
   const [model, setModel] = useState('');
   const [run, error, busy] = useAction();
-  const models = [...new Set((platform.data?.endpoints ?? []).flatMap((e) => (e.models ?? []).filter((m) => m.available).map((m) => m.alias ?? m.name)))];
+  const models = [...new Set((platform.data?.endpoints ?? []).flatMap((e) => (e.models ?? []).filter((m) => m.available && m.portfolio_id).map((m) => m.alias ?? m.name)))];
   const start = () =>
     run(async () => {
       const res = await api(`/api/catalog/templates/${template.id}/versions/${version.version}/test-run`, {
