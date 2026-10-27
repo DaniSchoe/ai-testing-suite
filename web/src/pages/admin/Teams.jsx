@@ -6,6 +6,8 @@ import { api, Card, initials, Modal, useApi } from '../../lib.jsx';
 export default function Teams() {
   const teams = useApi('/api/teams');
   const users = useApi('/api/members');
+  const org = useApi('/api/organization');
+  const departments = (org.data ?? []).find((t) => t.current)?.departments ?? [];
   const [editing, setEditing] = useState(null);
 
   async function remove(t) {
@@ -64,6 +66,7 @@ export default function Teams() {
         <TeamEditor
           team={editing}
           users={users.data ?? []}
+          departments={departments}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -75,8 +78,8 @@ export default function Teams() {
   );
 }
 
-function TeamEditor({ team, users, onClose, onSaved }) {
-  const [form, setForm] = useState({ name: team.name ?? '', description: team.description ?? '' });
+export function TeamEditor({ team, users, departments = [], onClose, onSaved }) {
+  const [form, setForm] = useState({ name: team.name ?? '', description: team.description ?? '', department_id: team.department_id ?? '' });
   const [memberIds, setMemberIds] = useState(() => new Set(team.members.map((m) => m.id)));
   const [filter, setFilter] = useState('');
   const [error, setError] = useState(null);
@@ -87,7 +90,7 @@ function TeamEditor({ team, users, onClose, onSaved }) {
     try {
       await api(team.id ? `/api/teams/${team.id}` : '/api/teams', {
         method: team.id ? 'PUT' : 'POST',
-        body: { ...form, memberIds: [...memberIds] },
+        body: { ...form, department_id: form.department_id || null, memberIds: [...memberIds] },
       });
       onSaved();
     } catch (e) {
@@ -119,6 +122,17 @@ function TeamEditor({ team, users, onClose, onSaved }) {
         <label className="field">
           <span>Beschreibung</span>
           <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+        </label>
+        <label className="field">
+          <span>Abteilung</span>
+          <select value={form.department_id} onChange={(e) => setForm({ ...form, department_id: e.target.value })}>
+            <option value="">Keine Abteilung</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
       <label className="field" style={{ marginBottom: 6 }}>

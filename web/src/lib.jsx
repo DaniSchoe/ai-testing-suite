@@ -1,6 +1,6 @@
 // Gemeinsame Helfer: API-Zugriff, Formatierung, Theme, kleine UI-Bausteine.
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { Activity, Boxes, Bot, Braces, Brain, Building2, Code2, Cpu, Database, FlaskConical, Gauge, Globe, HeartPulse, KeyRound, Lightbulb, Lock, MemoryStick, Plug, Route, ScanText, ShieldAlert, Users as UsersIcon, X } from 'lucide-react';
+import { Activity, Boxes, Bot, Braces, Brain, Building2, Cable, Code2, Cpu, Database, FlaskConical, Gauge, Globe, HeartPulse, KeyRound, Lightbulb, Lock, MemoryStick, Plug, Route, ScanText, Server, ShieldAlert, Users as UsersIcon, X } from 'lucide-react';
 
 // Mandant und Umgebung gelten für die ganze Oberfläche; ein Wechsel lädt die Seite neu.
 const store = {
@@ -347,7 +347,9 @@ export const KIND_META = {
   mcp: { label: 'MCP', Icon: Plug, color: 'var(--warn, #c77d12)' },
   datacenter: { label: 'Rechenzentrum', Icon: Building2, color: 'var(--text-2)' },
   kubernetes: { label: 'Kubernetes', Icon: Boxes, color: 'var(--primary)' },
-  gpu: { label: 'GPU-Server', Icon: MemoryStick, color: 'var(--warn, #c77d12)' },
+  server: { label: 'Server', Icon: Server, color: 'var(--text-2)' },
+  gpu: { label: 'GPU', Icon: MemoryStick, color: 'var(--warn, #c77d12)' },
+  interconnect: { label: 'Interconnect', Icon: Cable, color: 'var(--primary)' },
   vector_db: { label: 'Vektor-Datenbank', Icon: Database, color: 'var(--text-2)' },
   iam: { label: 'Identitätsmanagement', Icon: KeyRound, color: 'var(--text-2)' },
   observability: { label: 'Observability', Icon: Activity, color: 'var(--text-2)' },

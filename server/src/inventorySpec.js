@@ -1,5 +1,5 @@
 // Prüfung und Bereinigung der typspezifischen Angaben der Inventar-Komponenten und ihrer Zuordnungen.
-import { GATEWAY_PRODUCTS, GPU_TYPES, HOSTING_PROVIDERS, INFERENCE_PROVIDERS, K8S_DISTRIBUTIONS } from './inventory.js';
+import { GATEWAY_PRODUCTS, GPU_TYPES, HOSTING_PROVIDERS, INFERENCE_PROVIDERS, INTERCONNECT_TYPES, K8S_DISTRIBUTIONS, K8S_ROLES, SERVER_TYPES } from './inventory.js';
 
 const bad = (message) => Object.assign(new Error(message), { statusCode: 400 });
 const str = (v, max = 200) => (v === undefined || v === null ? null : String(v).trim().slice(0, max) || null);
@@ -19,6 +19,10 @@ function datacenter(s) {
     certifications: list(s.certifications),
     renewable_energy: tri(s.renewable_energy),
     pue: num(s.pue),
+    // Optional: verfügbare Ressourcen des Rechenzentrums.
+    cpu_cores: num(s.cpu_cores),
+    ram_gb: num(s.ram_gb),
+    storage_tb: num(s.storage_tb),
   };
 }
 
@@ -31,6 +35,10 @@ function kubernetes(s) {
     distribution_name: str(s.distribution_name),
     version: str(s.version, 40),
     certifications: list(s.certifications),
+    // Knoten des Clusters: Server mit ihrer Rolle.
+    nodes: (Array.isArray(s.nodes) ? s.nodes : [])
+      .map((n) => ({ server_id: str(n?.server_id), role: n?.role }))
+      .filter((n) => n.server_id && K8S_ROLES.some((r) => r.key === n.role)),
   };
 }
 
@@ -69,13 +77,58 @@ function inference(s) {
   const provider = s.provider ?? 'vllm';
   const p = INFERENCE_PROVIDERS.find((x) => x.key === provider);
   if (!p) throw bad('Unbekannter Anbieter des Inferenzservers');
-  return { provider, provider_name: str(s.provider_name), hosting: p.hosting, served_models: list(s.served_models) };
+  const m = s.meta ?? {};
+  return {
+    provider,
+    provider_name: str(s.provider_name),
+    hosting: p.hosting,
+    served_models: list(s.served_models),
+    // Optionale Angaben zur Inferenz (nur selbst betrieben).
+    meta: { tensor_parallel: num(m.tensor_parallel), quantization: str(m.quantization, 40), max_model_len: num(m.max_model_len), version: str(m.version, 40), notes: str(m.notes, 500) },
+  };
 }
 
 function gateway(s) {
   const product = s.product ?? 'litellm';
   if (!GATEWAY_PRODUCTS.some((x) => x.key === product)) throw bad('Unbekanntes Gateway-Produkt');
   return { product, product_name: str(s.product_name), instances: Math.max(1, Math.round(num(s.instances) ?? 1)) };
+}
+
+function server(s) {
+  const type = s.server_type ?? 'cpu';
+  if (!SERVER_TYPES.some((t) => t.key === type)) throw bad('Unbekannte Server-Art');
+  return { server_type: type, model: str(s.model), cpu_cores: num(s.cpu_cores), ram_gb: num(s.ram_gb), storage_tb: num(s.storage_tb) };
+}
+
+// Interconnect: Art und GPU-Bundles. nvlink fasst mehrere GPUs zu einer virtuellen größeren GPU zusammen, mig teilt eine GPU in Teile (Profil, Slices).
+function interconnect(s) {
+  const type = s.type ?? 'nvlink';
+  if (!INTERCONNECT_TYPES.some((t) => t.key === type)) throw bad('Unbekannte Interconnect-Art');
+  const seen = new Set();
+  const bundles = (Array.isArray(s.bundles) ? s.bundles : []).map((b, i) => {
+    const mode = b?.mode === 'mig' ? 'mig' : 'nvlink';
+    const id = str(b?.id, 40) ?? `b${i + 1}`;
+    if (seen.has(id)) throw bad('Bundle-ID doppelt');
+    seen.add(id);
+    const name = str(b?.name);
+    if (!name) throw bad('Jedes GPU-Bundle braucht einen Namen');
+    const gpuIds = list(b?.gpu_ids);
+    if (mode === 'nvlink' && gpuIds.length < 2) throw bad(`Bundle „${name}“: NVLink braucht mindestens zwei GPUs`);
+    if (mode === 'mig' && gpuIds.length !== 1) throw bad(`Bundle „${name}“: MIG teilt genau eine GPU`);
+    const out = { id, name, mode, gpu_ids: gpuIds };
+    if (mode === 'mig') {
+      out.profile = str(b?.profile, 30);
+      out.slices = Math.round(num(b?.slices) ?? 0);
+      out.memory_gb = num(b?.memory_gb);
+      if (!out.profile || !(out.slices >= 1)) throw bad(`Bundle „${name}“: Profil und Slices angeben`);
+    }
+    return out;
+  });
+  return { type, bundles };
+}
+
+function iam(s) {
+  return { services: list(s.services), enterprise_accounts: Boolean(s.enterprise_accounts), note: str(s.note, 500) };
 }
 
 // Typspezifische Angaben prüfen; unbekannte Felder fallen weg.
@@ -86,14 +139,17 @@ export function cleanSpec(kind, raw) {
   if (kind === 'gpu') return gpu(s);
   if (kind === 'llm') return inference(s);
   if (kind === 'ai_proxy') return gateway(s);
+  if (kind === 'server') return server(s);
+  if (kind === 'interconnect') return interconnect(s);
+  if (kind === 'iam') return iam(s);
   return { note: str(s.note, 500) };
 }
 
-// Zuordnungen prüfen: erlaubte Arten je Verbindung und vorhandene MIG-Instanzen.
+// Zuordnungen prüfen: erlaubte Arten je Verbindung, vorhandene MIG-Instanzen und GPU-Bundles.
 const LINK_RULES = {
-  hosted_in: [['gpu', 'kubernetes'], ['datacenter']],
-  cluster: [['gpu'], ['kubernetes']],
-  runs_on: [['llm'], ['gpu']],
+  hosted_in: { gpu: ['server', 'datacenter', 'kubernetes'], server: ['datacenter'], kubernetes: ['datacenter'], interconnect: ['datacenter'] },
+  cluster: { gpu: ['kubernetes'], server: ['kubernetes'] },
+  runs_on: { llm: ['gpu', 'interconnect'] },
 };
 
 export function validateLinks(links, byId) {
@@ -105,17 +161,45 @@ export function validateLinks(links, byId) {
     const from = byId.get(l.from_id);
     const to = byId.get(l.to_id);
     if (!from || !to) throw bad('Zuordnung verweist auf eine Komponente außerhalb der Plattform');
-    if (!rule[0].includes(from.kind) || !rule[1].includes(to.kind)) throw bad(`Ungültige Zuordnung: ${from.kind} → ${to.kind} (${l.kind})`);
-    let slice = null;
-    if (l.kind === 'runs_on' && l.data?.mig_slice !== undefined && l.data?.mig_slice !== null) {
-      slice = Number(l.data.mig_slice);
+    if (!rule[from.kind]?.includes(to.kind)) throw bad(`Ungültige Zuordnung: ${from.kind} → ${to.kind} (${l.kind})`);
+    const data = {};
+    if (l.kind === 'runs_on' && to.kind === 'gpu' && l.data?.mig_slice !== undefined && l.data?.mig_slice !== null) {
+      const slice = Number(l.data.mig_slice);
       const layout = to.spec?.mig?.layout ?? [];
       if (!to.spec?.mig?.enabled || !Number.isInteger(slice) || slice < 0 || slice >= layout.length) throw bad(`MIG-Instanz an „${to.name}“ existiert nicht`);
+      data.mig_slice = slice;
     }
-    const key = `${l.kind}|${l.from_id}|${l.to_id}|${slice ?? ''}`;
+    if (l.kind === 'runs_on' && to.kind === 'interconnect') {
+      if (!(to.spec?.bundles ?? []).some((b) => b.id === l.data?.bundle_id)) throw bad(`GPU-Bundle an „${to.name}“ existiert nicht`);
+      data.bundle_id = l.data.bundle_id;
+    }
+    const key = `${l.kind}|${l.from_id}|${l.to_id}|${data.mig_slice ?? ''}|${data.bundle_id ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ kind: l.kind, from_id: l.from_id, to_id: l.to_id, data: slice === null ? {} : { mig_slice: slice } });
+    out.push({ kind: l.kind, from_id: l.from_id, to_id: l.to_id, data });
   }
   return out;
+}
+
+// Verweise innerhalb der typspezifischen Angaben: Cluster-Knoten, GPUs in Bundles, an IAM angebundene Dienste und MIG-Slices je GPU.
+export function validateSpecRefs(endpoint, byId) {
+  const s = endpoint.spec ?? {};
+  if (endpoint.kind === 'kubernetes') {
+    for (const n of s.nodes ?? []) if (byId.get(n.server_id)?.kind !== 'server') throw bad(`Cluster „${endpoint.name}“: Knoten ist kein Server der Plattform`);
+  }
+  if (endpoint.kind === 'iam') {
+    for (const id of s.services ?? []) if (!byId.has(id) || id === endpoint.id) throw bad(`IAM „${endpoint.name}“: Dienst gehört nicht zur Plattform`);
+  }
+  if (endpoint.kind === 'interconnect') {
+    const used = new Map();
+    for (const b of s.bundles ?? []) {
+      for (const id of b.gpu_ids) if (byId.get(id)?.kind !== 'gpu') throw bad(`Bundle „${b.name}“: GPU gehört nicht zur Plattform`);
+      if (b.mode === 'mig') {
+        const gpu = byId.get(b.gpu_ids[0]);
+        const max = gpu.spec?.gpu_type === 'custom' ? gpu.spec.custom?.max_mig_slices ?? 7 : GPU_TYPES[gpu.spec?.gpu_type]?.max_slices ?? 7;
+        used.set(gpu.id, (used.get(gpu.id) ?? 0) + b.slices);
+        if (used.get(gpu.id) > max) throw bad(`MIG: höchstens ${max} Rechen-Slices je GPU (${gpu.name})`);
+      }
+    }
+  }
 }

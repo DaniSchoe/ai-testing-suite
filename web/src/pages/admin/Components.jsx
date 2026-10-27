@@ -17,12 +17,14 @@ import {
   VisibilityBadge,
 } from '../../lib.jsx';
 
-const KIND_ORDER = ['datacenter', 'kubernetes', 'gpu', 'llm', 'ai_proxy', 'mcp', 'vector_db', 'iam', 'observability'];
+const KIND_ORDER = ['datacenter', 'server', 'gpu', 'interconnect', 'kubernetes', 'llm', 'ai_proxy', 'mcp', 'vector_db', 'iam', 'observability'];
 const URL_KINDS = ['llm', 'ai_proxy', 'mcp', 'vector_db', 'iam', 'observability'];
 const KIND_HINT = {
   datacenter: 'Rechenzentrum bzw. Hosting-Anbieter, in dem die Plattform läuft.',
   kubernetes: 'Kubernetes-Cluster, auf dem Inferenzserver und Gateway laufen.',
-  gpu: 'Eine einzelne GPU. Jede GPU legst du als eigenen Eintrag an; MIG teilt sie in Instanzen.',
+  server: 'Physischer Server (CPU oder GPU). GPU-Cores werden in der Topologie am Server hinzugefügt.',
+  gpu: 'GPU-Cores einer Karte bzw. eines Beschleunigers. Jede GPU legst du als eigenen Eintrag an und weist sie in der Topologie einem Server zu; Bundles (NVLink, MIG) bildest du im Interconnect.',
+  interconnect: 'Verbindung zwischen GPUs, z. B. NVLink. Darin bildest du benannte GPU-Bundles.',
   llm: 'Inferenzserver: selbst betrieben (z. B. vLLM) oder ein genutzter Managed Service (z. B. ChatGPT, Claude).',
   ai_proxy: 'AI Gateway, über das Anwendungen die Modelle ansprechen (z. B. LiteLLM).',
   mcp: 'MCP-Server der Plattform.',
@@ -36,7 +38,9 @@ const label = (list, key) => list?.find((x) => x.key === key)?.label ?? key;
 // Kurzbeschreibung einer Komponente je Art.
 function summary(e, presets) {
   const s = e.spec ?? {};
-  if (e.kind === 'datacenter') return [label(presets?.hosting_providers, s.provider), [s.region, s.country].filter(Boolean).join(', '), (s.certifications ?? []).join(', ')].filter(Boolean).join(' · ');
+  if (e.kind === 'datacenter') return [label(presets?.hosting_providers, s.provider), [s.region, s.country].filter(Boolean).join(', '), (s.certifications ?? []).join(', '), s.ram_gb ? `${s.ram_gb} GB RAM` : null].filter(Boolean).join(' · ');
+  if (e.kind === 'server') return [s.server_type === 'gpu' ? 'GPU-Server' : 'CPU-Server', s.model, s.cpu_cores ? `${s.cpu_cores} Cores` : null, s.ram_gb ? `${s.ram_gb} GB RAM` : null].filter(Boolean).join(' · ');
+  if (e.kind === 'interconnect') return [label(presets?.interconnect_types, s.type), (s.bundles ?? []).length ? `${s.bundles.length} Bundles` : null].filter(Boolean).join(' · ');
   if (e.kind === 'kubernetes') return [s.operation === 'managed' ? 'Managed' : 'Selbst betrieben', label(presets?.k8s_distributions, s.distribution), s.version].filter(Boolean).join(' · ');
   if (e.kind === 'gpu') {
     const g = presets?.gpu_types?.[s.gpu_type];
@@ -77,8 +81,8 @@ export default function Components({ platform, onChanged }) {
     <>
       <div className="toolbar">
         <span className="hint" style={{ flex: 1 }}>
-          Inventar der Plattform: Rechenzentrum, Kubernetes, GPU-Server, Inferenzserver, AI Gateway und weitere Dienste. Wie sie zusammenhängen, legst du im Tab Topologie fest. Den API-Key wählst du unter{' '}
-          <Link to="/credentials">Zugangsdaten</Link>.
+          Inventar der Plattform: Rechenzentrum, Server, GPU, Interconnect, Kubernetes, Inferenzserver, AI Gateway und weitere Dienste. Wie sie zusammenhängen, legst du im Tab Topologie fest. Den API-Key wählst du unter{' '}
+          <Link to="/credentials">Keys</Link>.
         </span>
         <button className="btn primary" onClick={() => setEditing({})}>
           <Plus size={15} /> Neue Komponente
@@ -166,7 +170,7 @@ export default function Components({ platform, onChanged }) {
             {endpoints.data?.length === 0 && (
               <tr>
                 <td colSpan={7} className="empty">
-                  Noch keine Komponenten. Beginne mit dem Rechenzentrum, dann Kubernetes, GPUs, Inferenzserver und Gateway.
+                  Noch keine Komponenten. Beginne mit dem Rechenzentrum, dann Server, GPUs, Kubernetes, Inferenzserver und Gateway.
                 </td>
               </tr>
             )}
@@ -240,13 +244,13 @@ function DiscoveredPopup({ info, onClose }) {
   );
 }
 
-const Check = ({ checked, onChange, children }) => (
+export const Check = ({ checked, onChange, children }) => (
   <label className="checkbox">
     <input type="checkbox" checked={Boolean(checked)} onChange={(e) => onChange(e.target.checked)} /> {children}
   </label>
 );
 
-function Text({ label: text, value, onChange, hint, ...rest }) {
+export function Text({ label: text, value, onChange, hint, ...rest }) {
   return (
     <label className="field">
       <span>{text}</span>
@@ -256,7 +260,7 @@ function Text({ label: text, value, onChange, hint, ...rest }) {
   );
 }
 
-function Pick({ label: text, value, onChange, options, hint }) {
+export function Pick({ label: text, value, onChange, options, hint }) {
   return (
     <label className="field">
       <span>{text}</span>
@@ -307,6 +311,11 @@ function DatacenterFields({ spec, set, presets }) {
         <Pick label="Strom aus erneuerbaren Quellen" value={spec.renewable_energy === null || spec.renewable_energy === undefined ? '' : String(spec.renewable_energy)} onChange={(v) => set({ renewable_energy: v === '' ? null : v === 'true' })} options={[['', 'unbekannt'], ['true', 'ja'], ['false', 'nein']]} />
         <Text label="PUE (Energieeffizienz)" type="number" step="0.01" value={spec.pue} onChange={(v) => set({ pue: v === '' ? null : Number(v) })} hint="z. B. 1,3; kleiner ist besser" />
       </div>
+      <div className="form-grid">
+        <Text label="CPU-Cores (optional)" type="number" min={0} value={spec.cpu_cores} onChange={(v) => set({ cpu_cores: v === '' ? null : Number(v) })} />
+        <Text label="RAM in GB (optional)" type="number" min={0} value={spec.ram_gb} onChange={(v) => set({ ram_gb: v === '' ? null : Number(v) })} />
+        <Text label="Speicher in TB (optional)" type="number" min={0} value={spec.storage_tb} onChange={(v) => set({ storage_tb: v === '' ? null : Number(v) })} />
+      </div>
     </>
   );
 }
@@ -326,16 +335,30 @@ function KubernetesFields({ spec, set, presets }) {
   );
 }
 
+function ServerFields({ spec, set, presets }) {
+  return (
+    <>
+      <div className="form-grid">
+        <Pick label="Server-Art" value={spec.server_type ?? 'cpu'} onChange={(v) => set({ server_type: v })} options={presets.server_types.map((t) => [t.key, t.label])} hint="Ein GPU-Server nimmt in der Topologie GPU-Cores auf." />
+        <Text label="Modell / Bauart (optional)" value={spec.model} onChange={(v) => set({ model: v })} placeholder="z. B. Dell PowerEdge XE9680" />
+      </div>
+      <div className="form-grid">
+        <Text label="CPU-Cores" type="number" min={0} value={spec.cpu_cores} onChange={(v) => set({ cpu_cores: v === '' ? null : Number(v) })} />
+        <Text label="RAM in GB" type="number" min={0} value={spec.ram_gb} onChange={(v) => set({ ram_gb: v === '' ? null : Number(v) })} />
+        <Text label="Speicher in TB" type="number" min={0} value={spec.storage_tb} onChange={(v) => set({ storage_tb: v === '' ? null : Number(v) })} />
+      </div>
+    </>
+  );
+}
+
+function InterconnectFields({ spec, set, presets }) {
+  return <Pick label="Technik" value={spec.type ?? 'nvlink'} onChange={(v) => set({ type: v })} options={presets.interconnect_types.map((t) => [t.key, t.label])} hint="Die GPU-Bundles legst du in der Topologie an." />;
+}
+
 function GpuFields({ spec, set, presets }) {
   const type = spec.gpu_type ?? 'h100';
   const preset = presets.gpu_types[type];
   const custom = spec.custom ?? {};
-  const migEnabled = Boolean(spec.mig?.enabled);
-  const layout = spec.mig?.layout ?? [];
-  const maxSlices = type === 'custom' ? custom.max_mig_slices || 7 : preset?.max_slices;
-  const used = layout.reduce((n, l) => n + (Number(l.slices) || 0), 0);
-  const profiles = type === 'custom' ? [] : (preset?.mig ?? []);
-  const setLayout = (next) => set({ mig: { enabled: true, layout: next } });
   return (
     <>
       <Pick label="GPU-Typ" value={type} onChange={(v) => set({ gpu_type: v, mig: { enabled: false, layout: [] } })} options={[...Object.entries(presets.gpu_types).map(([k, g]) => [k, `${g.label} (${g.memory_gb} GB)`]), ['custom', 'Eigener GPU-Typ']]} />
@@ -351,46 +374,6 @@ function GpuFields({ spec, set, presets }) {
           </Check>
           <Text label="Weitere Metadaten" value={custom.notes} onChange={(v) => set({ custom: { ...custom, notes: v } })} />
         </div>
-      )}
-      {(type !== 'custom' || custom.mig_capable) && (
-        <>
-          <Check checked={migEnabled} onChange={(v) => set({ mig: { enabled: v, layout: v && !layout.length ? [{ profile: profiles[0]?.profile ?? '1g', slices: profiles[0]?.slices ?? 1, memory_gb: profiles[0]?.memory_gb ?? null }] : layout } })}>
-            GPU mit MIG in Instanzen aufteilen
-          </Check>
-          {migEnabled && (
-            <div style={{ margin: '8px 0' }}>
-              {layout.map((l, i) => (
-                <div key={i} className="form-grid" style={{ alignItems: 'end' }}>
-                  {profiles.length ? (
-                    <Pick
-                      label={`Instanz ${i + 1}`}
-                      value={l.profile}
-                      onChange={(v) => {
-                        const pr = profiles.find((p) => p.profile === v);
-                        setLayout(layout.map((x, j) => (j === i ? { profile: v, slices: pr.slices, memory_gb: pr.memory_gb } : x)));
-                      }}
-                      options={profiles.map((p) => [p.profile, `${p.profile} (${p.slices} Slice${p.slices > 1 ? 's' : ''}, ${p.memory_gb} GB)`])}
-                    />
-                  ) : (
-                    <>
-                      <Text label={`Instanz ${i + 1}: Profil`} value={l.profile} onChange={(v) => setLayout(layout.map((x, j) => (j === i ? { ...x, profile: v } : x)))} />
-                      <Text label="Slices" type="number" min={1} value={l.slices} onChange={(v) => setLayout(layout.map((x, j) => (j === i ? { ...x, slices: Number(v) } : x)))} />
-                    </>
-                  )}
-                  <button className="btn ghost danger" onClick={() => setLayout(layout.filter((_, j) => j !== i))} aria-label="Instanz entfernen">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-              <button className="btn sm" onClick={() => setLayout([...layout, { profile: profiles[0]?.profile ?? '1g', slices: profiles[0]?.slices ?? 1, memory_gb: profiles[0]?.memory_gb ?? null }])}>
-                <Plus size={13} /> Instanz
-              </button>
-              <div className={used > maxSlices ? 'hint' : 'hint'} style={used > maxSlices ? { color: 'var(--bad)' } : undefined}>
-                {used} von {maxSlices} Rechen-Slices belegt.
-              </div>
-            </div>
-          )}
-        </>
       )}
     </>
   );
@@ -548,6 +531,8 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
 
       {kind === 'datacenter' && <DatacenterFields spec={spec} set={setSpec} presets={presets} />}
       {kind === 'kubernetes' && <KubernetesFields spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'server' && <ServerFields spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'interconnect' && <InterconnectFields spec={spec} set={setSpec} presets={presets} />}
       {kind === 'gpu' && <GpuFields spec={spec} set={setSpec} presets={presets} />}
       {kind === 'llm' && <InferenceFields spec={spec} set={setSpec} presets={presets} />}
       {kind === 'ai_proxy' && <GatewayFields spec={spec} set={setSpec} presets={presets} />}
@@ -572,7 +557,7 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
                 </option>
               ))}
             </select>
-            <div className="hint">Keys verwaltest du unter Verwaltung › Zugangsdaten.{managed && ' Managed Services brauchen in der Regel einen Key.'}</div>
+            <div className="hint">Keys verwaltest du unter Plattform › Keys.{managed && ' Managed Services brauchen in der Regel einen Key.'}</div>
           </label>
         </>
       )}

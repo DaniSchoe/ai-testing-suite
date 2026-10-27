@@ -67,6 +67,7 @@ export async function loadContext(tenantId, platform) {
     datacenters: of('datacenter'),
     clusters: of('kubernetes'),
     gpus: of('gpu'),
+    interconnects: of('interconnect'),
     inference,
     selfHosted: inference.filter((e) => e.spec?.hosting !== 'managed'),
     managed: inference.filter((e) => e.spec?.hosting === 'managed'),
@@ -365,7 +366,8 @@ function sov8(ctx) {
   const known = dcs.filter((d) => d.spec?.renewable_energy !== null && d.spec?.renewable_energy !== undefined);
   const pue = dcs.filter((d) => typeof d.spec?.pue === 'number');
   const green = dcs.filter((d) => hasCert(d.spec?.certifications, /14001|EMAS|Blauer Engel/i));
-  const mig = ctx.gpus.filter((g) => g.spec?.mig?.enabled);
+  const migBundled = new Set(ctx.interconnects.flatMap((i) => (i.spec?.bundles ?? []).filter((b) => b.mode === 'mig').flatMap((b) => b.gpu_ids)));
+  const mig = ctx.gpus.filter((g) => g.spec?.mig?.enabled || migBundled.has(g.id));
   return [
     known.length
       ? check('renewable', 'Strom aus erneuerbaren Quellen', grade(share(known.filter((d) => d.spec.renewable_energy).length, dcs.length)), known.map((d) => `${d.name}: ${d.spec.renewable_energy ? 'ja' : 'nein'}`).join('; '), 2)

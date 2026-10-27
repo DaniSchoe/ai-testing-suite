@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Check, Download, FlaskConical, Play, Plus, Send, Trash2, Upload, X } from 'lucide-react';
 import {
@@ -27,7 +27,6 @@ import {
 } from '../lib.jsx';
 
 const ORIGIN_LABELS = { official: 'Offiziell', team: 'Team', private: 'Privat' };
-const USE_CASE_LABELS = { chat: 'Chat', coding: 'Coding', ocr: 'OCR', agent: 'Agent' };
 const REQUIRES = [
   ['vision', 'Vision'],
   ['tools', 'Tool-Calling'],
@@ -40,11 +39,26 @@ const OPS = ['>=', '>', '<=', '<', '=='];
 const TARGET_LABELS = { platform: 'Plattform', llm: 'LLM', data: 'Daten', process: 'Prozesse' };
 const DEFAULT_TARGET = { smoke: 'platform', load: 'platform', access: 'platform', mcp: 'platform', network: 'platform' };
 
+// Beschreibung auf drei Zeilen begrenzt; ist sie länger, läuft sie verblassend aus.
+function ClampText({ text }) {
+  const ref = useRef(null);
+  const [over, setOver] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el) setOver(el.scrollHeight > el.clientHeight + 1);
+  }, [text]);
+  return (
+    <div ref={ref} className={`sub clamp-3${over ? ' over' : ''}`}>
+      {text}
+    </div>
+  );
+}
+
 const OriginBadge = ({ origin }) => <span className={`tag ${origin === 'official' ? 'official' : ''}`}>{ORIGIN_LABELS[origin] ?? origin}</span>;
 
 export function Catalog() {
   const user = useUser();
-  const [filters, setFilters] = useState({ q: '', type: '', target: '', origin: '', use_case: '', status: '' });
+  const [filters, setFilters] = useState({ q: '', type: '', target: '', status: '' });
   const query = new URLSearchParams(Object.entries(filters).filter(([, v]) => v)).toString();
   const templates = useApi(`/api/catalog/templates?${query}`);
   const [creating, setCreating] = useState(null);
@@ -89,22 +103,6 @@ export function Catalog() {
             </option>
           ))}
         </select>
-        <select className="inline" value={filters.use_case} onChange={(e) => set({ use_case: e.target.value })} aria-label="Einsatzprofil">
-          <option value="">Alle Profile</option>
-          {Object.entries(USE_CASE_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v}
-            </option>
-          ))}
-        </select>
-        <select className="inline" value={filters.origin} onChange={(e) => set({ origin: e.target.value })} aria-label="Herkunft">
-          <option value="">Alle Herkünfte</option>
-          {Object.entries(ORIGIN_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v}
-            </option>
-          ))}
-        </select>
         <select className="inline" value={filters.status} onChange={(e) => set({ status: e.target.value })} aria-label="Status">
           <option value="">Alle Stände</option>
           <option value="published">Veröffentlicht</option>
@@ -118,7 +116,7 @@ export function Catalog() {
           rows.length === 0 ? (
             <Empty>Keine Vorlagen gefunden.</Empty>
           ) : (
-            <div className="tile-grid">
+            <div className="tile-grid three">
               {rows.map((t) => (
                 <Link key={t.id} className="tile" to={`/catalog/templates/${t.id}`}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
@@ -130,11 +128,8 @@ export function Catalog() {
                       <div className="sub">{TYPE_LABELS[t.type] ?? t.type}</div>
                     </div>
                   </div>
-                  <div className="sub" style={{ minHeight: 36 }}>
-                    {t.description}
-                  </div>
+                  <ClampText text={t.description} />
                   <div className="btn-row" style={{ marginTop: 8, gap: 6 }}>
-                    <span className="mono">{t.latest.version}</span>
                     <LifecycleBadge status={t.latest.status} />
                     <span className="tag">{TARGET_LABELS[t.target] ?? t.target}</span>
                     <OriginBadge origin={t.origin} />
@@ -272,7 +267,7 @@ function CategoryPicker({ value, onChange }) {
 function TemplateForm({ onClose, onSaved }) {
   const user = useUser();
   const teams = useTeams();
-  const [form, setForm] = useState({ name: '', description: '', type: 'quality', origin: 'private', team_id: '', tags: '', target: 'llm', use_cases: [] });
+  const [form, setForm] = useState({ name: '', description: '', type: 'quality', origin: 'private', team_id: '', tags: '', target: 'llm' });
   const [spec, setSpec] = useState({ config: {}, requires: [], suggested_thresholds: [] });
   const [categoryIds, setCategoryIds] = useState([]);
   const [run, error, busy] = useAction();
@@ -351,16 +346,6 @@ function TemplateForm({ onClose, onSaved }) {
           <input value={form.tags} onChange={(e) => set({ tags: e.target.value })} />
         </Field>
       </div>
-      <Field label="Einsatzprofile">
-        <div className="btn-row">
-          {Object.entries(USE_CASE_LABELS).map(([k, v]) => (
-            <label key={k} className="checkbox">
-              <input type="checkbox" checked={form.use_cases.includes(k)} onChange={(e) => set({ use_cases: e.target.checked ? [...form.use_cases, k] : form.use_cases.filter((u) => u !== k) })} />
-              {v}
-            </label>
-          ))}
-        </div>
-      </Field>
       <CategoryPicker value={categoryIds} onChange={setCategoryIds} />
       <SpecEditor spec={spec} onChange={setSpec} />
     </Modal>
@@ -573,11 +558,6 @@ export function TemplateDetail() {
                     {shown.categories.map((c) => (
                       <span key={c.id} className="tag" title={c.name}>
                         {c.framework} {c.key}
-                      </span>
-                    ))}
-                    {t.use_cases.map((u) => (
-                      <span key={u} className="tag">
-                        {USE_CASE_LABELS[u]}
                       </span>
                     ))}
                   </div>

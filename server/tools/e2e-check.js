@@ -428,11 +428,11 @@ assert.equal((await admin(`/api/platforms/${dev.id}/topology`, { method: 'PUT', 
 assert.equal((await admin(`/api/platforms/${dev.id}/topology`, { method: 'PUT', body: { links: [{ kind: 'runs_on', from_id: vllmEp.id, to_id: migGpu.id, data: { mig_slice: 5 } }] } })).status, 400, 'MIG-Instanz existiert nicht');
 r = await admin(`/api/platforms/${dev.id}/topology`, {
   method: 'PUT',
-  body: { links: [...links.filter((l) => l.kind !== 'runs_on'), { kind: 'runs_on', from_id: vllmEp.id, to_id: migGpu.id, data: { mig_slice: 1 } }], routes: [{ gateway_endpoint_id: gateway.id, backend_endpoint_id: vllmEp.id, models: ['qwen3-32b'] }], layout: { [vllmEp.id]: { x: 100, y: 40 } }, served_models: { [vllmEp.id]: ['Qwen/Qwen3-32B'] } },
+  body: { links: [...links.filter((l) => l.kind !== 'runs_on'), { kind: 'runs_on', from_id: vllmEp.id, to_id: migGpu.id, data: { mig_slice: 1 } }], routes: [{ gateway_endpoint_id: gateway.id, backend_endpoint_id: vllmEp.id, mappings: [{ gateway_model: 'qwen3-32b', backend_model: 'Qwen/Qwen3-32B' }] }], layout: { placed: { inference: [vllmEp.id, 'unbekannt'] }, collapsed: { inference: true, nirgends: true } }, served_models: { [vllmEp.id]: ['Qwen/Qwen3-32B'] } },
 });
 ok(r, 'Topologie speichern');
 assert.equal(r.data.links.find((l) => l.kind === 'runs_on').data.mig_slice, 1);
-assert.deepEqual(r.data.layout[vllmEp.id], { x: 100, y: 40 });
+assert.deepEqual(r.data.layout, { placed: { inference: [vllmEp.id] }, collapsed: { inference: true } });
 r = await admin(`/api/platforms/${dev.id}/assessment`);
 ok(r, 'Einstufung');
 assert.equal(r.data.sovereignty.goals.length, 8);
@@ -449,6 +449,47 @@ assert.equal(sov8.effective, 3);
 assert.equal(sov8.override.level, 3);
 assert.equal((await carol(`/api/dashboard/platforms/${dev.id}`)).data.reports.total >= 0, true, 'Dashboard liefert Berichtszähler');
 step('Inventar, Topologie mit MIG, Einstufung und Überschreiben mit Begründung');
+
+// ------------------------------------------------------------------ 0.6.0: Ebenen, Server, Bundles, Organisation
+r = await admin(`/api/platforms/${dev.id}`);
+const layered = r.data;
+const serverEp = layered.endpoints.find((e) => e.kind === 'server');
+const icEp = layered.endpoints.find((e) => e.kind === 'interconnect');
+const k8sEp = layered.endpoints.find((e) => e.kind === 'kubernetes');
+const gpuEps = layered.endpoints.filter((e) => e.kind === 'gpu');
+assert.ok(serverEp && icEp && layered.layout.placed, 'Seed: Server, Interconnect und Platzierung');
+assert.deepEqual(layered.routes[0].mappings, [{ gateway_model: 'qwen3-32b', backend_model: 'Qwen/Qwen3-32B' }], 'Route mit Zuordnung der Modellnamen');
+const layeredLinks = layered.links.map((l) => ({ kind: l.kind, from_id: l.from_id, to_id: l.to_id, data: l.data }));
+const put = (body) => admin(`/api/platforms/${dev.id}/topology`, { method: 'PUT', body: { links: layeredLinks, routes: [], ...body } });
+assert.equal((await put({ specs: { [icEp.id]: { type: 'nvlink', bundles: [{ id: 'x', name: 'Allein', mode: 'nvlink', gpu_ids: [gpuEps[0].id] }] } } })).status, 400, 'NVLink braucht mindestens zwei GPUs');
+assert.equal((await put({ specs: { [k8sEp.id]: { nodes: [{ server_id: gpuEps[0].id, role: 'worker' }] } } })).status, 400, 'Cluster-Knoten müssen Server sein');
+assert.equal((await put({ specs: { [icEp.id]: { type: 'nvlink', bundles: [{ id: 'm1', name: 'Zu viel', mode: 'mig', gpu_ids: [gpuEps[1].id], profile: '7g.80gb', slices: 7 }, { id: 'm2', name: 'Noch mehr', mode: 'mig', gpu_ids: [gpuEps[1].id], profile: '1g.10gb', slices: 1 }] } } })).status, 400, 'MIG-Slices je GPU begrenzt');
+r = await put({
+  specs: { [icEp.id]: { type: 'nvlink', bundles: [{ id: 'm1', name: 'Klein', mode: 'mig', gpu_ids: [gpuEps[1].id], profile: '3g.40gb', slices: 3, memory_gb: 40 }] } },
+  links: [...layeredLinks.filter((l) => l.kind !== 'runs_on'), { kind: 'runs_on', from_id: vllmEp.id, to_id: icEp.id, data: { bundle_id: 'm1' } }],
+});
+ok(r, 'Inferenz auf GPU-Bundle');
+assert.equal(r.data.links.find((l) => l.kind === 'runs_on').data.bundle_id, 'm1');
+assert.ok(r.data.links.some((l) => l.kind === 'cluster' && l.from_id === serverEp.id && l.to_id === k8sEp.id), 'Cluster-Zuordnung aus den Knoten');
+assert.equal((await put({ links: [...layeredLinks.filter((l) => l.kind !== 'runs_on'), { kind: 'runs_on', from_id: vllmEp.id, to_id: icEp.id, data: { bundle_id: 'gibtsnicht' } }] })).status, 400, 'Unbekanntes Bundle');
+ok(await put({ specs: { [icEp.id]: { type: 'nvlink', bundles: [{ id: 'b1', name: 'H100 Verbund', mode: 'nvlink', gpu_ids: gpuEps.map((g) => g.id) }] } } }), 'Seed-Zustand wiederherstellen');
+step('Ebenen: Server, GPU-Bundles (NVLink/MIG), Cluster-Knoten');
+
+r = await admin('/api/organization');
+ok(r);
+const myOrg = r.data.find((t) => t.current);
+r = await admin('/api/departments', { method: 'POST', body: { name: `Forschung-${suffix}` } });
+ok(r, 'Abteilung anlegen');
+const dept = r.data;
+assert.equal((await admin('/api/departments', { method: 'POST', body: { name: `Forschung-${suffix}` } })).status, 400, 'Abteilung doppelt');
+r = await admin('/api/teams', { method: 'POST', body: { name: `Team-D-${suffix}`, department_id: dept.id } });
+ok(r, 'Team in Abteilung');
+r = await admin('/api/organization');
+const tree = r.data.find((t) => t.current).departments.find((d) => d.id === dept.id);
+assert.ok(tree.teams.some((t) => t.name === `Team-D-${suffix}`), 'Hierarchie Mandant, Abteilung, Team');
+assert.ok(myOrg, 'Eigener Mandant in der Organisation');
+assert.equal((await alice('/api/departments', { method: 'POST', body: { name: 'x' } })).status, 403, 'Abteilungen brauchen teams.manage');
+step('Organisation: Mandant, Abteilung, Team');
 
 // Modellportfolio: nur ausgewählte Modelle werden getestet.
 r = await admin('/api/portfolio');
@@ -480,4 +521,4 @@ r = await admin('/api/audit-log?action=platform.lock');
 assert.ok(r.data.rows.length >= 1);
 step('Audit-Log enthält Freigaben und Kill-Switch');
 
-console.log('0.5.0 End-to-End-Prüfung erfolgreich');
+console.log('0.6.0 End-to-End-Prüfung erfolgreich');

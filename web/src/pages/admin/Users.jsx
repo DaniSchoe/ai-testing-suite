@@ -36,7 +36,7 @@ export default function Users() {
     <>
       <div className="page-head">
         <div>
-          <h1>Mitglieder</h1>
+          <h1>User</h1>
           <p>
             Die Anmeldung läuft über Keycloak, Rollen und Teams vergibst du hier. Neue User erhalten beim ersten Login die Standardrolle. User lassen
             sich auch vorab per E-Mail anlegen; Rollen und Teams gelten dann ab dem ersten Login mit dieser (in Keycloak bestätigten) Adresse.

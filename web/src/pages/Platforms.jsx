@@ -13,7 +13,7 @@ export function Platforms() {
   return (
     <>
       <PageHead
-        title="Plattformen"
+        title="Komponenten"
         action={
           can(user, 'endpoints.manage') && (
             <button className="btn primary" onClick={() => setCreating(true)}>

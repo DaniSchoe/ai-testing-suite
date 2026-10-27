@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { cleanSpec, validateLinks } from '../src/inventorySpec.js';
+import { cleanSpec, validateLinks, validateSpecRefs } from '../src/inventorySpec.js';
 import { GPU_TYPES, presets } from '../src/inventory.js';
 import { evaluateGoal, summarize } from '../src/assessment.js';
 import network from '../src/testtypes/network.js';
@@ -62,6 +62,38 @@ test('Topologie: erlaubte Zuordnungen und MIG-Instanzen', () => {
   assert.throws(() => validateLinks([{ kind: 'runs_on', from_id: 'i', to_id: 'x' }], byId), /außerhalb/);
 });
 
+test('Server, Interconnect-Bundles und Verweise der Topologie', () => {
+  const server = cleanSpec('server', { server_type: 'gpu', cpu_cores: '64', ram_gb: 512 });
+  assert.equal(server.server_type, 'gpu');
+  assert.equal(server.cpu_cores, 64);
+  assert.throws(() => cleanSpec('server', { server_type: 'tpu' }), /Server-Art/);
+  assert.throws(() => cleanSpec('interconnect', { type: 'nvlink', bundles: [{ name: 'A', mode: 'nvlink', gpu_ids: ['g1'] }] }), /mindestens zwei/);
+  assert.throws(() => cleanSpec('interconnect', { type: 'nvlink', bundles: [{ name: 'A', mode: 'mig', gpu_ids: ['g1', 'g2'], profile: '1g', slices: 1 }] }), /genau eine/);
+  const ic = cleanSpec('interconnect', { type: 'nvlink', bundles: [{ id: 'x', name: 'Verbund', mode: 'nvlink', gpu_ids: ['g1', 'g2', 'g1'] }] });
+  assert.deepEqual(ic.bundles[0].gpu_ids, ['g1', 'g2']);
+  const byId = new Map([
+    ['s', { id: 's', name: 'S1', kind: 'server' }],
+    ['g1', { id: 'g1', name: 'G1', kind: 'gpu', spec: { gpu_type: 'h100' } }],
+    ['g2', { id: 'g2', name: 'G2', kind: 'gpu', spec: { gpu_type: 'h100' } }],
+    ['i', { id: 'i', name: 'vLLM', kind: 'llm' }],
+    ['n', { id: 'n', name: 'NVL', kind: 'interconnect', spec: ic }],
+    ['k', { id: 'k', name: 'K8s', kind: 'kubernetes', spec: { nodes: [{ server_id: 's', role: 'worker' }] } }],
+  ]);
+  const links = validateLinks(
+    [
+      { kind: 'hosted_in', from_id: 'g1', to_id: 's' },
+      { kind: 'runs_on', from_id: 'i', to_id: 'n', data: { bundle_id: 'x' } },
+    ],
+    byId,
+  );
+  assert.deepEqual(links[1].data, { bundle_id: 'x' });
+  assert.throws(() => validateLinks([{ kind: 'runs_on', from_id: 'i', to_id: 'n', data: { bundle_id: 'y' } }], byId), /Bundle/);
+  assert.doesNotThrow(() => validateSpecRefs(byId.get('k'), byId));
+  assert.throws(() => validateSpecRefs({ id: 'k', name: 'K', kind: 'kubernetes', spec: { nodes: [{ server_id: 'g1', role: 'worker' }] } }, byId), /kein Server/);
+  const mig = (id, slices) => ({ id, name: id, mode: 'mig', gpu_ids: ['g1'], profile: 'p', slices });
+  assert.throws(() => validateSpecRefs({ id: 'n', name: 'N', kind: 'interconnect', spec: { bundles: [mig('a', 5), mig('b', 3)] } }, byId), /höchstens 7/);
+});
+
 test('Einstufung: Punktzahl, Abdeckung und Stufe', () => {
   const c = (status, weight = 1) => ({ id: status + weight, label: status, status, detail: '', weight });
   assert.equal(summarize([c('pass'), c('pass', 2)]).level, 'good');
@@ -75,7 +107,7 @@ test('Souveränitätsziel: Überschreiben ersetzt die abgeleitete Stufe, Blocker
   const ctx = {
     platform: { sovereignty: {} },
     endpoints: [], links: [], routes: [], results: [], portfolio: [], findings: {}, audits: [], goalLinks: [], status: null,
-    datacenters: [], clusters: [], gpus: [], inference: [], selfHosted: [], managed: [], gateways: [], byId: new Map(),
+    datacenters: [], clusters: [], gpus: [], interconnects: [], inference: [], selfHosted: [], managed: [], gateways: [], byId: new Map(),
   };
   const goal = { key: 'SOV-8', name: 'Ökologische Nachhaltigkeit' };
   const plain = evaluateGoal(ctx, goal, { min_level: 2, overrides: {} });

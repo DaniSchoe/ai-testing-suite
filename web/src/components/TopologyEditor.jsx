@@ -1,147 +1,243 @@
-// Topologie per Drag & Drop: Komponenten aus dem Inventar auf die Fläche ziehen und verbinden.
-// Verbindungen: Standort (GPU/Kubernetes → Rechenzentrum), Cluster (GPU → Kubernetes), Betrieb (Inferenzserver → GPU, bei MIG je Instanz)
-// und Route (AI Gateway → Inferenzserver, mit den Modellen, die über das Gateway laufen).
-import { useMemo, useRef, useState } from 'react';
-import { Link2, Save, Trash2, X } from 'lucide-react';
-import { api, Card, ErrorBox, KIND_META, Modal, useAction } from '../lib.jsx';
+// Topologie in festen Ebenen (Rechenzentrum bis IAM). Jede Ebene ist einklappbar und nimmt Komponenten aus dem Inventar auf ("+").
+// Ein Klick auf eine Komponente öffnet unter der Ebene ihre Konfigurationsleiste. Verbindungen werden gestrichelt gezeichnet;
+// verbundene Komponenten stehen in benachbarten Ebenen untereinander (siehe topologyLayout.js).
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Plus, Save } from 'lucide-react';
+import { api, Card, ErrorBox, KIND_META, Loading, Modal, useAction, useApi } from '../lib.jsx';
+import ConfigBar from './TopologyConfig.jsx';
+import { assignColumns } from './topologyLayout.js';
 
-const NODE_W = 176;
-const NODE_H = 70;
-const COLUMN = { datacenter: 0, kubernetes: 1, gpu: 2, llm: 3, ai_proxy: 4, mcp: 5, vector_db: 5, iam: 5, observability: 5 };
-const LINK_LABEL = { hosted_in: 'steht in', cluster: 'Teil von', runs_on: 'läuft auf', route: 'Route' };
-const LINK_STYLE = {
-  hosted_in: { stroke: '#8a8f98', dash: '4 4' },
-  cluster: { stroke: '#8a8f98', dash: '' },
-  runs_on: { stroke: '#1a9b5f', dash: '' },
-  route: { stroke: '#5064dc', dash: '' },
-};
+const COL_W = 196;
+const COL_GAP = 16;
 
-// Welche Verbindung entsteht zwischen zwei Arten? null = nicht erlaubt.
-function linkKind(from, to) {
-  if (from.kind === 'llm' && to.kind === 'gpu') return 'runs_on';
-  if (from.kind === 'gpu' && to.kind === 'kubernetes') return 'cluster';
-  if ((from.kind === 'gpu' || from.kind === 'kubernetes') && to.kind === 'datacenter') return 'hosted_in';
-  if (from.kind === 'ai_proxy' && to.kind === 'llm') return 'route';
-  return null;
-}
+const hasPlaced = (layout) => layout && typeof layout.placed === 'object' && layout.placed !== null;
 
-const edgeKey = (e) => `${e.kind}|${e.from_id}|${e.to_id}|${e.slice ?? ''}`;
-
-function initialState(platform) {
-  const links = platform.links.map((l) => ({ kind: l.kind, from_id: l.from_id, to_id: l.to_id, slice: l.data?.mig_slice ?? null }));
-  const routes = platform.routes.map((r) => ({ kind: 'route', from_id: r.gateway_endpoint_id, to_id: r.backend_endpoint_id, models: r.models ?? [] }));
-  const layout = { ...(platform.layout ?? {}) };
-  const counters = {};
-  for (const e of platform.endpoints) {
-    const used = [...links, ...routes].some((l) => l.from_id === e.id || l.to_id === e.id);
-    if (!layout[e.id] && used) {
-      const col = COLUMN[e.kind] ?? 5;
-      counters[col] = (counters[col] ?? 0) + 1;
-      layout[e.id] = { x: 20 + col * 220, y: 20 + (counters[col] - 1) * 100 };
+// Startzustand: gespeicherte Platzierung; bei älteren Plattformen (freie Positionen) kommen alle Komponenten in ihre Ebene.
+function initialPlaced(platform, layers) {
+  const out = Object.fromEntries(layers.map((l) => [l.key, []]));
+  const known = new Set(platform.endpoints.map((e) => e.id));
+  if (hasPlaced(platform.layout)) {
+    for (const l of layers) out[l.key] = (platform.layout.placed[l.key] ?? []).filter((id) => known.has(id));
+  } else {
+    for (const e of platform.endpoints) {
+      const layer = layers.find((l) => l.kinds.includes(e.kind));
+      if (layer) out[layer.key].push(e.id);
     }
   }
-  return { edges: [...links, ...routes], layout };
+  return out;
+}
+
+function initialRows(platform) {
+  return platform.routes.flatMap((r) => {
+    const maps = r.mappings?.length ? r.mappings : (r.models ?? []).map((x) => ({ gateway_model: x, backend_model: x }));
+    return maps.map((x) => ({ gateway_id: r.gateway_endpoint_id, gateway_model: x.gateway_model, backend_id: r.backend_endpoint_id, backend_model: x.backend_model }));
+  });
 }
 
 export default function TopologyEditor({ platform, editable, onSaved }) {
-  const init = useMemo(() => initialState(platform), [platform]);
-  const [edges, setEdges] = useState(init.edges);
-  const [layout, setLayout] = useState(init.layout);
-  const [served, setServed] = useState(() => Object.fromEntries(platform.endpoints.filter((e) => e.kind === 'llm').map((e) => [e.id, e.spec?.served_models ?? []])));
+  const presets = useApi('/api/inventory/presets');
+  return <Loading state={presets}>{(p) => <Editor platform={platform} editable={editable} onSaved={onSaved} presets={p} />}</Loading>;
+}
+
+function Editor({ platform, editable, onSaved, presets }) {
+  const layers = presets.layers;
+  const [placed, setPlaced] = useState(() => initialPlaced(platform, layers));
+  const [collapsed, setCollapsed] = useState(() => ({ ...(hasPlaced(platform.layout) ? platform.layout.collapsed : {}) }));
+  const [specs, setSpecs] = useState(() => Object.fromEntries(platform.endpoints.map((e) => [e.id, e.spec ?? {}])));
+  const [links, setLinks] = useState(() => platform.links.map((l) => ({ kind: l.kind, from_id: l.from_id, to_id: l.to_id, data: l.data ?? {} })));
+  const [rows, setRowsState] = useState(() => initialRows(platform));
+  const [served, setServedState] = useState(() => Object.fromEntries(platform.endpoints.filter((e) => e.kind === 'llm').map((e) => [e.id, e.spec?.served_models ?? []])));
   const [selected, setSelected] = useState(null);
-  const [connecting, setConnecting] = useState(null);
-  const [sliceChoice, setSliceChoice] = useState(null);
+  const [adding, setAdding] = useState(null);
+  const [showLines, setShowLines] = useState(true);
   const [warnings, setWarnings] = useState([]);
   const [dirty, setDirty] = useState(false);
   const [run, error, busy] = useAction();
-  const canvas = useRef(null);
-  const drag = useRef(null);
-  const byId = useMemo(() => new Map(platform.endpoints.map((e) => [e.id, e])), [platform]);
-
   const touch = () => setDirty(true);
-  const placed = platform.endpoints.filter((e) => layout[e.id]);
-  const unplaced = platform.endpoints.filter((e) => !layout[e.id]);
-  const width = Math.max(1180, ...placed.map((e) => layout[e.id].x + NODE_W + 40));
-  const height = Math.max(520, ...placed.map((e) => layout[e.id].y + NODE_H + 60));
 
-  function place(id, x, y) {
-    setLayout((l) => ({ ...l, [id]: { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) } }));
-    touch();
-  }
-  function remove(id) {
-    setLayout(({ [id]: _, ...rest }) => rest);
-    setEdges((es) => es.filter((e) => e.from_id !== id && e.to_id !== id));
+  const endpoints = useMemo(() => platform.endpoints.map((e) => ({ ...e, spec: specs[e.id] ?? e.spec ?? {} })), [platform, specs]);
+  const byId = useMemo(() => new Map(endpoints.map((e) => [e.id, e])), [endpoints]);
+  const isPlaced = (id) => Object.values(placed).some((ids) => ids.includes(id));
+  const placedOf = (layerKey) => (placed[layerKey] ?? []).map((id) => byId.get(id)).filter(Boolean);
+
+  // --- Modell: Zuordnungen als Verbindungen ---
+  const hostOf = (gpuId) => links.find((l) => l.kind === 'hosted_in' && l.from_id === gpuId && byId.get(l.to_id)?.kind === 'server')?.to_id ?? null;
+  const gpusOf = (serverId) => links.filter((l) => l.kind === 'hosted_in' && l.to_id === serverId && byId.get(l.from_id)?.kind === 'gpu').map((l) => byId.get(l.from_id));
+  const datacenterOf = (serverId) => links.find((l) => l.kind === 'hosted_in' && l.from_id === serverId && byId.get(l.to_id)?.kind === 'datacenter')?.to_id ?? null;
+  const runsOn = (llmId) => links.find((l) => l.kind === 'runs_on' && l.from_id === llmId) ?? null;
+
+  const model = {
+    presets,
+    editable,
+    endpoints,
+    served,
+    rows,
+    placedOf,
+    isPlaced,
+    hostOf,
+    gpusOf,
+    datacenterOf,
+    runsOn,
+    kindLabel: (k) => KIND_META[k]?.label ?? k,
+    gpuLabel: (g) => {
+      const s = g.spec ?? {};
+      const t = presets.gpu_types[s.gpu_type];
+      return [s.gpu_type === 'custom' ? s.custom?.name : t?.label, `${s.memory_gb ?? t?.memory_gb ?? '?'} GB`].filter(Boolean).join(', ');
+    },
+    setSpec: (id, patch) => (setSpecs((s) => ({ ...s, [id]: { ...(s[id] ?? {}), ...patch } })), touch()),
+    setDatacenter: (serverId, dcId) => {
+      setLinks((ls) => [...ls.filter((l) => !(l.kind === 'hosted_in' && l.from_id === serverId && byId.get(l.to_id)?.kind === 'datacenter')), ...(dcId ? [{ kind: 'hosted_in', from_id: serverId, to_id: dcId, data: {} }] : [])]);
+      touch();
+    },
+    addGpu: (serverId, gpuId) => {
+      setLinks((ls) => [...ls.filter((l) => !(l.kind === 'hosted_in' && l.from_id === gpuId)), { kind: 'hosted_in', from_id: gpuId, to_id: serverId, data: {} }]);
+      touch();
+    },
+    removeGpu: (gpuId) => {
+      setLinks((ls) => ls.filter((l) => !(l.kind === 'hosted_in' && l.from_id === gpuId) && !(l.kind === 'runs_on' && l.to_id === gpuId)));
+      setSpecs((s) =>
+        Object.fromEntries(Object.entries(s).map(([id, sp]) => [id, byId.get(id)?.kind === 'interconnect' ? { ...sp, bundles: (sp.bundles ?? []).map((b) => ({ ...b, gpu_ids: b.gpu_ids.filter((x) => x !== gpuId) })).filter((b) => b.gpu_ids.length) } : sp])),
+      );
+      touch();
+    },
+    setRunsOn: (llmId, target) => {
+      setLinks((ls) => [...ls.filter((l) => !(l.kind === 'runs_on' && l.from_id === llmId)), ...(target ? [{ kind: 'runs_on', from_id: llmId, to_id: target.to_id, data: target.bundle_id ? { bundle_id: target.bundle_id } : {} }] : [])]);
+      touch();
+    },
+    setServed: (id, models) => (setServedState((s) => ({ ...s, [id]: models })), touch()),
+    setRows: (gatewayId, next) => (setRowsState((rs) => [...rs.filter((r) => r.gateway_id !== gatewayId), ...next]), touch()),
+  };
+
+  function removeNode(id) {
+    setPlaced((p) => Object.fromEntries(Object.entries(p).map(([k, ids]) => [k, ids.filter((x) => x !== id)])));
+    setLinks((ls) => ls.filter((l) => l.from_id !== id && l.to_id !== id));
+    setRowsState((rs) => rs.filter((r) => r.gateway_id !== id && r.backend_id !== id));
+    setSpecs((s) =>
+      Object.fromEntries(
+        Object.entries(s).map(([k, sp]) => {
+          if (byId.get(k)?.kind === 'kubernetes') return [k, { ...sp, nodes: (sp.nodes ?? []).filter((n) => n.server_id !== id) }];
+          if (byId.get(k)?.kind === 'iam') return [k, { ...sp, services: (sp.services ?? []).filter((x) => x !== id) }];
+          return [k, sp];
+        }),
+      ),
+    );
     setSelected(null);
     touch();
   }
 
-  function onDropCanvas(ev) {
-    ev.preventDefault();
-    const id = ev.dataTransfer.getData('text/plain');
-    if (!byId.has(id)) return;
-    const rect = canvas.current.getBoundingClientRect();
-    place(id, ev.clientX - rect.left + canvas.current.scrollLeft - NODE_W / 2, ev.clientY - rect.top + canvas.current.scrollTop - NODE_H / 2);
-  }
-
-  function startMove(ev, id) {
-    if (!editable || ev.target.closest('.topo-port')) return;
-    drag.current = { id, dx: ev.clientX - layout[id].x, dy: ev.clientY - layout[id].y };
-    ev.currentTarget.setPointerCapture(ev.pointerId);
-    setSelected({ node: id });
-  }
-  function moveNode(ev) {
-    if (!drag.current) return;
-    place(drag.current.id, ev.clientX - drag.current.dx, ev.clientY - drag.current.dy);
-  }
-  const endMove = () => {
-    drag.current = null;
-  };
-
-  function connect(targetId) {
-    const from = byId.get(connecting);
-    const to = byId.get(targetId);
-    setConnecting(null);
-    if (!from || !to || from.id === to.id) return;
-    const kind = linkKind(from, to);
-    if (!kind) {
-      alert(`${KIND_META[from.kind].label} lässt sich nicht mit ${KIND_META[to.kind].label} verbinden.`);
-      return;
-    }
-    if (kind === 'runs_on' && to.spec?.mig?.enabled) return setSliceChoice({ from, to });
-    addEdge({ kind, from_id: from.id, to_id: to.id, slice: null, models: [] });
-  }
-  function addEdge(edge) {
-    setEdges((es) => (es.some((e) => edgeKey(e) === edgeKey(edge)) ? es : [...es, edge]));
-    setSelected({ edge: edgeKey(edge) });
+  function addNode(layerKey, id) {
+    setPlaced((p) => ({ ...p, [layerKey]: [...(p[layerKey] ?? []), id] }));
+    setCollapsed((c) => ({ ...c, [layerKey]: false }));
+    setSelected(id);
+    setAdding(null);
     touch();
   }
 
+  // --- Verbindungen für die Darstellung: [Elternteil in früherer Ebene, Kind] ---
+  const edges = useMemo(() => {
+    const out = [];
+    const host = (gpuId) => links.find((l) => l.kind === 'hosted_in' && l.from_id === gpuId && byId.get(l.to_id)?.kind === 'server')?.to_id;
+    for (const l of links) {
+      const from = byId.get(l.from_id);
+      const to = byId.get(l.to_id);
+      if (l.kind === 'hosted_in' && from?.kind === 'server' && to?.kind === 'datacenter') out.push([to.id, from.id]);
+      if (l.kind === 'runs_on' && from?.kind === 'llm') {
+        if (to?.kind === 'interconnect') out.push([to.id, from.id]);
+        else if (to?.kind === 'gpu' && host(to.id)) out.push([host(to.id), from.id]);
+      }
+    }
+    for (const e of endpoints) {
+      if (e.kind === 'kubernetes') for (const n of e.spec?.nodes ?? []) out.push([n.server_id, e.id]);
+      if (e.kind === 'interconnect') for (const b of e.spec?.bundles ?? []) for (const g of b.gpu_ids) if (host(g)) out.push([host(g), e.id]);
+      if (e.kind === 'iam') for (const s of e.spec?.services ?? []) out.push([s, e.id]);
+    }
+    for (const r of rows) if (r.backend_id) out.push([r.backend_id, r.gateway_id]);
+    const order = new Map(layers.flatMap((l, i) => (placed[l.key] ?? []).map((id) => [id, i])));
+    const seen = new Set();
+    return out.filter(([a, b]) => {
+      const key = `${a}|${b}`;
+      if (seen.has(key) || !order.has(a) || !order.has(b) || order.get(a) >= order.get(b)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [links, rows, endpoints, byId, placed, layers]);
+
+  const columns = useMemo(() => assignColumns(layers.map((l) => placed[l.key] ?? []), edges), [layers, placed, edges]);
+  const colCount = Math.max(1, ...[...columns.values()].map((c) => c + 1));
+
+  // --- Linien aus den gemessenen Positionen der Karten ---
+  const frame = useRef(null);
+  const cards = useRef({});
+  const [paths, setPaths] = useState([]);
+  const measure = useCallback(() => {
+    const box = frame.current?.getBoundingClientRect();
+    if (!box) return;
+    const next = edges
+      .map(([a, b]) => {
+        const ea = cards.current[a]?.getBoundingClientRect();
+        const eb = cards.current[b]?.getBoundingClientRect();
+        if (!ea || !eb) return null;
+        const x1 = ea.left + ea.width / 2 - box.left;
+        const y1 = ea.bottom - box.top;
+        const x2 = eb.left + eb.width / 2 - box.left;
+        const y2 = eb.top - box.top;
+        const dy = Math.max(24, (y2 - y1) / 2);
+        return { key: `${a}|${b}`, d: `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}` };
+      })
+      .filter(Boolean);
+    setPaths((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next));
+  }, [edges]);
+  useLayoutEffect(measure);
+  useEffect(() => {
+    window.addEventListener('resize', measure);
+    const ro = new ResizeObserver(measure);
+    if (frame.current) ro.observe(frame.current);
+    return () => (window.removeEventListener('resize', measure), ro.disconnect());
+  }, [measure]);
+
   function save() {
     return run(async () => {
-      const links = edges.filter((e) => e.kind !== 'route').map((e) => ({ kind: e.kind, from_id: e.from_id, to_id: e.to_id, data: e.slice === null || e.slice === undefined ? {} : { mig_slice: e.slice } }));
-      const routes = edges.filter((e) => e.kind === 'route').map((e) => ({ gateway_endpoint_id: e.from_id, backend_endpoint_id: e.to_id, models: e.models ?? [] }));
-      const res = await api(`/api/platforms/${platform.id}/topology`, { method: 'PUT', body: { links, routes, layout, served_models: served } });
+      const groups = new Map();
+      for (const r of rows.filter((x) => x.gateway_id && x.backend_id && x.gateway_model && x.backend_model)) {
+        const key = `${r.gateway_id}|${r.backend_id}`;
+        groups.set(key, [...(groups.get(key) ?? []), { gateway_model: r.gateway_model, backend_model: r.backend_model }]);
+      }
+      const routes = [...groups].map(([key, mappings]) => {
+        const [gateway_endpoint_id, backend_endpoint_id] = key.split('|');
+        return { gateway_endpoint_id, backend_endpoint_id, mappings };
+      });
+      const sendKinds = ['datacenter', 'server', 'interconnect', 'kubernetes', 'iam', 'llm'];
+      const body = {
+        links,
+        routes,
+        layout: { placed, collapsed },
+        specs: Object.fromEntries(endpoints.filter((e) => sendKinds.includes(e.kind)).map((e) => [e.id, specs[e.id] ?? e.spec])),
+        served_models: served,
+      };
+      const res = await api(`/api/platforms/${platform.id}/topology`, { method: 'PUT', body });
       setWarnings(res.warnings ?? []);
       setDirty(false);
       onSaved();
     });
   }
 
-  const center = (id) => ({ x: layout[id].x + NODE_W / 2, y: layout[id].y + NODE_H / 2 });
-  const visible = edges.filter((e) => layout[e.from_id] && layout[e.to_id]);
-  const selEdge = selected?.edge ? edges.find((e) => edgeKey(e) === selected.edge) : null;
-  const selNode = selected?.node ? byId.get(selected.node) : null;
+  const candidates = (layer) => endpoints.filter((e) => layer.kinds.includes(e.kind) && !isPlaced(e.id));
 
   return (
     <Card
       title="Topologie"
-      sub="Ziehe Komponenten aus dem Inventar auf die Fläche. Über den Punkt rechts am Knoten und einen Klick auf das Ziel verbindest du sie: Inferenzserver → GPU, GPU → Kubernetes bzw. Rechenzentrum, Gateway → Inferenzserver (Route mit Modellen)."
+      sub="Feste Ebenen vom Rechenzentrum bis zum IAM. Füge mit „+“ Komponenten aus dem Inventar hinzu und klicke eine Komponente an, um sie darunter zu konfigurieren."
       action={
-        editable && (
-          <button className="btn sm primary" onClick={save} disabled={busy || !dirty}>
-            <Save size={13} /> {dirty ? 'Speichern' : 'Gespeichert'}
-          </button>
-        )
+        <span className="btn-row" style={{ flexWrap: 'nowrap' }}>
+          <label className="checkbox">
+            <input type="checkbox" checked={showLines} onChange={(e) => setShowLines(e.target.checked)} /> Verbindungen anzeigen
+          </label>
+          {editable && (
+            <button className="btn sm primary" onClick={save} disabled={busy || !dirty}>
+              <Save size={13} /> {dirty ? 'Speichern' : 'Gespeichert'}
+            </button>
+          )}
+        </span>
       }
     >
       <ErrorBox error={error} />
@@ -150,259 +246,106 @@ export default function TopologyEditor({ platform, editable, onSaved }) {
           Hinweis: {w}
         </div>
       ))}
-      {connecting && (
-        <div className="hint" style={{ marginBottom: 8 }}>
-          Verbinde „{byId.get(connecting)?.name}“: klicke jetzt auf die Zielkomponente.{' '}
-          <button className="btn sm" onClick={() => setConnecting(null)}>
-            Abbrechen
-          </button>
-        </div>
-      )}
-      <div className="topo">
-        <div className="topo-palette" aria-label="Inventar">
-          <div className="sub">Inventar ({unplaced.length} nicht platziert)</div>
-          {platform.endpoints.length === 0 && <div className="hint">Lege zuerst im Tab Komponenten Einträge an.</div>}
-          {platform.endpoints.map((e) => {
-            const meta = KIND_META[e.kind];
+      <div className="topo-scroll">
+        <div ref={frame} className="topo-frame" style={{ minWidth: colCount * (COL_W + COL_GAP) + 24 }}>
+          {showLines && (
+            <svg className="topo-lines" aria-hidden="true">
+              {paths.map((p) => (
+                <path key={p.key} d={p.d} />
+              ))}
+            </svg>
+          )}
+          {layers.map((layer) => {
+            const nodes = placedOf(layer.key);
+            const closed = Boolean(collapsed[layer.key]);
+            const sel = nodes.find((n) => n.id === selected);
+            const meta = KIND_META[layer.kinds[0]];
             return (
-              <div
-                key={e.id}
-                className={`topo-chip${layout[e.id] ? ' placed' : ''}`}
-                draggable={editable && !layout[e.id]}
-                onDragStart={(ev) => ev.dataTransfer.setData('text/plain', e.id)}
-                onDoubleClick={() => editable && !layout[e.id] && place(e.id, 20 + (COLUMN[e.kind] ?? 5) * 220, 20 + placed.filter((p) => p.kind === e.kind).length * 100)}
-                title={layout[e.id] ? 'Bereits platziert' : 'Auf die Fläche ziehen (oder Doppelklick)'}
-              >
-                {meta && <meta.Icon size={14} style={{ color: meta.color }} />} {e.name}
-              </div>
+              <section key={layer.key} className="topo-layer">
+                <header>
+                  <button className="btn sm ghost" onClick={() => setCollapsed((c) => ({ ...c, [layer.key]: !closed }))} aria-expanded={!closed} aria-label={`${layer.label} ${closed ? 'ausklappen' : 'einklappen'}`}>
+                    {closed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                  </button>
+                  {meta && <meta.Icon size={15} style={{ color: meta.color }} />}
+                  <strong>{layer.label}</strong>
+                  {layer.optional && <span className="tag">optional</span>}
+                  <span className="sub">{nodes.length ? `${nodes.length} Komponente${nodes.length > 1 ? 'n' : ''}` : 'leer'}</span>
+                  <span style={{ flex: 1 }} />
+                  {editable && (
+                    <button className="btn sm" onClick={() => setAdding(layer)} aria-label={`${layer.label}: Komponente hinzufügen`}>
+                      <Plus size={14} />
+                    </button>
+                  )}
+                </header>
+                {!closed && (
+                  <>
+                    <div className="topo-row" style={{ gridTemplateColumns: `repeat(${colCount}, ${COL_W}px)` }}>
+                      {nodes.map((n) => (
+                        <button
+                          key={n.id}
+                          ref={(el) => (el ? (cards.current[n.id] = el) : delete cards.current[n.id])}
+                          className={`topo-card${selected === n.id ? ' selected' : ''}`}
+                          style={{ gridColumn: (columns.get(n.id) ?? 0) + 1 }}
+                          onClick={() => setSelected(selected === n.id ? null : n.id)}
+                        >
+                          <span className="topo-card-title">{n.name}</span>
+                          <span className="sub">{summaryOf(n, model, served)}</span>
+                          {n.kind === 'server' && gpusOf(n.id).length > 0 && (
+                            <span className="topo-gpus">
+                              {gpusOf(n.id).map((g) => (
+                                <span key={g.id} className="tag" title={model.gpuLabel(g)}>
+                                  {g.name}
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                          {n.kind === 'interconnect' && (n.spec?.bundles ?? []).length > 0 && (
+                            <span className="topo-gpus">
+                              {n.spec.bundles.map((b) => (
+                                <span key={b.id} className="tag">
+                                  {b.name}
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    {nodes.length === 0 && <div className="sub topo-empty">Noch keine Komponente. Mit „+“ aus dem Inventar hinzufügen.</div>}
+                    {sel && <ConfigBar key={sel.id} node={sel} m={model} onRemove={() => removeNode(sel.id)} />}
+                  </>
+                )}
+              </section>
             );
           })}
         </div>
-        <div>
-          <div ref={canvas} className="topo-canvas" onDragOver={(e) => e.preventDefault()} onDrop={onDropCanvas} onClick={() => setSelected(null)}>
-            <div style={{ position: 'relative', width, height }}>
-              <svg className="topo-svg" width={width} height={height}>
-                <defs>
-                  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a8f98" />
-                  </marker>
-                </defs>
-                {visible.map((e) => {
-                  const a = center(e.from_id);
-                  const b = center(e.to_id);
-                  const style = LINK_STYLE[e.kind];
-                  const key = edgeKey(e);
-                  const active = selected?.edge === key;
-                  const midX = (a.x + b.x) / 2;
-                  const midY = (a.y + b.y) / 2;
-                  return (
-                    <g key={key}>
-                      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={14} style={{ pointerEvents: 'stroke', cursor: 'pointer' }} onClick={(ev) => (ev.stopPropagation(), setSelected({ edge: key }))} />
-                      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={style.stroke} strokeWidth={active ? 3.5 : 2} strokeDasharray={style.dash} markerEnd="url(#arrow)" />
-                      <text x={midX} y={midY - 6} textAnchor="middle" fontSize="11" fill="currentColor">
-                        {e.kind === 'route' ? (e.models?.length ? e.models.join(', ').slice(0, 40) : 'alle Modelle') : e.kind === 'runs_on' && e.slice !== null && e.slice !== undefined ? `MIG ${e.slice + 1}` : LINK_LABEL[e.kind]}
-                      </text>
-                    </g>
-                  );
-                })}
-              </svg>
-              {placed.map((e) => {
-                const meta = KIND_META[e.kind];
-                const pos = layout[e.id];
-                const isSel = selected?.node === e.id || connecting === e.id;
-                return (
-                  <div
-                    key={e.id}
-                    className={`topo-node${isSel ? ' selected' : ''}`}
-                    style={{ left: pos.x, top: pos.y, width: NODE_W, minHeight: NODE_H, cursor: editable ? 'grab' : 'default' }}
-                    onPointerDown={(ev) => startMove(ev, e.id)}
-                    onPointerMove={moveNode}
-                    onPointerUp={endMove}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      if (connecting) connect(e.id);
-                      else setSelected({ node: e.id });
-                    }}
-                  >
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontWeight: 600 }}>
-                      {meta && <meta.Icon size={14} style={{ color: meta.color }} />} <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.name}</span>
-                    </div>
-                    <div className="sub" style={{ fontSize: 11 }}>
-                      {meta?.label}
-                      {e.kind === 'gpu' && e.spec?.mig?.enabled && ` · MIG ${e.spec.mig.layout.length}×`}
-                      {e.kind === 'llm' && (served[e.id] ?? []).length > 0 && ` · ${(served[e.id] ?? []).length} Modell(e)`}
-                    </div>
-                    {e.kind === 'gpu' && e.spec?.mig?.enabled && (
-                      <div style={{ display: 'flex', gap: 3, marginTop: 4, flexWrap: 'wrap' }}>
-                        {e.spec.mig.layout.map((l, i) => (
-                          <span key={i} className="tag" style={{ fontSize: 10, padding: '0 4px' }}>
-                            {l.profile}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    {editable && (
-                      <span
-                        className="topo-port"
-                        style={{ right: -6 }}
-                        title="Verbinden"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          setConnecting(e.id);
-                        }}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-              {placed.length === 0 && <div className="empty" style={{ position: 'absolute', inset: 0 }}>Ziehe Komponenten aus dem Inventar hierher.</div>}
-            </div>
-          </div>
-
-          {selNode && (
-            <NodeDetails
-              node={selNode}
-              editable={editable}
-              served={served[selNode.id] ?? []}
-              onServed={(v) => (setServed((s) => ({ ...s, [selNode.id]: v })), touch())}
-              onConnect={() => setConnecting(selNode.id)}
-              onRemove={() => remove(selNode.id)}
-            />
-          )}
-          {selEdge && (
-            <EdgeDetails
-              edge={selEdge}
-              byId={byId}
-              served={served}
-              editable={editable}
-              onChange={(patch) => (setEdges((es) => es.map((e) => (edgeKey(e) === edgeKey(selEdge) ? { ...e, ...patch } : e))), setSelected({ edge: edgeKey({ ...selEdge, ...patch }) }), touch())}
-              onRemove={() => (setEdges((es) => es.filter((e) => edgeKey(e) !== edgeKey(selEdge))), setSelected(null), touch())}
-            />
-          )}
-        </div>
       </div>
-      {sliceChoice && (
-        <SliceDialog
-          gpu={sliceChoice.to}
-          onClose={() => setSliceChoice(null)}
-          onPick={(slice) => {
-            addEdge({ kind: 'runs_on', from_id: sliceChoice.from.id, to_id: sliceChoice.to.id, slice, models: [] });
-            setSliceChoice(null);
-          }}
-        />
+      {adding && (
+        <Modal title={`${adding.label}: Komponente hinzufügen`} onClose={() => setAdding(null)}>
+          {candidates(adding).length === 0 ? (
+            <div className="hint">Im Inventar gibt es keine weitere Komponente dieser Art. Lege sie im Tab Inventar an.</div>
+          ) : (
+            <div className="btn-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+              {candidates(adding).map((e) => (
+                <button key={e.id} className="btn" style={{ justifyContent: 'flex-start' }} onClick={() => addNode(adding.key, e.id)}>
+                  {e.name} <span className="sub">{KIND_META[e.kind]?.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Modal>
       )}
     </Card>
   );
 }
 
-function NodeDetails({ node, editable, served, onServed, onConnect, onRemove }) {
-  const models = (node.models ?? []).filter((m) => m.available).map((m) => m.name);
-  const set = new Set(served);
-  return (
-    <div className="card" style={{ marginTop: 10, padding: 12 }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <strong>{node.name}</strong>
-        <span className="sub">{KIND_META[node.kind]?.label}</span>
-        <span style={{ flex: 1 }} />
-        {editable && (
-          <>
-            <button className="btn sm" onClick={onConnect}>
-              <Link2 size={13} /> Verbinden
-            </button>
-            <button className="btn sm ghost danger" onClick={onRemove}>
-              <X size={13} /> Von Fläche nehmen
-            </button>
-          </>
-        )}
-      </div>
-      {node.kind === 'llm' && (
-        <div style={{ marginTop: 8 }}>
-          <div className="sub">Modelle auf diesem Inferenzserver (aus /v1/models)</div>
-          {models.length === 0 && <div className="hint">Keine Modelle gefunden. Verbindung unter Komponenten testen.</div>}
-          <div className="pick-list" style={{ maxHeight: 150 }}>
-            {models.map((m) => (
-              <label key={m}>
-                <input type="checkbox" disabled={!editable} checked={set.has(m)} onChange={() => onServed(set.has(m) ? served.filter((x) => x !== m) : [...served, m])} />
-                <span>{m}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EdgeDetails({ edge, byId, served, editable, onChange, onRemove }) {
-  const from = byId.get(edge.from_id);
-  const to = byId.get(edge.to_id);
-  const options = edge.kind === 'route' ? (served[edge.to_id]?.length ? served[edge.to_id] : (to?.models ?? []).filter((m) => m.available).map((m) => m.name)) : [];
-  const set = new Set(edge.models ?? []);
-  return (
-    <div className="card" style={{ marginTop: 10, padding: 12 }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <strong>
-          {from?.name} → {to?.name}
-        </strong>
-        <span className="sub">{LINK_LABEL[edge.kind]}</span>
-        <span style={{ flex: 1 }} />
-        {editable && (
-          <button className="btn sm ghost danger" onClick={onRemove}>
-            <Trash2 size={13} /> Verbindung löschen
-          </button>
-        )}
-      </div>
-      {edge.kind === 'route' && (
-        <div style={{ marginTop: 8 }}>
-          <div className="sub">Modelle, die das Gateway an diesen Inferenzserver weiterleitet (keine Auswahl = alle)</div>
-          <div className="pick-list" style={{ maxHeight: 150 }}>
-            {options.map((m) => (
-              <label key={m}>
-                <input type="checkbox" disabled={!editable} checked={set.has(m)} onChange={() => onChange({ models: set.has(m) ? edge.models.filter((x) => x !== m) : [...(edge.models ?? []), m] })} />
-                <span>{m}</span>
-              </label>
-            ))}
-            {options.length === 0 && <div className="hint">Der Inferenzserver hat keine Modelle.</div>}
-          </div>
-        </div>
-      )}
-      {edge.kind === 'runs_on' && to?.spec?.mig?.enabled && (
-        <label className="field" style={{ marginTop: 8 }}>
-          <span>MIG-Instanz</span>
-          <select
-            disabled={!editable}
-            value={edge.slice ?? ''}
-            onChange={(e) => onChange({ slice: e.target.value === '' ? null : Number(e.target.value) })}
-          >
-            <option value="">ganze GPU</option>
-            {to.spec.mig.layout.map((l, i) => (
-              <option key={i} value={i}>
-                Instanz {i + 1}: {l.profile}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-    </div>
-  );
-}
-
-function SliceDialog({ gpu, onClose, onPick }) {
-  return (
-    <Modal title={`Auf welcher Instanz von ${gpu.name} läuft der Inferenzserver?`} onClose={onClose}>
-      <p className="hint" style={{ marginTop: 0 }}>
-        Die GPU ist mit MIG geteilt. Wähle die Instanz oder die ganze GPU.
-      </p>
-      <div className="btn-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-        {gpu.spec.mig.layout.map((l, i) => (
-          <button key={i} className="btn" onClick={() => onPick(i)}>
-            Instanz {i + 1}: {l.profile} ({l.memory_gb ?? '?'} GB)
-          </button>
-        ))}
-        <button className="btn" onClick={() => onPick(null)}>
-          Ganze GPU
-        </button>
-      </div>
-    </Modal>
-  );
+function summaryOf(n, m, served) {
+  const s = n.spec ?? {};
+  if (n.kind === 'server') return [s.server_type === 'gpu' ? 'GPU-Server' : 'CPU-Server', m.gpusOf(n.id).length ? `${m.gpusOf(n.id).length} GPU` : null].filter(Boolean).join(' · ');
+  if (n.kind === 'kubernetes') return `${(s.nodes ?? []).length} Knoten`;
+  if (n.kind === 'llm') return `${(served[n.id] ?? []).length} Modell(e)`;
+  if (n.kind === 'ai_proxy') return `${m.rows.filter((r) => r.gateway_id === n.id).length} Route(n)`;
+  if (n.kind === 'iam') return `${(s.services ?? []).length} Dienst(e)${s.enterprise_accounts ? ' · Enterprise' : ''}`;
+  if (n.kind === 'interconnect') return `${m.presets.interconnect_types.find((t) => t.key === s.type)?.label ?? ''}`;
+  return KIND_META[n.kind]?.label ?? '';
 }

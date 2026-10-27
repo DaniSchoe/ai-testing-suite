@@ -1,7 +1,7 @@
 // Inventar einer Plattform: Komponentenarten mit ihren Voreinstellungen (Anbieter, Zertifikate, GPU-Typen, MIG).
 // Die Prüfung der typspezifischen Angaben steht in inventorySpec.js.
 
-export const KINDS = ['datacenter', 'kubernetes', 'gpu', 'llm', 'ai_proxy', 'mcp', 'vector_db', 'iam', 'observability'];
+export const KINDS = ['datacenter', 'server', 'gpu', 'interconnect', 'kubernetes', 'llm', 'ai_proxy', 'mcp', 'vector_db', 'iam', 'observability'];
 // Arten, die über eine URL angesprochen werden (Endpunkt ohne /v1 bzw. Basis-URL).
 export const URL_KINDS = ['llm', 'ai_proxy', 'mcp', 'vector_db', 'iam', 'observability'];
 
@@ -91,7 +91,43 @@ export const GATEWAY_PRODUCTS = [
   { key: 'other', label: 'Anderes Produkt', open: null },
 ];
 
+// Ebenen der Topologie, von unten nach oben gelesen von oben nach unten. GPUs hängen an Servern und haben keine eigene Ebene.
+export const LAYERS = [
+  { key: 'datacenter', label: 'Rechenzentrum', kinds: ['datacenter'] },
+  { key: 'server', label: 'Server', kinds: ['server'] },
+  { key: 'interconnect', label: 'Interconnect', kinds: ['interconnect'], optional: true },
+  { key: 'orchestration', label: 'Orchestration', kinds: ['kubernetes'] },
+  { key: 'inference', label: 'Inferenz', kinds: ['llm'] },
+  { key: 'gateway', label: 'AI Gateway', kinds: ['ai_proxy'] },
+  { key: 'mcp', label: 'MCP', kinds: ['mcp'] },
+  { key: 'database', label: 'Datenbanken', kinds: ['vector_db'] },
+  { key: 'observability', label: 'Observability', kinds: ['observability'] },
+  { key: 'iam', label: 'IAM', kinds: ['iam'] },
+];
+
+export const SERVER_TYPES = [
+  { key: 'cpu', label: 'CPU-Server' },
+  { key: 'gpu', label: 'GPU-Server' },
+];
+export const INTERCONNECT_TYPES = [
+  { key: 'nvlink', label: 'NVLink / NVSwitch' },
+  { key: 'infiniband', label: 'InfiniBand' },
+  { key: 'roce', label: 'RoCE (Ethernet)' },
+  { key: 'ethernet', label: 'Ethernet' },
+  { key: 'other', label: 'Anderes' },
+];
+export const K8S_ROLES = [
+  { key: 'master', label: 'Master (Control Plane)' },
+  { key: 'worker', label: 'Worker' },
+  { key: 'etcd', label: 'etcd' },
+  { key: 'gpu', label: 'GPU-Worker' },
+];
+
 export const presets = () => ({
+  layers: LAYERS,
+  server_types: SERVER_TYPES,
+  interconnect_types: INTERCONNECT_TYPES,
+  k8s_roles: K8S_ROLES,
   kinds: KINDS,
   hosting_providers: HOSTING_PROVIDERS,
   certifications: CERTIFICATIONS,

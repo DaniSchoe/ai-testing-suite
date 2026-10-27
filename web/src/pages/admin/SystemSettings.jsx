@@ -1,59 +1,36 @@
-import { useEffect, useState } from 'react';
-import { api, Card, ErrorBox, Field, Loading, PageHead, useAction, useApi, useUser } from '../../lib.jsx';
+import { Link } from 'react-router-dom';
+import { Archive, Building2, ScrollText, ShieldCheck, Users } from 'lucide-react';
+import { can, PageHead, useUser } from '../../lib.jsx';
 
-const LABELS = { public: 'Öffentlich', internal: 'Intern', customer: 'Kundendaten', attack: 'Angriffsinhalte' };
+const any = (user, ...p) => p.some((x) => can(user, x));
+
+// Einstieg in die Systemeinstellungen: jede Kachel führt zur jeweiligen Verwaltungsansicht.
+const TILES = [
+  ['/admin/organization', Building2, 'Organization', 'Mandanten, Abteilungen und Teams als Hierarchie.', (u) => any(u, 'tenants.manage', 'teams.manage', 'users.manage')],
+  ['/admin/users', Users, 'User', 'User verwalten, Rollen vergeben und Teams zuordnen.', (u) => any(u, 'users.manage', 'teams.manage')],
+  ['/admin/roles', ShieldCheck, 'Rollen', 'Rollen und ihre Berechtigungen.', (u) => any(u, 'roles.manage')],
+  ['/admin/audit-log', ScrollText, 'Audit-Log', 'Wer hat wann was geändert.', (u) => any(u, 'audit.view')],
+  ['/admin/archive', Archive, 'Archivierung', 'Aufbewahrungsfristen für Nachweise.', (u) => any(u, 'settings.manage')],
+];
 
 export default function SystemSettings() {
   const user = useUser();
-  const retention = useApi('/api/settings/retention');
-  const [days, setDays] = useState(null);
-  const [run, error, busy] = useAction();
-  const [saved, setSaved] = useState(false);
-  useEffect(() => {
-    if (retention.data) setDays(retention.data.days);
-  }, [retention.data]);
-  const save = () =>
-    run(async () => {
-      await api('/api/settings/retention', { method: 'PUT', body: { days } });
-      setSaved(true);
-      retention.reload();
-    });
+  const tiles = TILES.filter(([, , , , visible]) => visible(user));
   return (
     <>
-      <PageHead title="Systemeinstellungen">Globale Einstellungen für alle Mandanten.</PageHead>
-      <ErrorBox error={error} />
-      <Loading state={retention}>
-        {(r) => (
-          <Card
-            title="Aufbewahrung von Nachweisen"
-            sub="Nach Ablauf werden Prompt und Antwort gelöscht; Hash, Ergebnis und Zeitpunkt bleiben für die Nachweiskette erhalten. Die Frist richtet sich nach der Sensitivität des Datensatzes."
-            action={
-              <button className="btn sm primary" onClick={save} disabled={busy}>
-                Speichern
-              </button>
-            }
-          >
-            <div className="form-grid">
-              {Object.entries(LABELS).map(([k, label]) => (
-                <Field key={k} label={`${label} (Tage)`} hint={`Standard ${r.defaults[k]}`}>
-                  <input type="number" min={1} max={3650} value={days?.[k] ?? ''} onChange={(e) => (setSaved(false), setDays({ ...days, [k]: Number(e.target.value) }))} />
-                </Field>
-              ))}
-            </div>
-            {saved && <div className="hint">Gespeichert. Die Bereinigung läuft täglich.</div>}
-          </Card>
-        )}
-      </Loading>
-      <Card title="Anwendung">
-        <div className="meta-row">
-          <span>Version</span>
-          <span className="mono">{user.version}</span>
-        </div>
-        <div className="meta-row">
-          <span>Anmeldung</span>
-          <span>{user.authMode === 'dev' ? 'Entwicklungsmodus (ohne Keycloak)' : 'Keycloak (OIDC)'}</span>
-        </div>
-      </Card>
+      <PageHead title="Systemeinstellungen">Organisation, User, Rollen, Protokoll und Aufbewahrung.</PageHead>
+      {tiles.length === 0 && <div className="card empty">Keine Einstellungen für deine Rolle verfügbar</div>}
+      <div className="tile-grid">
+        {tiles.map(([to, Icon, title, text]) => (
+          <Link key={to} to={to} className="tile">
+            <span className="tile-icon">
+              <Icon size={18} />
+            </span>
+            <h3>{title}</h3>
+            <div className="sub">{text}</div>
+          </Link>
+        ))}
+      </div>
     </>
   );
 }

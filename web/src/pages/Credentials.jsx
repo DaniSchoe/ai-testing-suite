@@ -9,7 +9,7 @@ export default function Credentials() {
   const tokenAdmin = can(user, 'users.manage');
   return (
     <>
-      <PageHead title="Zugangsdaten">API-Keys für Gateways und Service-Tokens für CI/CD und die Kommandozeile.</PageHead>
+      <PageHead title="Keys">API-Keys für Gateways und Service-Tokens für CI/CD und die Kommandozeile.</PageHead>
       <Tabs
         value={tab}
         onChange={setTab}

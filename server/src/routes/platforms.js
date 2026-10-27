@@ -5,8 +5,8 @@ import { many, one, query, tx } from '../db.js';
 import { catalog } from './admin.js';
 import { platformStatus, takeSnapshot } from '../snapshot.js';
 import { assess } from '../assessment.js';
-import { presets } from '../inventory.js';
-import { validateLinks } from '../inventorySpec.js';
+import { LAYERS, presets } from '../inventory.js';
+import { cleanSpec, validateLinks, validateSpecRefs } from '../inventorySpec.js';
 
 const bad = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const ENVIRONMENTS = ['dev', 'prod'];
@@ -95,39 +95,62 @@ export default async function platformRoutes(app) {
     return { ok: true };
   });
 
-  // Topologie: Zuordnungen (Standort, Cluster, GPU), Routen vom Gateway zu Inferenzservern, Modelle je Inferenzserver und Positionen
-  // im Editor werden gemeinsam ersetzt. Gateway und Backend müssen zur Plattform gehören.
+  // Topologie: Zuordnungen, Routen, Konfigurationen der Komponenten (specs) und Platzierung in den Ebenen werden gemeinsam ersetzt.
+  // Alles muss zur Plattform gehören. Cluster-Zuordnungen von Servern ergeben sich aus den Knoten der Kubernetes-Cluster.
   app.put('/api/platforms/:id/topology', manager, async (request) => {
     const p = await load(request);
     const b = request.body ?? {};
     const eps = await many('select id, name, kind, spec from endpoints where platform_id = $1', [p.id]);
     const byId = new Map(eps.map((e) => [e.id, e]));
+    const specs = new Map();
+    for (const [id, raw] of Object.entries(b.specs ?? {})) {
+      const e = byId.get(id);
+      if (!e) continue;
+      const spec = cleanSpec(e.kind, { ...(e.spec ?? {}), ...raw });
+      specs.set(id, spec);
+      byId.set(id, { ...e, spec });
+    }
+    for (const e of byId.values()) validateSpecRefs(e, byId);
     const links = validateLinks(b.links, byId);
+    for (const e of byId.values()) {
+      if (e.kind !== 'kubernetes') continue;
+      for (const n of e.spec?.nodes ?? []) {
+        if (!links.some((l) => l.kind === 'cluster' && l.from_id === n.server_id && l.to_id === e.id)) links.push({ kind: 'cluster', from_id: n.server_id, to_id: e.id, data: {} });
+      }
+    }
     const routes = b.routes ?? [];
     for (const r of routes) {
       if (byId.get(r.gateway_endpoint_id)?.kind !== 'ai_proxy') throw bad('Der Ausgang einer Route muss ein AI Gateway der Plattform sein');
       if (!['llm', 'ai_proxy'].includes(byId.get(r.backend_endpoint_id)?.kind) || r.backend_endpoint_id === r.gateway_endpoint_id) throw bad('Eine Route führt zu einem Inferenzserver oder Gateway der Plattform');
+      const seen = new Set();
+      r.mappings = (r.mappings ?? (r.models ?? []).map((m) => ({ gateway_model: m, backend_model: m })))
+        .map((m) => ({ gateway_model: String(m.gateway_model ?? '').trim(), backend_model: String(m.backend_model ?? '').trim() }))
+        .filter((m) => m.gateway_model && m.backend_model && !seen.has(`${m.gateway_model}|${m.backend_model}`) && seen.add(`${m.gateway_model}|${m.backend_model}`));
+      r.models = [...new Set(r.mappings.map((m) => m.backend_model))];
     }
-    const layout = {};
-    for (const [id, pos] of Object.entries(b.layout ?? {})) {
-      if (byId.has(id) && Number.isFinite(Number(pos?.x)) && Number.isFinite(Number(pos?.y))) layout[id] = { x: Math.round(pos.x), y: Math.round(pos.y) };
+    // Ohne Angabe bleibt die gespeicherte Platzierung bestehen.
+    const layout = b.layout === undefined ? (p.layout?.placed ? p.layout : { placed: {}, collapsed: {} }) : { placed: {}, collapsed: {} };
+    for (const [layer, ids] of Object.entries(b.layout?.placed ?? {})) {
+      if (LAYERS.some((l) => l.key === layer) && Array.isArray(ids)) layout.placed[layer] = [...new Set(ids.filter((id) => byId.has(id)))];
     }
+    for (const [layer, on] of Object.entries(b.layout?.collapsed ?? {})) if (on && LAYERS.some((l) => l.key === layer)) layout.collapsed[layer] = true;
     const warnings = [];
     const slots = new Map();
     for (const l of links.filter((x) => x.kind === 'runs_on')) {
-      const key = `${l.to_id}|${l.data.mig_slice ?? 'all'}`;
+      const key = `${l.to_id}|${l.data.bundle_id ?? l.data.mig_slice ?? 'all'}`;
       slots.set(key, [...(slots.get(key) ?? []), byId.get(l.from_id).name]);
     }
     for (const [key, users] of slots) {
-      const gpu = byId.get(key.split('|')[0]);
-      if (users.length > 1) warnings.push(`${gpu.name}: ${users.join(', ')} teilen sich ${key.endsWith('|all') ? 'die GPU' : 'eine MIG-Instanz'}`);
+      const [targetId, slot] = key.split('|');
+      const target = byId.get(targetId);
+      if (users.length > 1) warnings.push(`${target.name}: ${users.join(', ')} teilen sich ${slot === 'all' ? 'die GPU' : 'eine MIG-Instanz oder ein Bundle'}`);
     }
     for (const [id, models] of Object.entries(b.served_models ?? {})) {
       if (byId.get(id)?.kind !== 'llm') continue;
-      const spec = { ...(byId.get(id).spec ?? {}), served_models: [...new Set((models ?? []).map(String))] };
-      await query('update endpoints set spec = $2 where id = $1', [id, JSON.stringify(spec)]);
+      specs.set(id, { ...(specs.get(id) ?? byId.get(id).spec ?? {}), served_models: [...new Set((models ?? []).map(String))] });
     }
     await tx(async (c) => {
+      for (const [id, spec] of specs) await c.query('update endpoints set spec = $2 where id = $1 and platform_id = $3', [id, JSON.stringify(spec), p.id]);
       await c.query('delete from platform_links where platform_id = $1', [p.id]);
       for (const l of links) {
         await c.query('insert into platform_links (platform_id, kind, from_id, to_id, data) values ($1, $2, $3, $4, $5)', [p.id, l.kind, l.from_id, l.to_id, JSON.stringify(l.data)]);
@@ -135,9 +158,9 @@ export default async function platformRoutes(app) {
       await c.query('delete from platform_routes where platform_id = $1', [p.id]);
       for (const r of routes) {
         await c.query(
-          `insert into platform_routes (platform_id, gateway_endpoint_id, backend_endpoint_id, models, note)
-           values ($1, $2, $3, $4, $5) on conflict (gateway_endpoint_id, backend_endpoint_id) do update set models = excluded.models, note = excluded.note`,
-          [p.id, r.gateway_endpoint_id, r.backend_endpoint_id, (r.models ?? []).map(String), r.note ?? null],
+          `insert into platform_routes (platform_id, gateway_endpoint_id, backend_endpoint_id, models, mappings, note)
+           values ($1, $2, $3, $4, $5, $6) on conflict (gateway_endpoint_id, backend_endpoint_id) do update set models = excluded.models, mappings = excluded.mappings, note = excluded.note`,
+          [p.id, r.gateway_endpoint_id, r.backend_endpoint_id, r.models, JSON.stringify(r.mappings), r.note ?? null],
         );
       }
       await c.query('update platforms set layout = $2, updated_at = now() where id = $1', [p.id, JSON.stringify(layout)]);
@@ -146,6 +169,7 @@ export default async function platformRoutes(app) {
     return {
       links: await many('select kind, from_id, to_id, data from platform_links where platform_id = $1', [p.id]),
       routes: await many('select * from platform_routes where platform_id = $1', [p.id]),
+      endpoints: await many('select id, spec from endpoints where platform_id = $1', [p.id]),
       layout,
       warnings,
     };

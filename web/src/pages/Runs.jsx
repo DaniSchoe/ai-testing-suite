@@ -21,7 +21,7 @@ export function Runs() {
 
   return (
     <>
-      <PageHead title="Läufe">Jede Ausführung einer Prüfung mit Ergebnis, Gate und Nachweisen. Testläufe aus dem Katalog zählen hier nicht mit und sind unter „Meine Testläufe“ zu finden.</PageHead>
+      <PageHead title="Historie">Jede Ausführung einer Prüfung mit Ergebnis, Gate und Nachweisen. Testläufe aus dem Katalog zählen hier nicht mit und sind unter „Meine Testläufe“ zu finden.</PageHead>
       <Tabs
         value={tab}
         onChange={setTab}

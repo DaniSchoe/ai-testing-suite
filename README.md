@@ -7,7 +7,7 @@ Baseline-Vergleich, Nachweise mit Hash, Findings, Prüfberichte und ein Dashboar
 
 - **Node.js** (Fastify) und **PostgreSQL**, Job-Queue und Zeitpläne ebenfalls in Postgres (pg-boss)
 - **Keycloak-Login** (OIDC); **Mandanten**, Rollen, Berechtigungen und Teams werden in der App gepflegt
-- **Ziele**: Plattformen (Dev/Prod) mit Inventar (Rechenzentrum, Kubernetes, GPU-Server mit MIG, Inferenzserver, AI Gateway, MCP u. a.), Drag-&-Drop-Topologie, Status, Kill-Switch, Einstufung (Sicherheit, Produktionsreife, Souveränität) und Sizing (Beta). Oben rechts wählst du die Plattform, die Dashboard und alle Listen begrenzt
+- **Ziele**: Plattformen (Dev/Prod) mit Inventar (Rechenzentrum, Server, GPU, Interconnect, Kubernetes, Inferenzserver, AI Gateway, MCP u. a.), Topologie in festen Ebenen mit Konfigurationsleisten, Status, Kill-Switch, Einstufung (Sicherheit, Produktionsreife, Souveränität) und Sizing (Beta). Oben rechts wählst du die Plattform, die Dashboard und alle Listen begrenzt
 - **Datensätze**: versionierte Fälle, Dokumente und Bilder mit Hash, Sprache und Sensitivität (Angriffs-Payloads nur mit eigener Berechtigung)
 - **Testkatalog**: versionierte Vorlagen mit Test-Ziel (Plattform, LLM, Daten, Prozesse) als Kacheln (Entwurf → Prüfung → Veröffentlicht → Veraltet), Vier-Augen-Freigabe, Import/Export als YAML/JSON, Zuordnung zu AIC4, OWASP LLM Top 10 und SOV; Plattformtest „Netzwerk-Isolation“ (Air-Gap)
 - **Modellportfolio**: Modelle erscheinen nicht automatisch; du wählst gefundene Modelle der Endpoints aus und bündelst sie unter einem Namen
@@ -93,12 +93,12 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
 - **Mandanten** trennen Plattformen, Datensätze, Vorlagen (eigene), Prüfungen, Zugangsdaten, Läufe, Findings und Berichte. Offizielle Vorlagen und Datensätze gelten für alle. Der Mandant wird oben gewählt (Header `X-Tenant-Id`); bestehende Daten liegen im Mandanten „Standard“.
 - **Admins per E-Mail**: `ADMIN_EMAILS` (Helm: `adminEmails`) listet Keycloak-E-Mails, die immer
   vollen Zugriff haben. Zählt nur, wenn Keycloak die E-Mail als bestätigt meldet (`email_verified`).
-- **Rollen** sind global definiert und werden je Mandant vergeben (*Verwaltung › Mitglieder & Teams*). Mitgeliefert:
+- **Rollen** sind global definiert und werden je Mandant vergeben (*Administration › Systemeinstellungen › User*). Mitgeliefert:
   *Administrator*, *Engagement Lead* (Prod-Freigaben, Berichte, Findings, Mitglieder), *Test Engineer*,
   *Red Teamer* (sieht Angriffs-Payloads), *Reviewer* (gibt Vorlagen und Berichte frei), *Kunden-Viewer*
   (nur Plattform- und Berichtsebene) und *Service Account* (CI/CD). Weitere Rollen sind frei definierbar.
 - **Vier-Augen-Prinzip** gilt für Katalogfreigaben, Prod-Läufe und Berichte: Wer einreicht oder beantragt, entscheidet nicht – auch nicht in einem Ein-Personen-Setup.
-- **Service-Tokens** (`sat_…`, *Verwaltung › Zugangsdaten*) gelten für einen Mandanten und dürfen Prüfungen starten und Ergebnisse lesen.
+- **Service-Tokens** (`sat_…`, *Plattform › Keys*) gelten für einen Mandanten und dürfen Prüfungen starten und Ergebnisse lesen.
 - Niemand kann mehr Rechte vergeben, als er selbst hat; gesperrte User verlieren sofort den Zugriff.
 
 ## Konfiguration

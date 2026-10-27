@@ -288,10 +288,16 @@ export default async function accessRoutes(app) {
     const b = request.body ?? {};
     if (!b.name?.trim()) throw badRequest('Name fehlt');
     const tenantId = request.user.tenant_id;
+    const departmentId = b.department_id || null;
+    if (departmentId && !(await one('select 1 from departments where id = $1 and tenant_id = $2', [departmentId, tenantId]))) throw badRequest('Abteilung nicht gefunden', 404);
     return tx(async (c) => {
       const { rows } = id
-        ? await c.query('update teams set name = $2, description = $3 where id = $1 and tenant_id = $4 returning *', [id, b.name.trim(), b.description ?? null, tenantId])
-        : await c.query('insert into teams (name, description, tenant_id) values ($1, $2, $3) returning *', [b.name.trim(), b.description ?? null, tenantId]);
+        ? await c.query(
+            `update teams set name = $2, description = $3, department_id = case when $5 then $6::uuid else department_id end
+             where id = $1 and tenant_id = $4 returning *`,
+            [id, b.name.trim(), b.description ?? null, tenantId, b.department_id !== undefined, departmentId],
+          )
+        : await c.query('insert into teams (name, description, tenant_id, department_id) values ($1, $2, $3, $4) returning *', [b.name.trim(), b.description ?? null, tenantId, departmentId]);
       if (!rows[0]) throw badRequest('Team nicht gefunden', 404);
       if (b.memberIds) {
         await c.query('delete from team_members where team_id = $1 and not (user_id = any($2::uuid[]))', [rows[0].id, b.memberIds]);
@@ -305,6 +311,55 @@ export default async function accessRoutes(app) {
   app.put('/api/teams/:id', teamAdmin, async (request) => saveTeam(request, request.params.id));
   app.delete('/api/teams/:id', teamAdmin, async (request) => {
     await query('delete from teams where id = $1 and tenant_id = $2', [request.params.id, request.user.tenant_id]);
+    return { ok: true };
+  });
+
+  // --- Organisation: Mandant -> Abteilung -> Teams ---
+  // Systemadministratoren sehen alle Mandanten, alle anderen nur ihren eigenen.
+  app.get('/api/organization', viewer, async (request) => {
+    const all = request.user.is_system_admin && hasPermission(request.user, 'tenants.manage');
+    const tenants = await many('select id, key, name, description from tenants where ($1 or id = $2) order by name', [all, request.user.tenant_id]);
+    const ids = tenants.map((t) => t.id);
+    const [departments, teams] = await Promise.all([
+      many('select * from departments where tenant_id = any($1::uuid[]) order by name', [ids]),
+      many(
+        `select t.id, t.tenant_id, t.department_id, t.name, t.description,
+           (select count(*)::int from team_members tm where tm.team_id = t.id) as members
+         from teams t where t.tenant_id = any($1::uuid[]) order by t.name`,
+        [ids],
+      ),
+    ]);
+    return tenants.map((t) => ({
+      ...t,
+      current: t.id === request.user.tenant_id,
+      departments: departments.filter((d) => d.tenant_id === t.id).map((d) => ({ ...d, teams: teams.filter((x) => x.department_id === d.id) })),
+      teams: teams.filter((x) => x.tenant_id === t.id && !x.department_id),
+    }));
+  });
+
+  async function saveDepartment(request, id) {
+    const b = request.body ?? {};
+    if (!b.name?.trim()) throw badRequest('Name fehlt');
+    const tenantId = request.user.tenant_id;
+    let row;
+    try {
+      row = id
+        ? await one('update departments set name = $2, description = $3 where id = $1 and tenant_id = $4 returning *', [id, b.name.trim(), b.description ?? null, tenantId])
+        : await one('insert into departments (tenant_id, name, description) values ($1, $2, $3) returning *', [tenantId, b.name.trim(), b.description ?? null]);
+    } catch (err) {
+      if (err.code === '23505') throw badRequest(`Eine Abteilung „${b.name.trim()}“ existiert bereits`);
+      throw err;
+    }
+    if (!row) throw badRequest('Abteilung nicht gefunden', 404);
+    await logAudit(request, id ? 'department.update' : 'department.create', 'department', row.id, { name: row.name });
+    return row;
+  }
+
+  app.post('/api/departments', teamAdmin, async (request) => saveDepartment(request, null));
+  app.put('/api/departments/:id', teamAdmin, async (request) => saveDepartment(request, request.params.id));
+  app.delete('/api/departments/:id', teamAdmin, async (request) => {
+    await query('delete from departments where id = $1 and tenant_id = $2', [request.params.id, request.user.tenant_id]);
+    await logAudit(request, 'department.delete', 'department', request.params.id);
     return { ok: true };
   });
 }

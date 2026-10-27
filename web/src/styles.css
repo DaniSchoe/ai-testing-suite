@@ -645,6 +645,7 @@ input[type='number'],
 input[type='email'],
 input:not([type]),
 .card input[type='search'],
+.toolbar input[type='search'],
 .modal input[type='search'],
 select,
 textarea {
@@ -1183,3 +1184,48 @@ details > summary {
     grid-template-columns: 1fr;
   }
 }
+.org-tree { display: flex; flex-direction: column; gap: 14px; }
+.org-tenant { padding: 12px 16px; }
+.org-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; min-height: 34px; }
+.org-name { font-weight: 600; }
+.org-actions { margin-left: auto; flex-wrap: nowrap; }
+.org-branch { margin-left: 18px; border-left: 2px solid var(--border); padding-left: 12px; }
+.org-leaf { margin-left: 20px; border-left: 2px solid var(--border); padding-left: 12px; }
+.org-empty { padding: 4px 0 6px 26px; }
+.org-team .org-name { font-weight: 500; }
+.tile-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .tile-grid.three { grid-template-columns: 1fr; } }
+.clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 3.9em;
+}
+.clamp-3.over {
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, rgba(0, 0, 0, 0.3));
+  mask-image: linear-gradient(to bottom, #000 55%, rgba(0, 0, 0, 0.3));
+}
+.topo-scroll { overflow-x: auto; }
+.topo-frame { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 4px 0 12px; }
+.topo-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; }
+.topo-lines path { fill: none; stroke: var(--text-3, #8a8f98); stroke-width: 1.2; stroke-dasharray: 4 4; opacity: 0.55; }
+.topo-layer { border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px 10px; }
+.topo-layer > header { position: relative; z-index: 2; background: var(--surface); display: flex; align-items: center; gap: 8px; min-height: 34px; }
+.topo-row { display: grid; gap: 12px 16px; padding: 6px 0; }
+.topo-card {
+  display: flex; flex-direction: column; gap: 3px; text-align: left; font: inherit; color: inherit;
+  position: relative; z-index: 2; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 10px; cursor: pointer; min-width: 0;
+}
+.topo-card:hover, .topo-card.selected { border-color: var(--primary); }
+.topo-card.selected { box-shadow: 0 0 0 2px var(--primary-soft, rgba(80, 100, 220, 0.18)); }
+.topo-card-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-gpus { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
+.topo-gpus .tag { font-size: 10px; padding: 0 4px; }
+.topo-empty { padding: 6px 0 4px; }
+.topo-config { position: relative; z-index: 2; margin-top: 8px; padding: 12px 14px; background: var(--surface); }
+.cfg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cfg-body { border: 0; padding: 0; margin: 0; min-width: 0; }
+.cfg-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cfg-row select { flex: 1; min-width: 0; }
+.cfg-bundle { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 10px; }

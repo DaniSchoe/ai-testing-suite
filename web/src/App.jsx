@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   Boxes,
   AlertTriangle,
@@ -15,15 +15,12 @@ import {
   Monitor,
   Moon,
   Ruler,
-  ScrollText,
   Search,
   Settings,
   ShieldAlert,
-  ShieldCheck,
   Store,
   Sun,
-  Users,
-  Building2,
+  Info,
 } from 'lucide-react';
 import { api, can, getPlatform, getTenant, initials, setPlatform, setPlatformQuiet, setTenant, useApi, UserContext, useTheme } from './lib.jsx';
 import Dashboard from './pages/Dashboard.jsx';
@@ -39,8 +36,10 @@ import { PlatformDetail, Platforms } from './pages/Platforms.jsx';
 import Models from './pages/admin/Models.jsx';
 import Sizing from './pages/Sizing.jsx';
 import Credentials from './pages/Credentials.jsx';
-import Members from './pages/Members.jsx';
-import Tenants from './pages/admin/Tenants.jsx';
+import Users from './pages/admin/Users.jsx';
+import Organization from './pages/admin/Organization.jsx';
+import Archive from './pages/admin/Archive.jsx';
+import InfoPage from './pages/admin/Info.jsx';
 import Roles from './pages/admin/Roles.jsx';
 import AuditLog from './pages/admin/AuditLog.jsx';
 import SystemSettings from './pages/admin/SystemSettings.jsx';
@@ -51,44 +50,33 @@ const any = (...p) => (user) => p.some((x) => can(user, x));
 const NAV = [
   {
     label: 'Übersicht',
-    items: [['/', LayoutGrid, 'Dashboard', any('suite.view'), { end: true }]],
+    items: [
+      ['/', LayoutGrid, 'Dashboard', any('suite.view'), { end: true }],
+      ['/runs', HistoryIcon, 'Historie', any('suite.view'), { badge: 'runs' }],
+    ],
   },
   {
     label: 'Prüfen',
     items: [
       ['/audits', FlaskConical, 'Prüfungen', any('tests.manage', 'runs.start'), { warn: 'approvals' }],
-      ['/runs', HistoryIcon, 'Läufe', any('suite.view'), { badge: 'runs' }],
-    ],
-  },
-  {
-    label: 'Katalog',
-    items: [
       ['/catalog', Store, 'Vorlagen', any('tests.manage', 'catalog.publish')],
       ['/datasets', Database, 'Datensätze', any('tests.manage')],
     ],
   },
   {
-    label: 'Ziele',
+    label: 'Plattform',
     items: [
-      ['/platforms', Layers, 'Plattformen', any('endpoints.manage', 'tests.manage', 'runs.start')],
+      ['/platforms', Layers, 'Komponenten', any('endpoints.manage', 'tests.manage', 'runs.start')],
       ['/models', Boxes, 'Modellportfolio', any('endpoints.manage')],
       ['/sizing', Ruler, 'Sizing', any('endpoints.manage', 'runs.start'), { tag: 'Beta' }],
-    ],
-  },
-  {
-    label: 'Verwaltung',
-    items: [
-      ['/credentials', KeyRound, 'Zugangsdaten', any('tests.manage', 'runs.start', 'endpoints.manage')],
-      ['/members', Users, 'Mitglieder & Teams', any('users.manage', 'teams.manage')],
+      ['/credentials', KeyRound, 'Keys', any('tests.manage', 'runs.start', 'endpoints.manage')],
     ],
   },
   {
     label: 'Administration',
     items: [
-      ['/admin/tenants', Building2, 'Mandanten', any('tenants.manage')],
-      ['/admin/roles', ShieldCheck, 'Rollen', any('roles.manage')],
-      ['/admin/audit-log', ScrollText, 'Audit-Log', any('audit.view')],
-      ['/admin/settings', Settings, 'Systemeinstellungen', any('settings.manage')],
+      ['/admin/settings', Settings, 'Systemeinstellungen', any('settings.manage', 'tenants.manage', 'teams.manage', 'users.manage', 'roles.manage', 'audit.view')],
+      ['/info', Info, 'Info', any('suite.view')],
     ],
   },
 ];
@@ -270,8 +258,12 @@ export default function App() {
               <Route path="/models/:name" element={<ModelDetail />} />
               <Route path="/sizing" element={<Sizing />} />
               <Route path="/credentials" element={<Credentials />} />
-              <Route path="/members" element={<Members />} />
-              <Route path="/admin/tenants" element={<Tenants />} />
+              <Route path="/info" element={<InfoPage />} />
+              <Route path="/members" element={<Navigate to="/admin/users" replace />} />
+              <Route path="/admin/tenants" element={<Navigate to="/admin/organization" replace />} />
+              <Route path="/admin/organization" element={<Organization />} />
+              <Route path="/admin/users" element={<Users />} />
+              <Route path="/admin/archive" element={<Archive />} />
               <Route path="/admin/roles" element={<Roles />} />
               <Route path="/admin/audit-log" element={<AuditLog />} />
               <Route path="/admin/settings" element={<SystemSettings />} />

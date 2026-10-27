@@ -67,7 +67,7 @@ for (const env of ['dev', 'prod']) {
   // vLLM ohne Auth; das Modell heißt dort anders als im Gateway und bekommt deshalb einen Alias.
   const vllm = await upsertEndpoint(platform, { name: `vLLM Qwen3 (Mock)${suffix}`, kind: 'llm', base_url: `${MOCK_URL}/vllm-qwen`, default_model: 'qwen3-32b' });
   await query(`update endpoint_models set alias = 'qwen3-32b' where endpoint_id = $1 and name = 'Qwen/Qwen3-32B'`, [vllm.id]);
-  await query(`insert into platform_routes (platform_id, gateway_endpoint_id, backend_endpoint_id, models) values ($1, $2, $3, '{qwen3-32b}') on conflict do nothing`, [platform.id, gateway.id, vllm.id]);
+  await query(`insert into platform_routes (platform_id, gateway_endpoint_id, backend_endpoint_id, models, mappings) values ($1, $2, $3, '{Qwen/Qwen3-32B}', '[{"gateway_model":"qwen3-32b","backend_model":"Qwen/Qwen3-32B"}]') on conflict do nothing`, [platform.id, gateway.id, vllm.id]);
   // Metrik-Endpunkte des Mock-Servers, damit Lasttests Messwerte der Komponenten erfassen.
   await query(
     `insert into platform_sizing (platform_id, config) values ($1, $2) on conflict (platform_id) do nothing`,
@@ -80,14 +80,19 @@ for (const env of ['dev', 'prod']) {
   const k8s = await upsertComponent(platform, { name: `Kubernetes${suffix}`, kind: 'kubernetes', spec: { operation: 'self_managed', distribution: 'rke2', version: '1.31', certifications: [] } });
   const gpu1 = await upsertComponent(platform, { name: `GPU H100 #1${suffix}`, kind: 'gpu', metrics_url: `${MOCK_URL}/metrics/gpu`, spec: { gpu_type: 'h100', memory_gb: 80, mig: { enabled: true, layout: [{ profile: '3g.40gb', slices: 3, memory_gb: 40 }, { profile: '4g.40gb', slices: 4, memory_gb: 40 }] } } });
   const gpu2 = await upsertComponent(platform, { name: `GPU H100 #2${suffix}`, kind: 'gpu', metrics_url: `${MOCK_URL}/metrics/gpu`, spec: { gpu_type: 'h100', memory_gb: 80, mig: { enabled: false, layout: [] } } });
+  const server = await upsertComponent(platform, { name: `GPU-Server 1${suffix}`, kind: 'server', spec: { server_type: 'gpu', model: 'Dell PowerEdge XE9680', cpu_cores: 112, ram_gb: 2048, storage_tb: 30 } });
+  const nvlink = await upsertComponent(platform, { name: `NVLink${suffix}`, kind: 'interconnect', spec: { type: 'nvlink', bundles: [{ id: 'b1', name: 'H100 Verbund', mode: 'nvlink', gpu_ids: [gpu1.id, gpu2.id] }] } });
+  await query('update endpoints set spec = $2 where id = $1', [k8s.id, JSON.stringify({ operation: 'self_managed', distribution: 'rke2', version: '1.31', certifications: [], nodes: [{ server_id: server.id, role: 'gpu' }] })]);
   await query('delete from platform_links where platform_id = $1', [platform.id]);
   const link = (kind, from, to, data = {}) => query('insert into platform_links (platform_id, kind, from_id, to_id, data) values ($1, $2, $3, $4, $5)', [platform.id, kind, from.id, to.id, JSON.stringify(data)]);
   await link('hosted_in', k8s, dc);
-  await link('cluster', gpu1, k8s);
-  await link('cluster', gpu2, k8s);
-  await link('hosted_in', gpu1, dc);
-  await link('hosted_in', gpu2, dc);
+  await link('hosted_in', server, dc);
+  await link('cluster', server, k8s);
+  await link('hosted_in', gpu1, server);
+  await link('hosted_in', gpu2, server);
   await link('runs_on', vllm, gpu2);
+  const layout = { placed: { datacenter: [dc.id], server: [server.id], interconnect: [nvlink.id], orchestration: [k8s.id], inference: [vllm.id], gateway: [gateway.id], mcp: [mcp.id] }, collapsed: {} };
+  await query('update platforms set layout = $2 where id = $1', [platform.id, JSON.stringify(layout)]);
   platforms[env] = { platform, gateway, vllm, mcp };
 }
 
