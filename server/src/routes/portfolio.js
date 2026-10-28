@@ -5,9 +5,11 @@ import { logAudit } from '../audit.js';
 import { many, one, tx } from '../db.js';
 import { hasPermission } from '../permissions.js';
 import { canSeePublished } from '../visibility.js';
+import { GATEWAY_PRODUCTS, INFERENCE_PROVIDERS } from '../inventory.js';
 import { suggestModelMetadata } from '../modelMetadata.js';
 
 const CAPABILITIES = ['vision', 'tools', 'reasoning', 'mcp', 'json', 'embeddings'];
+const META_KEYS = ['provider', 'license', 'origin', 'open_weights', 'parameters_b', 'capabilities'];
 const VISIBILITIES = ['admins', 'teams', 'global'];
 const bad = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const text = (v) => (v === undefined || v === null ? null : String(v).trim() || null);
@@ -17,13 +19,20 @@ export default async function portfolioRoutes(app) {
   const manager = { preHandler: requirePermission('endpoints.manage') };
 
   async function members(tenantId) {
-    return many(
-      `select m.portfolio_id, m.endpoint_id, m.name as model_name, m.available, e.name as endpoint_name, e.kind as endpoint_kind,
+    const rows = await many(
+      `select m.portfolio_id, m.endpoint_id, m.name as model_name, m.available, e.name as endpoint_name, e.kind as endpoint_kind, e.spec as endpoint_spec,
               e.platform_id, p.name as platform_name, p.environment as platform_environment
        from endpoint_models m join endpoints e on e.id = m.endpoint_id join platforms p on p.id = e.platform_id
        where e.tenant_id = $1 and m.portfolio_id is not null order by p.name, e.name, m.name`,
       [tenantId],
     );
+    // Quelle: Produkt der Komponente (z. B. LiteLLM, vLLM) statt der Endpunktart.
+    return rows.map(({ endpoint_spec: spec, ...r }) => {
+      const list = r.endpoint_kind === 'ai_proxy' ? GATEWAY_PRODUCTS : INFERENCE_PROVIDERS;
+      const key = r.endpoint_kind === 'ai_proxy' ? (spec?.product ?? 'litellm') : (spec?.provider ?? 'vllm');
+      const custom = r.endpoint_kind === 'ai_proxy' ? spec?.product_name : spec?.provider_name;
+      return { ...r, source: custom || list.find((x) => x.key === key)?.label || key };
+    });
   }
 
   app.get('/api/portfolio', viewer, async (request) => {
@@ -69,23 +78,22 @@ export default async function portfolioRoutes(app) {
     }
     const name = b.name?.trim();
     if (!name) throw bad('Name fehlt');
-    // KI-Vorbefüllung: beim Anlegen (und auf Wunsch beim Bearbeiten) werden leere Metadaten aus dem Namen abgeleitet.
+    // KI-Vorbefüllung: beim Speichern werden leere Metadaten aus dem Namen abgeleitet.
     const same = (x, y) => JSON.stringify(Array.isArray(x) ? [...x].sort() : (x ?? null)) === JSON.stringify(Array.isArray(y) ? [...y].sort() : (y ?? null));
     const aiFilled = new Set(existing?.ai_filled ?? []);
     // Manuell geänderte Angaben gelten nicht mehr als von der KI befüllt.
     for (const k of [...aiFilled]) if (b[k] !== undefined && !same(b[k] === '' ? null : b[k], existing?.[k])) aiFilled.delete(k);
-    if (!id || b.autofill) {
-      const ai = await suggestModelMetadata(tenantId, name, request.log);
-      if (ai) {
-        const empty = (k) => {
-          const v = b[k] === undefined ? existing?.[k] : b[k];
-          return v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length);
-        };
-        for (const k of ['provider', 'license', 'origin', 'open_weights', 'parameters_b', 'capabilities']) {
-          if (empty(k) && ai[k] !== null && ai[k] !== undefined && !(Array.isArray(ai[k]) && !ai[k].length)) {
-            b[k] = ai[k];
-            aiFilled.add(k);
-          }
+    const empty = (k) => {
+      const v = b[k] === undefined ? existing?.[k] : b[k];
+      return v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length);
+    };
+    // Die KI wird nur gefragt, wenn eine Angabe fehlt (leere Fähigkeiten sind allein kein Grund).
+    const ai = META_KEYS.filter((k) => k !== 'capabilities').some(empty) ? await suggestModelMetadata(tenantId, name, request.log) : null;
+    if (ai) {
+      for (const k of META_KEYS) {
+        if (empty(k) && ai[k] !== null && ai[k] !== undefined && !(Array.isArray(ai[k]) && !ai[k].length)) {
+          b[k] = ai[k];
+          aiFilled.add(k);
         }
       }
     }

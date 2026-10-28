@@ -1,5 +1,6 @@
 // Worker: führt Testläufe aus der Queue aus und startet geplante Läufe.
 // Läuft in Kubernetes als eigenes Deployment (skalierbar), lokal optional im Web-Prozess (RUN_WORKER=true).
+import { startMetricsCollector } from './metricsCollector.js';
 import { fileURLToPath } from 'node:url';
 import { hasPermission, loadUser } from './auth.js';
 import { config } from './config.js';
@@ -78,6 +79,8 @@ export async function startWorker(logger = console) {
   await boss.work(QUEUES.modelSync, async () => syncAllModels(logger));
   await boss.schedule(QUEUES.modelSync, process.env.MODEL_SYNC_CRON ?? '*/15 * * * *');
   syncAllModels(logger).catch((err) => logger.warn(`Modellabruf: ${err.message}`));
+
+  startMetricsCollector(logger);
 
   logger.info(`Worker bereit (Parallelität ${config.workerConcurrency})`);
 }

@@ -167,5 +167,32 @@ test('Modell-Metadaten: Antwort der KI wird geprüft und bereinigt', async () =>
   const s = parseSuggestion('Hier: {"provider":"Alibaba Cloud","license":"Apache-2.0","origin":"cn","open_weights":true,"parameters_b":"7","capabilities":["tools","json","magie"]}');
   assert.deepEqual(s, { provider: 'Alibaba Cloud', license: 'Apache-2.0', origin: 'CN', open_weights: true, parameters_b: 7, capabilities: ['tools', 'json'] });
   assert.equal(parseSuggestion('kein JSON'), null);
+  assert.equal(parseSuggestion('{"license":"Gemma Terms of Use"}').license, null);
+  assert.equal(parseSuggestion('{"license":"Apache-2.0"}').license, 'Apache-2.0');
   assert.equal(parseSuggestion('{"origin":"Deutschland"}').origin, null);
+});
+
+test('Metriken 0.9.0: vLLM- und LiteLLM-Werte aus Prometheus-Text, abgeleitete Raten', async () => {
+  const { parsePrometheus, EXTRACTORS } = await import('../src/platformMetrics.js');
+  const { derive } = await import('../src/metricsCollector.js');
+  const vllm = (n, hits) => `vllm:num_requests_running{engine="0",model_name="m"} 2.0
+vllm:kv_cache_usage_perc{engine="0",model_name="m"} 0.25
+vllm:generation_tokens_total{engine="0",model_name="m"} ${100 * n}.0
+vllm:time_to_first_token_seconds_sum{engine="0",model_name="m"} ${n}.0
+vllm:time_to_first_token_seconds_count{engine="0",model_name="m"} ${10 * n}.0
+vllm:prefix_cache_queries_total{engine="0",model_name="m"} ${100 * n}.0
+vllm:prefix_cache_hits_total{engine="0",model_name="m"} ${hits}.0
+`;
+  const a = EXTRACTORS.inference(parsePrometheus(vllm(1, 10)));
+  const b = EXTRACTORS.inference(parsePrometheus(vllm(3, 110)));
+  const v = derive('inference', a, b, 10);
+  assert.equal(v.running, 2);
+  assert.equal(v.kv_cache_pct, 25);
+  assert.equal(v.generation_tokens_per_s, 20);
+  assert.equal(v.ttft_ms, 100);
+  assert.equal(v.prefix_hit_pct, 50);
+  const gw = (n) => `litellm_proxy_total_requests_metric_total{model="x"} ${10 * n}.0\nlitellm_proxy_failed_requests_metric_total{model="x"} ${n}.0\nlitellm_remaining_team_budget_metric{team="t"} +Inf\n`;
+  const g = derive('gateway', EXTRACTORS.gateway(parsePrometheus(gw(1))), EXTRACTORS.gateway(parsePrometheus(gw(2))), 10);
+  assert.equal(g.requests_per_s, 1);
+  assert.equal(g.error_pct, 10);
 });

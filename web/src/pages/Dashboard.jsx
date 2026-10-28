@@ -29,6 +29,18 @@ function changeText(c) {
   return c.name ?? c.type ?? 'Änderung';
 }
 
+// Tage ohne Tests als 0 auffüllen, damit der Verlauf nicht über Lücken hinweg verbunden wird.
+function testsPerDay(trend, days = 30) {
+  const byDay = new Map(trend.map((t) => [t.day, t]));
+  const out = [];
+  for (let i = Math.min(days, 90) - 1; i >= 0; i--) {
+    const day = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    const t = byDay.get(day);
+    out.push({ day, Absolviert: t?.total ?? 0, Bestanden: t?.passed ?? 0 });
+  }
+  return out;
+}
+
 export default function Dashboard() {
   const [params, setParams] = useSearchParams();
   const platform = getPlatform();
@@ -236,8 +248,8 @@ function PlatformLevel({ id, days, go }) {
           <Heatmap heatmap={d.heatmap} />
           <Recommendations items={d.recommendations} />
           <div className="two-col">
-            <Card title="Verlauf Bestehensquote" sub="Marker zeigen Änderungen der Plattform (Version, Modell, Konfiguration) zwischen Läufen.">
-              {d.trend.length > 1 ? <TrendLines data={d.trend} keys={['rate']} valueFormatter={(v) => pctText(v)} height={200} /> : <Empty>Zu wenige Datenpunkte</Empty>}
+            <Card title="Absolvierte Tests" sub="Anzahl abgeschlossener Testfälle pro Tag. Marker zeigen Änderungen der Plattform (Version, Modell, Konfiguration) zwischen Läufen.">
+              {d.trend.length > 0 ? <TrendLines data={testsPerDay(d.trend, d.days)} keys={['Absolviert', 'Bestanden']} valueFormatter={(v) => String(Math.round(v))} height={200} /> : <Empty>Noch keine abgeschlossenen Tests im Zeitraum</Empty>}
               {d.markers.map((m) => (
                 <div key={m.run_id} className="sub">
                   {fmt.day(m.at)}: {m.changes.map(changeText).join('; ')}

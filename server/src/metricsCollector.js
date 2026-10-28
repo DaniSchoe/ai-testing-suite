@@ -70,11 +70,16 @@ export function derive(group, prev, cur, seconds) {
     const dc = delta(prev, cur, countKey);
     return ds === null || !dc ? null : (ds / dc) * 1000;
   };
+  const ratioPct = (numKey, denKey) => {
+    const n = delta(prev, cur, numKey);
+    const d = delta(prev, cur, denKey);
+    return n === null || !d ? null : (n / d) * 100;
+  };
   if (group === 'inference') {
-    return { running: cur.running, waiting: cur.waiting, kv_cache_pct: cur.kv_cache === null ? null : cur.kv_cache * 100, generation_tokens_per_s: rate('generation_tokens_total'), prompt_tokens_per_s: rate('prompt_tokens_total'), requests_per_s: rate('requests_total'), ttft_ms: meanMs('ttft_sum_s', 'ttft_count'), e2e_ms: meanMs('e2e_sum_s', 'e2e_count') };
+    return { running: cur.running, waiting: cur.waiting, kv_cache_pct: cur.kv_cache === null ? null : cur.kv_cache * 100, generation_tokens_per_s: rate('generation_tokens_total'), prompt_tokens_per_s: rate('prompt_tokens_total'), requests_per_s: rate('requests_total'), ttft_ms: meanMs('ttft_sum_s', 'ttft_count'), e2e_ms: meanMs('e2e_sum_s', 'e2e_count'), itl_ms: meanMs('itl_sum_s', 'itl_count'), queue_ms: meanMs('queue_sum_s', 'queue_count'), prefix_hit_pct: ratioPct('prefix_hits_total', 'prefix_queries_total') };
   }
   if (group === 'gateway') {
-    return { in_flight: cur.in_flight, requests_per_s: rate('requests_total'), failed_per_s: rate('failed_total'), tokens_per_s: rate('tokens_total'), latency_ms: meanMs('latency_sum_s', 'latency_count') };
+    return { in_flight: cur.in_flight, requests_per_s: rate('requests_total'), failed_per_s: rate('failed_total'), error_pct: ratioPct('failed_total', 'requests_total'), tokens_per_s: rate('tokens_total'), latency_ms: meanMs('latency_sum_s', 'latency_count') };
   }
   return { ...cur, mem_used_gib: cur.mem_used_mib === null ? null : cur.mem_used_mib / 1024, mem_total_gib: cur.mem_used_mib === null || cur.mem_free_mib === null ? null : (cur.mem_used_mib + cur.mem_free_mib) / 1024 };
 }

@@ -279,7 +279,7 @@ export default function App() {
               <Route path="*" element={<div className="empty">Seite nicht gefunden</div>} />
             </Routes>
           </main>
-          <Footer />
+          {location.pathname === '/info' && <Footer />}
         </div>
       </div>
     </UserContext.Provider>

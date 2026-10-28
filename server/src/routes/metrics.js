@@ -16,7 +16,8 @@ export default async function metricsRoutes(app) {
     const components = await Promise.all(
       endpoints.map(async (e) => {
         const series = await seriesFor(e, minutes);
-        const st = metricsState().get(e.id) ?? null;
+        const last = series.at(-1);
+        const st = metricsState().get(e.id) ?? (last ? { ok: true, at: last.at, ms: null, error: null } : null);
         return { id: e.id, name: e.name, kind: e.kind, group: GROUP_OF[e.kind], platform_name: e.platform_name, state: st, latest: series.at(-1)?.v ?? null, series };
       }),
     );
@@ -31,7 +32,7 @@ export default async function metricsRoutes(app) {
       settings: await getMetricsSettings(),
       endpoints: endpoints.map((e) => {
         const l = last.find((x) => x.endpoint_id === e.id);
-        return { id: e.id, name: e.name, kind: e.kind, platform_name: e.platform_name, url: e.metrics_url, state: metricsState().get(e.id) ?? null, last_sample_at: l?.at ?? null, samples: l?.samples ?? 0 };
+        return { id: e.id, name: e.name, kind: e.kind, platform_name: e.platform_name, url: e.metrics_url, state: metricsState().get(e.id) ?? (l ? { ok: true, at: l.at, ms: null, error: null } : null), last_sample_at: l?.at ?? null, samples: l?.samples ?? 0 };
       }),
     };
   }

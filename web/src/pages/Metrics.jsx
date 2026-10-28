@@ -11,20 +11,21 @@ const n1 = (v) => (v === null || v === undefined ? '–' : new Intl.NumberFormat
 const GROUPS = {
   inference: {
     label: 'vLLM',
-    tiles: [['running', 'Laufende Anfragen'], ['waiting', 'Wartende Anfragen'], ['kv_cache_pct', 'KV-Cache %'], ['generation_tokens_per_s', 'Token/s (Ausgabe)'], ['ttft_ms', 'TTFT ms']],
+    tiles: [['running', 'Laufende Anfragen'], ['waiting', 'Wartende Anfragen'], ['kv_cache_pct', 'KV-Cache %'], ['generation_tokens_per_s', 'Token/s (Ausgabe)'], ['ttft_ms', 'TTFT ms'], ['prefix_hit_pct', 'Prefix-Cache-Treffer %']],
     panels: [
       ['Anfragen', ['running', 'waiting'], { running: 'laufend', waiting: 'wartend' }],
       ['KV-Cache-Auslastung (%)', ['kv_cache_pct'], { kv_cache_pct: 'KV-Cache' }],
       ['Durchsatz (Token/s)', ['generation_tokens_per_s', 'prompt_tokens_per_s'], { generation_tokens_per_s: 'Ausgabe', prompt_tokens_per_s: 'Eingabe' }],
       ['Latenz (ms)', ['ttft_ms', 'e2e_ms'], { ttft_ms: 'TTFT', e2e_ms: 'Gesamt' }],
+      ['Zwischen-Token-Latenz und Wartezeit (ms)', ['itl_ms', 'queue_ms'], { itl_ms: 'je Token', queue_ms: 'Warteschlange' }],
     ],
   },
   gateway: {
     label: 'LiteLLM',
-    tiles: [['in_flight', 'Anfragen in Bearbeitung'], ['requests_per_s', 'Anfragen/s'], ['failed_per_s', 'Fehler/s'], ['tokens_per_s', 'Token/s'], ['latency_ms', 'Latenz ms']],
+    tiles: [['requests_per_s', 'Anfragen/s'], ['failed_per_s', 'Fehler/s'], ['error_pct', 'Fehlerquote %'], ['tokens_per_s', 'Token/s'], ['latency_ms', 'Latenz ms']],
     panels: [
       ['Anfragen pro Sekunde', ['requests_per_s', 'failed_per_s'], { requests_per_s: 'gesamt', failed_per_s: 'fehlgeschlagen' }],
-      ['In Bearbeitung', ['in_flight'], { in_flight: 'in Bearbeitung' }],
+      ['Fehlerquote (%)', ['error_pct'], { error_pct: 'Fehlerquote' }],
       ['Durchsatz (Token/s)', ['tokens_per_s'], { tokens_per_s: 'Token/s' }],
       ['Latenz (ms)', ['latency_ms'], { latency_ms: 'Latenz' }],
     ],

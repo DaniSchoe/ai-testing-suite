@@ -7,8 +7,11 @@ import { ENDPOINT_SELECT, llmClientFor, resolveModel } from './models.js';
 const CAPS = ['vision', 'tools', 'reasoning', 'json'];
 
 const SYSTEM = `MODEL_METADATA: Du bekommst den Namen eines KI-Modells. Antworte ausschließlich mit einem JSON-Objekt ohne Erklärung und ohne Markdown mit diesen Schlüsseln:
-{"provider": string|null (Hersteller bzw. Anbieter, z. B. "Alibaba Cloud"), "license": string|null (z. B. "Apache-2.0", "Llama 3.1 Community License", "proprietär"), "origin": string|null (ISO-3166-Ländercode des Herstellers, z. B. "CN", "US", "FR"), "open_weights": boolean|null, "parameters_b": number|null (Parameter in Milliarden; bei MoE die Gesamtzahl), "capabilities": array aus "vision", "tools", "reasoning", "json"}
+{"provider": string|null (Hersteller bzw. Anbieter, z. B. "Alibaba Cloud"), "license": string|null (Name bzw. SPDX-Kennung der Lizenz der Modellgewichte, z. B. "Apache-2.0", "MIT", "Llama 3.1 Community License", "proprietär"; kein Titel von Nutzungsbedingungen wie "Terms of Use"), "origin": string|null (ISO-3166-Ländercode des Herstellers, z. B. "CN", "US", "FR"), "open_weights": boolean|null, "parameters_b": number|null (Parameter in Milliarden; bei MoE die Gesamtzahl), "capabilities": array aus "vision", "tools", "reasoning", "json"}
 Nutze null, wenn du dir nicht sicher bist. Erfinde nichts.`;
+
+// Nutzungsbedingungen sind keine Lizenz; solche Angaben der KI verwerfen wir lieber, als eine falsche Lizenz einzutragen.
+const NOT_A_LICENSE = /terms\s+of\s+(use|service)|nutzungsbedingungen|\beula\b|terms\s+and\s+conditions/i;
 
 export function parseSuggestion(text) {
   const match = String(text ?? '').match(/\{[\s\S]*\}/);
@@ -24,7 +27,7 @@ export function parseSuggestion(text) {
   const params = Number(j.parameters_b);
   return {
     provider: str(j.provider),
-    license: str(j.license),
+    license: str(j.license) && !NOT_A_LICENSE.test(str(j.license)) ? str(j.license) : null,
     origin: origin && /^[A-Z]{2}$/.test(origin) ? origin : null,
     open_weights: typeof j.open_weights === 'boolean' ? j.open_weights : null,
     parameters_b: Number.isFinite(params) && params > 0 ? params : null,

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Lock, LockOpen, Plus, Trash2 } from 'lucide-react';
-import { api, can, EnvBadge, Empty, ErrorBox, Field, fmt, KIND_META, Loading, Modal, PageHead, StatusBadge, Tabs, useAction, useApi, useUser } from '../lib.jsx';
+import { api, can, EnvBadge, Empty, ErrorBox, Field, fmt, KIND_META, Loading, Modal, PageHead, Tabs, useAction, useApi, useUser } from '../lib.jsx';
 import Components from './admin/Components.jsx';
 import TopologyEditor from '../components/TopologyEditor.jsx';
 import { AssessmentView } from '../components/Assessment.jsx';
@@ -37,7 +37,7 @@ export function Platforms() {
                     <th>Umgebung</th>
                     <th>Komponenten</th>
                     <th>Modelle</th>
-                    <th>Letzter Lauf</th>
+                    <th>SEAL</th>
                     <th />
                   </tr>
                 </thead>
@@ -63,8 +63,12 @@ export function Platforms() {
                       </td>
                       <td>{p.models}</td>
                       <td>
-                        {p.last_status ? <StatusBadge status={p.last_status} /> : '–'}
-                        <div className="sub">{fmt.ago(p.last_run_at)}</div>
+                        {p.seal?.overall != null ? (
+                          <span className={`badge ${p.seal.overall >= p.seal.min_level ? 'passed' : 'failed'}`}>SEAL-{p.seal.overall}</span>
+                        ) : (
+                          <span className="sub">nicht bewertet</span>
+                        )}
+                        {p.seal && <div className="sub">Ziel mindestens SEAL-{p.seal.min_level}</div>}
                       </td>
                       <td />
                     </tr>

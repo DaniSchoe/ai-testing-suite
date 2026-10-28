@@ -49,6 +49,12 @@ export const EXTRACTORS = {
     ttft_count: sum(named(s, 'vllm:time_to_first_token_seconds_count')),
     e2e_sum_s: sum(named(s, 'vllm:e2e_request_latency_seconds_sum')),
     e2e_count: sum(named(s, 'vllm:e2e_request_latency_seconds_count')),
+    itl_sum_s: sum(named(s, 'vllm:inter_token_latency_seconds_sum')),
+    itl_count: sum(named(s, 'vllm:inter_token_latency_seconds_count')),
+    queue_sum_s: sum(named(s, 'vllm:request_queue_time_seconds_sum')),
+    queue_count: sum(named(s, 'vllm:request_queue_time_seconds_count')),
+    prefix_queries_total: sum(named(s, 'vllm:prefix_cache_queries_total')),
+    prefix_hits_total: sum(named(s, 'vllm:prefix_cache_hits_total')),
   }),
   gateway: (s) => ({
     in_flight: sum(named(s, 'litellm_in_flight_requests')),

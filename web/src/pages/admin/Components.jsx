@@ -39,6 +39,8 @@ export default function Components({ platform, status, onChanged }) {
   const teams = useTeams();
   const [editing, setEditing] = useState(null);
   const [discovered, setDiscovered] = useState(null);
+  const [kindFilter, setKindFilter] = useState('');
+  const [maintainerFilter, setMaintainerFilter] = useState('');
   const teamName = (id) => teams.data?.find((t) => t.id === id)?.name ?? '…';
 
   async function remove(e) {
@@ -49,7 +51,12 @@ export default function Components({ platform, status, onChanged }) {
   }
 
   const statusOf = new Map((status?.data?.components ?? []).map((c) => [c.endpoint_id, c]));
-  const rows = [...(endpoints.data ?? [])].sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || a.name.localeCompare(b.name));
+  const all = endpoints.data ?? [];
+  const kindsPresent = KIND_ORDER.filter((k) => all.some((e) => e.kind === k));
+  const maintainers = [...new Map(all.filter((e) => e.maintainer_id).map((e) => [e.maintainer_id, e.maintainer_name ?? e.maintainer_id])).entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+  const rows = all
+    .filter((e) => (!kindFilter || e.kind === kindFilter) && (!maintainerFilter || (maintainerFilter === '-' ? !e.maintainer_id : e.maintainer_id === maintainerFilter)))
+    .sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || a.name.localeCompare(b.name));
 
   return (
     <>
@@ -61,6 +68,30 @@ export default function Components({ platform, status, onChanged }) {
         <button className="btn primary" onClick={() => setEditing({})}>
           <Plus size={15} /> Neue Komponente
         </button>
+      </div>
+      <div className="toolbar">
+        <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)} aria-label="Art filtern">
+          <option value="">Alle Arten</option>
+          {kindsPresent.map((k) => (
+            <option key={k} value={k}>
+              {KIND_META[k]?.label ?? k}
+            </option>
+          ))}
+        </select>
+        <select value={maintainerFilter} onChange={(e) => setMaintainerFilter(e.target.value)} aria-label="Maintainer filtern">
+          <option value="">Alle Maintainer</option>
+          {maintainers.map(([id, name]) => (
+            <option key={id} value={id}>
+              {name}
+            </option>
+          ))}
+          {all.some((e) => !e.maintainer_id) && <option value="-">Ohne Maintainer</option>}
+        </select>
+        {(kindFilter || maintainerFilter) && (
+          <button className="btn sm ghost" onClick={() => (setKindFilter(''), setMaintainerFilter(''))}>
+            Filter zurücksetzen
+          </button>
+        )}
       </div>
       <div className="card table-wrap">
         <table>
@@ -121,6 +152,13 @@ export default function Components({ platform, status, onChanged }) {
                 </tr>
               );
             })}
+            {endpoints.data?.length > 0 && rows.length === 0 && (
+              <tr>
+                <td colSpan={6} className="empty">
+                  Keine Komponente passt zum Filter.
+                </td>
+              </tr>
+            )}
             {endpoints.data?.length === 0 && (
               <tr>
                 <td colSpan={6} className="empty">

@@ -1260,4 +1260,3 @@ img.brand-logo { width: 28px; height: 28px; border-radius: 7px; object-fit: cont
 .tile.static:hover { border-color: var(--border); }
 .tile.static h3 { font-size: 20px; margin: 2px 0 0; }
 
-.ai-mark { color: var(--primary); vertical-align: -2px; }

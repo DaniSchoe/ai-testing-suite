@@ -40,7 +40,7 @@ export default async function platformRoutes(app) {
 
   app.get('/api/platforms', viewer, async (request) => {
     const env = request.query.environment;
-    return many(
+    const rows = await many(
       `select p.*,
          (select count(*)::int from endpoints e where e.platform_id = p.id) as components,
          coalesce((select json_agg(distinct e.kind) from endpoints e where e.platform_id = p.id), '[]') as kinds,
@@ -49,6 +49,13 @@ export default async function platformRoutes(app) {
          (select max(r.finished_at) from runs r where r.platform_id = p.id) as last_run_at
        from platforms p where p.tenant_id = $1 and ($2::text is null or p.environment = $2) order by p.name`,
       [request.user.tenant_id, ENVIRONMENTS.includes(env) ? env : null],
+    );
+    // SEAL-Stufe je Plattform (Gesamtstufe über alle Souveränitätsziele und geforderte Mindeststufe).
+    return Promise.all(
+      rows.map(async (p) => {
+        const a = await assess(request.user.tenant_id, p.id).catch(() => null);
+        return { ...p, seal: a ? { overall: a.sovereignty.overall, min_level: a.sovereignty.min_level } : null };
+      }),
     );
   });
 
