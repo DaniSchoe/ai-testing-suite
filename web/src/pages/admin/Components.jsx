@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pencil, PlugZap, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Pencil, PlugZap, Plus, Trash2 } from 'lucide-react';
 import {
   api,
   EnvBadge,
@@ -33,40 +33,13 @@ const KIND_HINT = {
   observability: 'Monitoring und Protokollierung.',
 };
 
-const label = (list, key) => list?.find((x) => x.key === key)?.label ?? key;
-
-// Kurzbeschreibung einer Komponente je Art.
-function summary(e, presets) {
-  const s = e.spec ?? {};
-  if (e.kind === 'datacenter') return [label(presets?.hosting_providers, s.provider), [s.region, s.country].filter(Boolean).join(', '), (s.certifications ?? []).join(', '), s.ram_gb ? `${s.ram_gb} GB RAM` : null].filter(Boolean).join(' · ');
-  if (e.kind === 'server') return [s.server_type === 'gpu' ? 'GPU-Server' : 'CPU-Server', s.model, s.cpu_cores ? `${s.cpu_cores} Cores` : null, s.ram_gb ? `${s.ram_gb} GB RAM` : null].filter(Boolean).join(' · ');
-  if (e.kind === 'interconnect') return [label(presets?.interconnect_types, s.type), (s.bundles ?? []).length ? `${s.bundles.length} Bundles` : null].filter(Boolean).join(' · ');
-  if (e.kind === 'kubernetes') return [s.operation === 'managed' ? 'Managed' : 'Selbst betrieben', label(presets?.k8s_distributions, s.distribution), s.version].filter(Boolean).join(' · ');
-  if (e.kind === 'gpu') {
-    const g = presets?.gpu_types?.[s.gpu_type];
-    return [s.gpu_type === 'custom' ? s.custom?.name : (g?.label ?? s.gpu_type), `${s.memory_gb ?? '?'} GB`, s.mig?.enabled ? `MIG: ${s.mig.layout.map((l) => l.profile).join(', ')}` : null].filter(Boolean).join(' · ');
-  }
-  if (e.kind === 'llm') return [label(presets?.inference_providers, s.provider), s.hosting === 'managed' ? 'Managed Service' : 'selbst betrieben'].filter(Boolean).join(' · ');
-  if (e.kind === 'ai_proxy') return [label(presets?.gateway_products, s.product), s.instances > 1 ? `${s.instances} Instanzen` : null].filter(Boolean).join(' · ');
-  return e.base_url ?? '';
-}
-
-export default function Components({ platform, onChanged }) {
+export default function Components({ platform, status, onChanged }) {
   const endpoints = useApi(`/api/endpoints?platform_id=${platform.id}`);
   const presets = useApi('/api/inventory/presets');
   const teams = useTeams();
   const [editing, setEditing] = useState(null);
-  const [checks, setChecks] = useState({});
   const [discovered, setDiscovered] = useState(null);
   const teamName = (id) => teams.data?.find((t) => t.id === id)?.name ?? '…';
-
-  async function check(e) {
-    setChecks((c) => ({ ...c, [e.id]: { pending: true } }));
-    const res = await api(`/api/endpoints/${e.id}/check`, { method: 'POST' }).catch((err) => ({ ok: false, error: err.message }));
-    setChecks((c) => ({ ...c, [e.id]: res }));
-    endpoints.reload();
-    onChanged?.();
-  }
 
   async function remove(e) {
     if (!confirm(`Komponente "${e.name}" löschen? Prüfungen mit dieser Komponente verlieren ihr Ziel.`)) return;
@@ -75,6 +48,7 @@ export default function Components({ platform, onChanged }) {
     onChanged?.();
   }
 
+  const statusOf = new Map((status?.data?.components ?? []).map((c) => [c.endpoint_id, c]));
   const rows = [...(endpoints.data ?? [])].sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || a.name.localeCompare(b.name));
 
   return (
@@ -94,8 +68,7 @@ export default function Components({ platform, onChanged }) {
             <tr>
               <th>Name</th>
               <th>Art</th>
-              <th>Angaben</th>
-              <th>Modelle</th>
+              <th>Version</th>
               <th>Veröffentlicht</th>
               <th>Verbindung</th>
               <th />
@@ -103,9 +76,8 @@ export default function Components({ platform, onChanged }) {
           </thead>
           <tbody>
             {rows.map((e) => {
-              const c = checks[e.id];
               const meta = KIND_META[e.kind];
-              const urlKind = URL_KINDS.includes(e.kind);
+              const live = statusOf.get(e.id);
               return (
                 <tr key={e.id}>
                   <td style={{ minWidth: 220 }}>
@@ -129,33 +101,15 @@ export default function Components({ platform, onChanged }) {
                   <td>
                     <KindBadge kind={e.kind} flavor={e.kind === 'llm' ? e.llm_flavor : undefined} />
                   </td>
-                  <td className="sub">{summary(e, presets.data)}</td>
-                  <td className="sub">
-                    {!['llm', 'ai_proxy'].includes(e.kind) ? (
-                      '–'
-                    ) : (
-                      <>
-                        <Link to="/models">{e.models.filter((m) => m.available).length} gefunden</Link>
-                        {e.models.some((m) => !m.available) && <span> · {e.models.filter((m) => !m.available).length} verschwunden</span>}
-                        <div>{e.auto_discover ? `abgefragt ${fmt.ago(e.models_synced_at)}` : 'manuell gepflegt'}</div>
-                        {e.models_sync_error && <div style={{ color: 'var(--bad)' }}>Abruf fehlgeschlagen</div>}
-                      </>
-                    )}
-                  </td>
+                  <td className="sub">{live?.version ?? e.spec?.version_override ?? (e.kind === 'kubernetes' ? e.spec?.version : null) ?? '–'}</td>
                   <td>
                     <VisibilityBadge visibility={e.visibility} teamNames={e.teamIds.map(teamName)} />
                   </td>
                   <td className="sub">
-                    {c?.pending && 'prüfe…'}
-                    {c && !c.pending && <TestResult result={c} />}
+                    <Connection live={live} />
                   </td>
                   <td className="num">
                     <span className="btn-row" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
-                      {(urlKind || e.metrics_url) && (
-                        <button className="btn sm" onClick={() => check(e)}>
-                          <PlugZap size={13} /> Testen
-                        </button>
-                      )}
                       <button className="btn sm ghost" onClick={() => setEditing(e)} aria-label="Bearbeiten">
                         <Pencil size={14} />
                       </button>
@@ -169,7 +123,7 @@ export default function Components({ platform, onChanged }) {
             })}
             {endpoints.data?.length === 0 && (
               <tr>
-                <td colSpan={7} className="empty">
+                <td colSpan={6} className="empty">
                   Noch keine Komponenten. Beginne mit dem Rechenzentrum, dann Server, GPUs, Kubernetes, Inferenzserver und Gateway.
                 </td>
               </tr>
@@ -194,6 +148,23 @@ export default function Components({ platform, onChanged }) {
       )}
       {discovered && <DiscoveredPopup info={discovered} onClose={() => setDiscovered(null)} />}
     </>
+  );
+}
+
+function Connection({ live }) {
+  if (!live) return <span className="sub">–</span>;
+  if (live.status === 'up') {
+    return (
+      <span className="conn up" title={`erreichbar${live.latency_ms ? `, ${live.latency_ms} ms` : ''}`}>
+        <span className="dot blink" /> {fmt.ms(live.latency_ms)}
+      </span>
+    );
+  }
+  if (live.status === 'n/a') return <span className="sub">nicht überwacht</span>;
+  return (
+    <span className="conn down" title={live.error ?? 'nicht erreichbar'}>
+      <span className="dot" /> gestört
+    </span>
   );
 }
 
@@ -295,7 +266,23 @@ function CertificationPicker({ presets, value = [], onChange }) {
   );
 }
 
-function DatacenterFields({ spec, set, presets }) {
+// Einklappbarer Bereich für optionale Angaben.
+function Optional({ children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="optional">
+      <button type="button" className="optional-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />} Optionale Angaben
+      </button>
+      {open && <div className="optional-body">{children}</div>}
+    </div>
+  );
+}
+
+const num = (set, key) => (v) => set({ [key]: v === '' ? null : Number(v) });
+
+// Pflichtfelder (Rechenzentrum): Hosting-Anbieter, Standort, Land.
+function DatacenterRequired({ spec, set, presets }) {
   return (
     <>
       <div className="form-grid">
@@ -306,21 +293,28 @@ function DatacenterFields({ spec, set, presets }) {
         <Text label="Region / Standort" value={spec.region} onChange={(v) => set({ region: v })} placeholder="z. B. Frankfurt" />
         <Text label="Land (ISO-Code)" value={spec.country} maxLength={2} onChange={(v) => set({ country: v.toUpperCase() })} placeholder="DE" />
       </div>
+    </>
+  );
+}
+
+function DatacenterOptional({ spec, set, presets }) {
+  return (
+    <>
       <CertificationPicker presets={presets} value={spec.certifications} onChange={(v) => set({ certifications: v })} />
       <div className="form-grid">
         <Pick label="Strom aus erneuerbaren Quellen" value={spec.renewable_energy === null || spec.renewable_energy === undefined ? '' : String(spec.renewable_energy)} onChange={(v) => set({ renewable_energy: v === '' ? null : v === 'true' })} options={[['', 'unbekannt'], ['true', 'ja'], ['false', 'nein']]} />
-        <Text label="PUE (Energieeffizienz)" type="number" step="0.01" value={spec.pue} onChange={(v) => set({ pue: v === '' ? null : Number(v) })} hint="z. B. 1,3; kleiner ist besser" />
+        <Text label="PUE (Energieeffizienz)" type="number" step="0.01" value={spec.pue} onChange={num(set, 'pue')} hint="z. B. 1,3; kleiner ist besser" />
       </div>
       <div className="form-grid">
-        <Text label="CPU-Cores (optional)" type="number" min={0} value={spec.cpu_cores} onChange={(v) => set({ cpu_cores: v === '' ? null : Number(v) })} />
-        <Text label="RAM in GB (optional)" type="number" min={0} value={spec.ram_gb} onChange={(v) => set({ ram_gb: v === '' ? null : Number(v) })} />
-        <Text label="Speicher in TB (optional)" type="number" min={0} value={spec.storage_tb} onChange={(v) => set({ storage_tb: v === '' ? null : Number(v) })} />
+        <Text label="CPU-Cores" type="number" min={0} value={spec.cpu_cores} onChange={num(set, 'cpu_cores')} />
+        <Text label="RAM in GB" type="number" min={0} value={spec.ram_gb} onChange={num(set, 'ram_gb')} />
+        <Text label="Speicher in TB" type="number" min={0} value={spec.storage_tb} onChange={num(set, 'storage_tb')} />
       </div>
     </>
   );
 }
 
-function KubernetesFields({ spec, set, presets }) {
+function KubernetesRequired({ spec, set, presets }) {
   const dist = spec.distribution ?? 'vanilla';
   return (
     <>
@@ -329,33 +323,46 @@ function KubernetesFields({ spec, set, presets }) {
         <Pick label="Distribution" value={dist} onChange={(v) => set({ distribution: v, operation: presets.k8s_distributions.find((d) => d.key === v)?.managed ? 'managed' : spec.operation })} options={presets.k8s_distributions.map((d) => [d.key, d.label])} />
       </div>
       {dist === 'other' && <Text label="Name der Distribution" value={spec.distribution_name} onChange={(v) => set({ distribution_name: v })} />}
-      <Text label="Version" value={spec.version} onChange={(v) => set({ version: v })} placeholder="z. B. 1.31" />
-      <CertificationPicker presets={presets} value={spec.certifications} onChange={(v) => set({ certifications: v })} />
     </>
   );
 }
 
-function ServerFields({ spec, set, presets }) {
+function KubernetesOptional({ spec, set, presets }) {
   return (
     <>
-      <div className="form-grid">
-        <Pick label="Server-Art" value={spec.server_type ?? 'cpu'} onChange={(v) => set({ server_type: v })} options={presets.server_types.map((t) => [t.key, t.label])} hint="Ein GPU-Server nimmt in der Topologie GPU-Cores auf." />
-        <Text label="Modell / Bauart (optional)" value={spec.model} onChange={(v) => set({ model: v })} placeholder="z. B. Dell PowerEdge XE9680" />
-      </div>
-      <div className="form-grid">
-        <Text label="CPU-Cores" type="number" min={0} value={spec.cpu_cores} onChange={(v) => set({ cpu_cores: v === '' ? null : Number(v) })} />
-        <Text label="RAM in GB" type="number" min={0} value={spec.ram_gb} onChange={(v) => set({ ram_gb: v === '' ? null : Number(v) })} />
-        <Text label="Speicher in TB" type="number" min={0} value={spec.storage_tb} onChange={(v) => set({ storage_tb: v === '' ? null : Number(v) })} />
-      </div>
+      <Text label="Version" value={spec.version} onChange={(v) => set({ version: v })} placeholder="z. B. 1.31" />
+      <CertificationPicker presets={presets} value={spec.certifications} onChange={(v) => set({ certifications: v })} />
+      <Check checked={spec.cis_hardened === true} onChange={(v) => set({ cis_hardened: v })}>
+        CIS-Härtung (CIS Kubernetes Benchmark umgesetzt)
+      </Check>
     </>
   );
 }
 
-function InterconnectFields({ spec, set, presets }) {
+function ServerRequired({ spec, set, presets }) {
+  return (
+    <div className="form-grid">
+      <Pick label="Server-Art" value={spec.server_type ?? 'cpu'} onChange={(v) => set({ server_type: v })} options={presets.server_types.map((t) => [t.key, t.label])} hint="Ein GPU-Server nimmt in der Topologie GPU-Cores auf." />
+      <Text label="Modell / Bauart" value={spec.model} onChange={(v) => set({ model: v })} placeholder="z. B. Dell PowerEdge XE9680" />
+    </div>
+  );
+}
+
+function ServerOptional({ spec, set }) {
+  return (
+    <div className="form-grid">
+      <Text label="CPU-Cores" type="number" min={0} value={spec.cpu_cores} onChange={num(set, 'cpu_cores')} />
+      <Text label="RAM in GB" type="number" min={0} value={spec.ram_gb} onChange={num(set, 'ram_gb')} />
+      <Text label="Speicher in TB" type="number" min={0} value={spec.storage_tb} onChange={num(set, 'storage_tb')} />
+    </div>
+  );
+}
+
+function InterconnectRequired({ spec, set, presets }) {
   return <Pick label="Technik" value={spec.type ?? 'nvlink'} onChange={(v) => set({ type: v })} options={presets.interconnect_types.map((t) => [t.key, t.label])} hint="Die GPU-Bundles legst du in der Topologie an." />;
 }
 
-function GpuFields({ spec, set, presets }) {
+function GpuRequired({ spec, set, presets }) {
   const type = spec.gpu_type ?? 'h100';
   const preset = presets.gpu_types[type];
   const custom = spec.custom ?? {};
@@ -379,7 +386,7 @@ function GpuFields({ spec, set, presets }) {
   );
 }
 
-function InferenceFields({ spec, set, presets }) {
+function InferenceRequired({ spec, set, presets }) {
   const provider = spec.provider ?? 'vllm';
   const self = presets.inference_providers.filter((p) => p.hosting === 'self');
   const managed = presets.inference_providers.filter((p) => p.hosting === 'managed');
@@ -409,7 +416,7 @@ function InferenceFields({ spec, set, presets }) {
   );
 }
 
-function GatewayFields({ spec, set, presets }) {
+function GatewayRequired({ spec, set, presets }) {
   return (
     <div className="form-grid">
       <Pick label="Produkt" value={spec.product ?? 'litellm'} onChange={(v) => set({ product: v })} options={presets.gateway_products.map((p) => [p.key, p.label])} />
@@ -418,6 +425,29 @@ function GatewayFields({ spec, set, presets }) {
     </div>
   );
 }
+
+// Erkannte Version nach Eingabe der URL (Inferenzserver, AI Gateway).
+function VersionField({ spec, set, detected }) {
+  return (
+    <Text
+      label="Version (überschreiben)"
+      value={spec.version_override}
+      onChange={(v) => set({ version_override: v })}
+      placeholder={detected?.version ?? 'automatisch'}
+      hint={
+        detected?.pending
+          ? 'Version wird abgefragt…'
+          : detected?.version
+            ? `Erkannte Version: ${detected.version}. Ein eingetragener Wert hat Vorrang.`
+            : detected
+              ? 'Version konnte nicht ermittelt werden. Trage sie bei Bedarf hier ein.'
+              : 'Wird nach Eingabe der URL automatisch ermittelt.'
+      }
+    />
+  );
+}
+
+const VERSION_KINDS = ['vector_db', 'iam', 'observability'];
 
 function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }) {
   const keys = useApi('/api/api-keys');
@@ -444,8 +474,10 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
   const [spec, setSpecState] = useState(endpoint.spec ?? {});
   const [teamIds, setTeamIds] = useState(endpoint.teamIds ?? []);
   const [headers, setHeaders] = useState(endpoint.headers ?? {});
+  const [bearer, setBearer] = useState('');
   const [error, setError] = useState(null);
   const [test, setTest] = useState(null);
+  const [detected, setDetected] = useState(null);
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
   const setSpec = (patch) => setSpecState((s) => ({ ...s, ...patch }));
   const kind = form.kind;
@@ -453,16 +485,29 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
   const managed = kind === 'llm' && presets.inference_providers.find((p) => p.key === (spec.provider ?? 'vllm'))?.hosting === 'managed';
   const hasModels = ['llm', 'ai_proxy'].includes(kind);
   const selfInference = kind === 'llm' && !managed;
+  const keyed = ['llm', 'ai_proxy'].includes(kind);
+  const mcpAuth = spec.auth?.type ?? 'none';
+  const hasVersion = ['llm', 'ai_proxy', ...VERSION_KINDS].includes(kind);
+
+  // Pflichtangaben je Art; der Maintainer ist bei Inferenzserver, Rechenzentrum und Server Pflicht.
+  const maintainerRequired = ['llm', 'datacenter', 'server'].includes(kind);
+  const missing =
+    !form.name.trim() ||
+    (urlKind && !form.base_url.trim()) ||
+    (maintainerRequired && !form.maintainer_id) ||
+    (kind === 'datacenter' && (!spec.region?.trim() || !spec.country?.trim())) ||
+    (kind === 'server' && !spec.model?.trim());
 
   const payload = () => ({
     ...form,
     platform_id: platform.id,
     environment: platform.environment,
-    api_key_id: form.api_key_id || null,
+    api_key_id: keyed ? form.api_key_id || null : null,
     maintainer_id: form.maintainer_id || null,
     metrics_url: form.metrics_url || null,
     base_url: urlKind ? form.base_url : null,
-    spec,
+    spec: kind === 'mcp' ? { ...spec, auth: { type: mcpAuth } } : spec,
+    bearer_token: kind === 'mcp' && mcpAuth === 'bearer' && bearer ? bearer : undefined,
     teamIds,
     headers,
     manual_models: form.manual_models
@@ -470,6 +515,23 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
       .map((s) => s.trim())
       .filter(Boolean),
   });
+
+  // Version abfragen, sobald die URL eingegeben wurde (Inferenzserver und AI Gateway).
+  async function probeVersion() {
+    if (!['llm', 'ai_proxy'].includes(kind) || !form.base_url.trim()) return;
+    try {
+      new URL(form.base_url);
+    } catch {
+      return;
+    }
+    setDetected({ pending: true });
+    try {
+      const r = await api('/api/endpoints/probe', { method: 'POST', body: { kind, base_url: form.base_url, api_key_id: form.api_key_id || null, headers } });
+      setDetected({ version: r.version, status: r.status });
+    } catch {
+      setDetected({ version: null });
+    }
+  }
 
   async function runTest() {
     setTest({ pending: true });
@@ -488,6 +550,20 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
     }
   }
 
+  const Maintainer = (
+    <label className="field">
+      <span>Maintainer</span>
+      <select value={form.maintainer_id} onChange={(e) => set({ maintainer_id: e.target.value })}>
+        <option value="">– {maintainerRequired ? 'bitte wählen' : 'keiner'} –</option>
+        {(users.data ?? []).map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
   return (
     <Modal
       title={endpoint.id ? 'Komponente bearbeiten' : 'Neue Komponente'}
@@ -503,7 +579,7 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
           <button className="btn" onClick={onClose}>
             Abbrechen
           </button>
-          <button className="btn primary" onClick={save} disabled={!form.name.trim()}>
+          <button className="btn primary" onClick={save} disabled={missing}>
             Speichern
           </button>
         </>
@@ -522,6 +598,7 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
           onChange={(v) => {
             setForm((f) => ({ ...f, kind: v }));
             setSpecState({});
+            setDetected(null);
           }}
           options={KIND_ORDER.map((k) => [k, KIND_META[k].label])}
           hint={KIND_HINT[kind]}
@@ -529,24 +606,89 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
         <Text label="Name" value={form.name} onChange={(v) => set({ name: v })} />
       </div>
 
-      {kind === 'datacenter' && <DatacenterFields spec={spec} set={setSpec} presets={presets} />}
-      {kind === 'kubernetes' && <KubernetesFields spec={spec} set={setSpec} presets={presets} />}
-      {kind === 'server' && <ServerFields spec={spec} set={setSpec} presets={presets} />}
-      {kind === 'interconnect' && <InterconnectFields spec={spec} set={setSpec} presets={presets} />}
-      {kind === 'gpu' && <GpuFields spec={spec} set={setSpec} presets={presets} />}
-      {kind === 'llm' && <InferenceFields spec={spec} set={setSpec} presets={presets} />}
-      {kind === 'ai_proxy' && <GatewayFields spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'datacenter' && <DatacenterRequired spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'kubernetes' && <KubernetesRequired spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'server' && <ServerRequired spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'interconnect' && <InterconnectRequired spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'gpu' && <GpuRequired spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'llm' && <InferenceRequired spec={spec} set={setSpec} presets={presets} />}
+      {kind === 'ai_proxy' && <GatewayRequired spec={spec} set={setSpec} presets={presets} />}
 
       {urlKind && (
+        <Text
+          label="Endpunkt (Basis-URL)"
+          type="url"
+          value={form.base_url}
+          placeholder={kind === 'mcp' ? 'https://litellm.example.com/mcp' : 'https://litellm.example.com'}
+          onChange={(v) => {
+            set({ base_url: v });
+            setDetected(null);
+          }}
+          onBlur={probeVersion}
+          hint={kind === 'mcp' ? 'Vollständige URL des MCP-Endpunkts (Streamable HTTP).' : 'Ohne /v1, z. B. http://vllm.ai.svc.cluster.local:8000 für einen Service im Cluster.'}
+        />
+      )}
+      {kind === 'ai_proxy' && (
+        <label className="field">
+          <span>API-Key</span>
+          <select value={form.api_key_id} onChange={(e) => set({ api_key_id: e.target.value })} onBlur={probeVersion}>
+            <option value="">– ohne Key –</option>
+            {(keys.data ?? []).map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.name} ({k.masked})
+              </option>
+            ))}
+          </select>
+          <div className="hint">Keys verwaltest du unter Plattform › Keys.</div>
+        </label>
+      )}
+      {kind === 'mcp' && (
         <>
-          <Text
-            label="Endpunkt (Basis-URL)"
-            type="url"
-            value={form.base_url}
-            placeholder={kind === 'mcp' ? 'https://litellm.example.com/mcp' : 'https://litellm.example.com'}
-            onChange={(v) => set({ base_url: v })}
-            hint={kind === 'mcp' ? 'Vollständige URL des MCP-Endpunkts (Streamable HTTP).' : 'Ohne /v1, z. B. http://vllm.ai.svc.cluster.local:8000 für einen Service im Cluster.'}
+          <Pick label="Authentifizierung" value={mcpAuth} onChange={(v) => setSpec({ auth: { type: v } })} options={[['none', 'Keine'], ['bearer', 'Bearer Token'], ['oidc', 'OIDC']]} hint="Ein MCP-Server ohne Authentifizierung gilt in der Einstufung als Schwäche." />
+          {mcpAuth === 'bearer' && (
+            <Text
+              label="Bearer Token"
+              type="password"
+              autoComplete="new-password"
+              value={bearer}
+              onChange={setBearer}
+              placeholder={endpoint.id ? '(unverändert)' : ''}
+              hint="Wird verschlüsselt gespeichert."
+            />
+          )}
+        </>
+      )}
+      <div className="form-grid">
+        {Maintainer}
+        <Pick label="Veröffentlicht für" value={form.visibility} onChange={(v) => set({ visibility: v })} options={Object.entries(PUBLISH_LABEL)} />
+      </div>
+      {form.visibility === 'teams' && <TeamPicker teams={teams} value={teamIds} onChange={setTeamIds} />}
+
+      <Optional>
+        {kind === 'datacenter' && <DatacenterOptional spec={spec} set={setSpec} presets={presets} />}
+        {kind === 'kubernetes' && <KubernetesOptional spec={spec} set={setSpec} presets={presets} />}
+        {kind === 'server' && <ServerOptional spec={spec} set={setSpec} />}
+        {kind === 'llm' && (
+          <Pick
+            label="Erreichbarkeit"
+            value={spec.reachability ?? ''}
+            onChange={(v) => setSpec({ reachability: v || undefined })}
+            options={[['', 'nicht angegeben'], ['gateway_only', 'nur intern über das AI Gateway'], ['direct', 'direkt erreichbar']]}
+            hint="Fließt in die Souveränitätsziele ein: Ein Inferenzserver, der nur über das Gateway erreichbar ist, gilt als besser abgeschirmt."
           />
+        )}
+        {hasVersion && <VersionField spec={spec} set={setSpec} detected={['llm', 'ai_proxy'].includes(kind) ? detected : undefined} />}
+        {(kind === 'gpu' || kind === 'ai_proxy' || selfInference) && (
+          <Text
+            label={kind === 'gpu' ? 'Metrics-Endpunkt (DCGM)' : 'Metrics-Endpunkt'}
+            type="url"
+            value={form.metrics_url}
+            placeholder={kind === 'gpu' ? 'http://dcgm-exporter:9400/metrics' : kind === 'ai_proxy' ? 'http://litellm:4000/metrics' : 'http://vllm:8000/metrics'}
+            onChange={(v) => set({ metrics_url: v })}
+            hint="Prometheus-Endpunkt; damit gilt die Komponente als überwacht und erscheint unter Metriken."
+          />
+        )}
+        {kind === 'llm' && (
           <label className="field">
             <span>API-Key</span>
             <select value={form.api_key_id} onChange={(e) => set({ api_key_id: e.target.value })}>
@@ -559,60 +701,35 @@ function EndpointEditor({ endpoint, platform, presets, teams, onClose, onSaved }
             </select>
             <div className="hint">Keys verwaltest du unter Plattform › Keys.{managed && ' Managed Services brauchen in der Regel einen Key.'}</div>
           </label>
-        </>
-      )}
-      {(kind === 'gpu' || selfInference) && (
-        <Text
-          label={kind === 'gpu' ? 'Metrics-Endpunkt (DCGM, optional)' : 'Metrics-Endpunkt (optional)'}
-          type="url"
-          value={form.metrics_url}
-          placeholder={kind === 'gpu' ? 'http://dcgm-exporter:9400/metrics' : 'http://vllm:8000/metrics'}
-          onChange={(v) => set({ metrics_url: v })}
-          hint="Prometheus-Endpunkt; damit gilt die Komponente als überwacht."
-        />
-      )}
-      <div className="form-grid">
-        <label className="field">
-          <span>Maintainer</span>
-          <select value={form.maintainer_id} onChange={(e) => set({ maintainer_id: e.target.value })}>
-            <option value="">– keiner –</option>
-            {(users.data ?? []).map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Pick label="Veröffentlicht für" value={form.visibility} onChange={(v) => set({ visibility: v })} options={Object.entries(PUBLISH_LABEL)} />
-      </div>
-      {form.visibility === 'teams' && <TeamPicker teams={teams} value={teamIds} onChange={setTeamIds} />}
-      {hasModels && (
-        <>
-          <Check checked={form.auto_discover} onChange={(v) => set({ auto_discover: v })}>
-            Modelle automatisch abfragen (beim Speichern, beim Verbindungstest und alle 15 Minuten)
-          </Check>
-          <div className="hint" style={{ marginBottom: 8 }}>
-            Gefundene Modelle werden erst im Modellportfolio ausgewählt und dann getestet.
-          </div>
-          <div className="form-grid">
-            <Text label="Zusätzliche Modelle (manuell, kommagetrennt)" value={form.manual_models} placeholder="nur nötig ohne Modellliste" onChange={(v) => set({ manual_models: v })} />
-            <label className="field">
-              <span>Standardmodell (Name oder Alias)</span>
-              <input value={form.default_model} list="endpoint-models" onChange={(e) => set({ default_model: e.target.value })} />
-              <datalist id="endpoint-models">
-                {(endpoint.models ?? []).map((m) => (
-                  <option key={m.name} value={m.alias ?? m.name} />
-                ))}
-              </datalist>
-            </label>
-          </div>
-        </>
-      )}
-      {urlKind && <JsonField label="Zusätzliche Header (JSON)" value={headers} rows={3} onChange={(v, ok) => ok && setHeaders(v)} />}
-      <Text label="Notiz" value={form.notes} onChange={(v) => set({ notes: v })} />
-      <Check checked={form.enabled} onChange={(v) => set({ enabled: v })}>
-        aktiv
-      </Check>
+        )}
+        {hasModels && (
+          <>
+            <Check checked={form.auto_discover} onChange={(v) => set({ auto_discover: v })}>
+              Modelle automatisch abfragen (beim Speichern, beim Verbindungstest und alle 15 Minuten)
+            </Check>
+            <div className="hint" style={{ marginBottom: 8 }}>
+              Gefundene Modelle werden erst im Modellportfolio ausgewählt und dann getestet.
+            </div>
+            <div className="form-grid">
+              <Text label="Zusätzliche Modelle (manuell, kommagetrennt)" value={form.manual_models} placeholder="nur nötig ohne Modellliste" onChange={(v) => set({ manual_models: v })} />
+              <label className="field">
+                <span>Standardmodell (Name oder Alias)</span>
+                <input value={form.default_model} list="endpoint-models" onChange={(e) => set({ default_model: e.target.value })} />
+                <datalist id="endpoint-models">
+                  {(endpoint.models ?? []).map((m) => (
+                    <option key={m.name} value={m.alias ?? m.name} />
+                  ))}
+                </datalist>
+              </label>
+            </div>
+          </>
+        )}
+        {urlKind && <JsonField label="Zusätzliche Header (JSON)" value={headers} rows={3} onChange={(v, ok) => ok && setHeaders(v)} />}
+        <Text label="Notiz" value={form.notes} onChange={(v) => set({ notes: v })} />
+        <Check checked={form.enabled} onChange={(v) => set({ enabled: v })}>
+          aktiv
+        </Check>
+      </Optional>
     </Modal>
   );
 }

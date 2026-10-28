@@ -19,6 +19,16 @@ const RATING = {
   not_applicable: ['skipped', 'nicht anwendbar'],
 };
 
+// Änderungen aus den Snapshots als Text.
+function changeText(c) {
+  if (c.message || c.what) return c.message ?? c.what;
+  if (c.type === 'component_added') return `Komponente ${c.name} hinzugefügt`;
+  if (c.type === 'version') return `${c.name}: Version ${c.from ?? '–'} → ${c.to ?? '–'}`;
+  if (c.type === 'model') return `Modell ${c.name}: ${c.from ?? '–'} → ${c.to ?? '–'}`;
+  if (c.type === 'cluster') return c.name;
+  return c.name ?? c.type ?? 'Änderung';
+}
+
 export default function Dashboard() {
   const [params, setParams] = useSearchParams();
   const platform = getPlatform();
@@ -224,12 +234,13 @@ function PlatformLevel({ id, days, go }) {
             )}
           </Card>
           <Heatmap heatmap={d.heatmap} />
+          <Recommendations items={d.recommendations} />
           <div className="two-col">
             <Card title="Verlauf Bestehensquote" sub="Marker zeigen Änderungen der Plattform (Version, Modell, Konfiguration) zwischen Läufen.">
               {d.trend.length > 1 ? <TrendLines data={d.trend} keys={['rate']} valueFormatter={(v) => pctText(v)} height={200} /> : <Empty>Zu wenige Datenpunkte</Empty>}
               {d.markers.map((m) => (
                 <div key={m.run_id} className="sub">
-                  {fmt.day(m.at)}: {m.changes.map((c) => c.message ?? c.what ?? JSON.stringify(c)).join('; ')}
+                  {fmt.day(m.at)}: {m.changes.map(changeText).join('; ')}
                 </div>
               ))}
             </Card>
@@ -334,7 +345,8 @@ function ModelLevel({ platformId, model, days, go }) {
     <Loading state={data}>
       {(d) => {
         const paths = Object.entries(d.by_path);
-        const series = (paths.length ? paths : [['gesamt', d.scorecard]]).map(([path, card]) => ({
+        const viaGateway = paths.filter(([path]) => path === 'gateway');
+        const series = (viaGateway.length ? viaGateway : paths.length ? paths : [['gesamt', d.scorecard]]).map(([path, card]) => ({
           name: PATH_LABELS[path] ?? path,
           axes: DIMENSIONS.map(([k, label]) => ({ label, value: card.dimensions[k]?.value ?? 0, display: card.dimensions[k] ? `${card.dimensions[k].value}` : 'keine Daten', missing: !card.dimensions[k] })),
         }));
@@ -351,14 +363,14 @@ function ModelLevel({ platformId, model, days, go }) {
             </div>
             <Suitability items={d.suitability} />
             <div className="two-col" style={{ marginTop: 12 }}>
-              <Card title="Profil" sub="Direkt und über das Gateway getrennt, wenn beides gemessen wurde.">
+              <Card title="Profil" sub="Bewertung über das Gateway.">
                 <RadarProfile series={series} />
               </Card>
               <Card title="Verlauf" sub="Anteil bestandener Fälle je Lauf.">
                 {trend.length > 1 ? <TrendLines data={trend} keys={['Qualität', 'Sicherheit']} valueFormatter={(v) => pctText(v)} height={260} /> : <Empty>Zu wenige Datenpunkte</Empty>}
                 {d.markers.map((m) => (
                   <div key={m.run_id} className="sub">
-                    {fmt.day(m.at)}: {m.changes.map((c) => c.message ?? c.what ?? JSON.stringify(c)).join('; ')}
+                    {fmt.day(m.at)}: {m.changes.map(changeText).join('; ')}
                   </div>
                 ))}
               </Card>
@@ -484,5 +496,30 @@ function ScalesDialog({ onClose }) {
         </>
       )}
     </Modal>
+  );
+}
+
+function Recommendations({ items }) {
+  return (
+    <Card title="Top-5-Empfehlungen" sub="Welche offenen Punkte die Souveränitätsziele am stärksten verbessern würden.">
+      {items?.length ? (
+        <ol className="recommendations">
+          {items.map((r) => (
+            <li key={r.id}>
+              <strong>{r.label}</strong>
+              <div className="sub">{r.detail}</div>
+              <div className="sub">
+                Wirkung:{' '}
+                {r.effects
+                  .map((e) => `${e.goal}${e.levels > 0 ? ` (SEAL-${e.from ?? '–'} → SEAL-${e.to})` : e.points > 0 ? ` (+${e.points} Punkte)` : ''}`)
+                  .join(', ')}
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <Empty>Keine offenen Empfehlungen</Empty>
+      )}
+    </Card>
   );
 }

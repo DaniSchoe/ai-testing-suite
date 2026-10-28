@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Archive, Building2, ScrollText, ShieldCheck, Sparkles, Users } from 'lucide-react';
+import { Activity, Archive, Building2, ScrollText, ShieldCheck, Sparkles, Users } from 'lucide-react';
 import { can, PageHead, useUser } from '../../lib.jsx';
 
 const any = (user, ...p) => p.some((x) => can(user, x));
@@ -11,6 +11,7 @@ const TILES = [
   ['/admin/roles', ShieldCheck, 'Rollen', 'Rollen und ihre Berechtigungen.', (u) => any(u, 'roles.manage')],
   ['/admin/audit-log', ScrollText, 'Audit-Log', 'Wer hat wann was geändert.', (u) => any(u, 'audit.view')],
   ['/admin/analysis', Sparkles, 'KI-Analyse', 'Modell, das Testläufe automatisch auswertet.', (u) => Boolean(u.is_admin)],
+  ['/admin/metrics', Activity, 'Metriken', 'Darstellung der Metriken-Dashboards und Zustand aller Metrics-Endpunkte (Beta).', (u) => any(u, 'settings.manage')],
   ['/admin/archive', Archive, 'Archivierung', 'Aufbewahrungsfristen für Nachweise.', (u) => any(u, 'settings.manage')],
 ];
 

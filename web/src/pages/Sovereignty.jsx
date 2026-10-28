@@ -20,7 +20,7 @@ export default function Sovereignty() {
               <div style={{ marginBottom: 12 }}>
                 <Link to={`/platforms/${d.platform.id}?tab=assessment`}>{d.platform.name}</Link> <EnvBadge env={d.platform.environment} />
               </div>
-              <SovereigntyGoals data={d} editable={can(user, 'endpoints.manage')} onChanged={data.reload} />
+              <SovereigntyGoals defaultOpen data={d} editable={can(user, 'endpoints.manage')} onChanged={data.reload} />
             </>
           )}
         </Loading>

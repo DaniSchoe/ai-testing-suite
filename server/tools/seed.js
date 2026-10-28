@@ -64,6 +64,7 @@ for (const env of ['dev', 'prod']) {
   });
   const gateway = await upsertEndpoint(platform, { name: `LiteLLM (Mock)${suffix}`, kind: 'ai_proxy', base_url: MOCK_URL, api_key: 'sk-admin', default_model: 'mock-small' });
   const mcp = await upsertEndpoint(platform, { name: `MCP Gateway (Mock)${suffix}`, kind: 'mcp', base_url: `${MOCK_URL}/mcp`, api_key: 'sk-admin' });
+  await query(`update endpoints set api_key_id = null, auth_token_enc = $2, spec = $3 where id = $1`, [mcp.id, encrypt('sk-admin'), JSON.stringify({ auth: { type: 'bearer' } })]);
   // vLLM ohne Auth; das Modell heißt dort anders als im Gateway und bekommt deshalb einen Alias.
   const vllm = await upsertEndpoint(platform, { name: `vLLM Qwen3 (Mock)${suffix}`, kind: 'llm', base_url: `${MOCK_URL}/vllm-qwen`, default_model: 'qwen3-32b' });
   await query(`update endpoint_models set alias = 'qwen3-32b' where endpoint_id = $1 and name = 'Qwen/Qwen3-32B'`, [vllm.id]);
@@ -73,7 +74,7 @@ for (const env of ['dev', 'prod']) {
     `insert into platform_sizing (platform_id, config) values ($1, $2) on conflict (platform_id) do nothing`,
     [platform.id, JSON.stringify({ metrics: Object.fromEntries(['gpu', 'inference', 'gateway'].map((k) => [k, { urls: [`${MOCK_URL}/metrics/${k}`], api_key_id: null }])) })],
   );
-  await query(`update endpoints set spec = $2 where id = $1`, [gateway.id, JSON.stringify({ product: 'litellm', instances: 2 })]);
+  await query(`update endpoints set spec = $2, metrics_url = $3 where id = $1`, [gateway.id, JSON.stringify({ product: 'litellm', instances: 2 }), `${MOCK_URL}/metrics/gateway`]);
   await query(`update endpoints set spec = $2, metrics_url = $3 where id = $1`, [vllm.id, JSON.stringify({ provider: 'vllm', hosting: 'self', served_models: ['Qwen/Qwen3-32B'] }), `${MOCK_URL}/metrics/inference`]);
   // Inventar: Rechenzentrum, Kubernetes, zwei GPUs (eine mit MIG) und ihre Zuordnung.
   const dc = await upsertComponent(platform, { name: `Rechenzentrum Frankfurt${suffix}`, kind: 'datacenter', spec: { provider: 'on_prem', on_prem: true, region: 'Frankfurt', country: 'DE', certifications: ['ISO 27001', 'BSI C5'], renewable_energy: true, pue: 1.3 } });

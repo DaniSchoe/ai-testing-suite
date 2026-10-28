@@ -1236,3 +1236,28 @@ details > summary {
 .topo-optional { border: 1px dashed var(--border-strong); border-radius: 10px; padding: 6px 10px 10px; }
 .topo-optional > header { display: flex; align-items: center; gap: 8px; min-height: 34px; }
 .topo-optional-body { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+
+.recommendations { margin: 0; padding-left: 20px; display: grid; gap: 10px; }
+
+.optional { margin: 14px 0 4px; border-top: 1px solid var(--border, #e5e7eb); padding-top: 8px; }
+.optional-head { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 4px 0; font: inherit; font-weight: 600; color: inherit; cursor: pointer; }
+.optional-body { padding-top: 8px; display: grid; gap: 10px; }
+.conn { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad, #dc2626); display: inline-block; }
+.conn.up .dot { background: #16a34a; }
+.dot.blink { animation: blink 1.6s ease-in-out infinite; }
+@keyframes blink { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5); } 50% { opacity: 0.45; box-shadow: 0 0 0 4px rgba(22, 163, 74, 0); } }
+@media (prefers-reduced-motion: reduce) { .dot.blink { animation: none; } }
+
+.collapsible-head { width: 100%; background: none; border: 0; text-align: left; font: inherit; color: inherit; cursor: pointer; align-items: center; }
+.collapsible-head h2 { display: flex; align-items: center; gap: 6px; }
+.collapsible-count { font-weight: 600; white-space: nowrap; color: var(--text-2); }
+
+.app-footer { margin-top: auto; padding: 18px 16px; text-align: center; color: var(--text-2); font-size: 12px; display: grid; justify-items: center; gap: 6px; border-top: 1px solid var(--border); }
+.footer-logo { max-height: 36px; max-width: 160px; object-fit: contain; }
+img.brand-logo { width: 28px; height: 28px; border-radius: 7px; object-fit: contain; background: none; }
+.metric-tiles { margin-bottom: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.tile.static:hover { border-color: var(--border); }
+.tile.static h3 { font-size: 20px; margin: 2px 0 0; }
+
+.ai-mark { color: var(--primary); vertical-align: -2px; }

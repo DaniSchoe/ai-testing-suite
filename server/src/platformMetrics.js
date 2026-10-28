@@ -45,11 +45,18 @@ export const EXTRACTORS = {
     prompt_tokens_total: sum(named(s, 'vllm:prompt_tokens_total')),
     requests_total: sum(named(s, 'vllm:request_success_total')),
     preemptions_total: sum(named(s, 'vllm:num_preemptions_total')),
+    ttft_sum_s: sum(named(s, 'vllm:time_to_first_token_seconds_sum')),
+    ttft_count: sum(named(s, 'vllm:time_to_first_token_seconds_count')),
+    e2e_sum_s: sum(named(s, 'vllm:e2e_request_latency_seconds_sum')),
+    e2e_count: sum(named(s, 'vllm:e2e_request_latency_seconds_count')),
   }),
   gateway: (s) => ({
     in_flight: sum(named(s, 'litellm_in_flight_requests')),
     requests_total: sum(named(s, 'litellm_proxy_total_requests_metric_total', 'litellm_proxy_total_requests_metric')),
     failed_total: sum(named(s, 'litellm_proxy_failed_requests_metric_total', 'litellm_proxy_failed_requests_metric')),
+    tokens_total: sum(named(s, 'litellm_total_tokens_metric_total', 'litellm_total_tokens')),
+    latency_sum_s: sum(named(s, 'litellm_request_total_latency_metric_sum', 'litellm_llm_api_latency_metric_sum')),
+    latency_count: sum(named(s, 'litellm_request_total_latency_metric_count', 'litellm_llm_api_latency_metric_count')),
   }),
 };
 

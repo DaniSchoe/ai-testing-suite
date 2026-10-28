@@ -72,6 +72,7 @@ export async function loadContext(tenantId, platform) {
     selfHosted: inference.filter((e) => e.spec?.hosting !== 'managed'),
     managed: inference.filter((e) => e.spec?.hosting === 'managed'),
     gateways: of('ai_proxy'),
+    mcps: of('mcp'),
     byId: new Map(endpoints.map((e) => [e.id, e])),
   };
 }
@@ -143,6 +144,31 @@ export function securityChecks(ctx) {
       ? check('observability', 'Beobachtbarkeit und Protokollierung', 'pass', 'Observability-Komponente im Inventar', 1)
       : check('observability', 'Beobachtbarkeit und Protokollierung', 'warn', 'Keine Observability-Komponente im Inventar', 1),
   );
+  // MCP-Server: Authentifizierung per Bearer Token oder OIDC.
+  if (ctx.mcps.length) {
+    const secured = ctx.mcps.filter((m) => ['bearer', 'oidc'].includes(m.spec?.auth?.type));
+    out.push(
+      check('mcp-auth', 'MCP-Server sind abgesichert (Bearer Token oder OIDC)', secured.length === ctx.mcps.length ? 'pass' : secured.length ? 'warn' : 'fail',
+        secured.length === ctx.mcps.length ? ctx.mcps.map((m) => `${m.name}: ${m.spec.auth.type === 'oidc' ? 'OIDC' : 'Bearer Token'}`).join('; ') : `Ohne Authentifizierung: ${names(ctx.mcps.filter((m) => !secured.includes(m)))}`, 2),
+    );
+  }
+  // Erreichbarkeit der selbst betriebenen Inferenzserver: nur intern über das Gateway ist sicherer als direkt.
+  if (ctx.selfHosted.length) {
+    const internal = ctx.selfHosted.filter((i) => i.spec?.reachability === 'gateway_only');
+    out.push(
+      check('exposure', 'Inferenzserver nur intern über ein Gateway erreichbar', grade(share(internal.length, ctx.selfHosted.length)),
+        internal.length === ctx.selfHosted.length ? 'Alle selbst betriebenen Inferenzserver sind nur über das Gateway erreichbar' : `Direkt erreichbar: ${names(ctx.selfHosted.filter((i) => !internal.includes(i)))}`, 1.5),
+    );
+  }
+  if (ctx.clusters.length) {
+    const hardened = ctx.clusters.filter((c) => c.spec?.cis_hardened === true);
+    const known = ctx.clusters.filter((c) => c.spec?.cis_hardened !== null && c.spec?.cis_hardened !== undefined);
+    out.push(
+      known.length
+        ? check('cis', 'Kubernetes nach CIS-Standard gehärtet', grade(share(hardened.length, ctx.clusters.length)), ctx.clusters.map((c) => `${c.name}: ${c.spec?.cis_hardened === true ? 'gehärtet' : c.spec?.cis_hardened === false ? 'nicht gehärtet' : 'unbekannt'}`).join('; '), 1)
+        : check('cis', 'Kubernetes nach CIS-Standard gehärtet', 'unknown', 'Keine Angabe zur Härtung', 1),
+    );
+  }
   if (ctx.datacenters.length) {
     const certified = ctx.datacenters.filter((d) => hasCert(d.spec?.certifications, /27001|C5|NIST|SecNumCloud|SOC ?2|TISAX|EUCS|FedRAMP/i));
     out.push(
@@ -297,7 +323,7 @@ const reuse = (checks, id, weight) => ({ ...checks[id], weight });
 
 function sov3(ctx) {
   const sec = lookup(securityChecks(ctx));
-  return [reuse(sec, 'network', 3), managedExposure(ctx), openWeights(ctx, 2), metadataShare(ctx, 'origin', 'Herkunft der Modelle dokumentiert', 'origin', 1)];
+  return [reuse(sec, 'network', 3), managedExposure(ctx), sec.exposure ? reuse(sec, 'exposure', 1.5) : null, openWeights(ctx, 2), metadataShare(ctx, 'origin', 'Herkunft der Modelle dokumentiert', 'origin', 1)].filter(Boolean);
 }
 
 function sov4(ctx) {
@@ -357,7 +383,7 @@ function sov6(ctx) {
 
 function sov7(ctx) {
   const sec = lookup(securityChecks(ctx));
-  const ids = ['tls', 'access', 'security-tests', 'network', 'findings', 'dc-cert', 'iam', 'observability'];
+  const ids = ['tls', 'access', 'security-tests', 'network', 'findings', 'mcp-auth', 'exposure', 'dc-cert', 'iam', 'observability'];
   return ids.filter((id) => sec[id]).map((id) => sec[id]);
 }
 
@@ -419,6 +445,51 @@ export function evaluateGoal(ctx, goal, sov) {
   };
 }
 
+// Top-Empfehlungen: jeder offene Prüfpunkt wird testweise als bestanden gerechnet; Rang nach Gewinn an SEAL-Stufen und Punktwert über alle Ziele.
+export function recommendations(ctx, sov, limit = 5) {
+  const perGoal = ctx.goals.map((g) => {
+    const checks = goalChecks(ctx, g.key);
+    const base = evaluateGoal(ctx, g, sov);
+    return { goal: g, checks, base };
+  });
+  const open = new Map();
+  for (const { goal, checks } of perGoal) {
+    for (const c of checks) {
+      if (c.status === 'pass' || c.status === 'info') continue;
+      const key = c.id;
+      if (!open.has(key)) open.set(key, { id: c.id, label: c.label, detail: c.detail, status: c.status, weight: c.weight, goals: [] });
+      open.get(key).goals.push(goal.key);
+    }
+  }
+  const list = [];
+  for (const rec of open.values()) {
+    const effects = [];
+    for (const { goal, checks, base } of perGoal) {
+      if (!rec.goals.includes(goal.key)) continue;
+      const after = summarize(checks.map((c) => (c.id === rec.id ? { ...c, status: 'pass' } : c)));
+      let derived = after.level === 'incomplete' ? null : sealFromRate(after.score / 100);
+      const blocker = after.checks.find((c) => c.status === 'fail' && c.weight >= 3);
+      if (derived !== null && blocker && derived > 2) derived = 2;
+      effects.push({
+        goal: goal.key,
+        name: goal.name,
+        from: base.derived,
+        to: derived,
+        levels: (derived ?? 0) - (base.derived ?? 0),
+        points: Math.max(0, (after.score ?? 0) - (base.score ?? 0)),
+      });
+    }
+    const levels = effects.reduce((n, e) => n + Math.max(0, e.levels), 0);
+    const points = effects.reduce((n, e) => n + e.points, 0);
+    list.push({ ...rec, effects, levels, points, rank: levels * 1000 + points + rec.weight });
+  }
+  return list
+    .filter((r) => r.points > 0 || r.levels > 0)
+    .sort((a, b) => b.rank - a.rank)
+    .slice(0, limit)
+    .map(({ rank, ...r }) => r);
+}
+
 async function loadPlatform(tenantId, platformId) {
   return one('select id, name, description, environment, locked, locked_reason, sovereignty from platforms where id = $1 and tenant_id = $2', [platformId, tenantId]);
 }
@@ -442,6 +513,7 @@ export async function assess(tenantId, platformId) {
     security: summarize(securityChecks(ctx)),
     production: summarize(productionChecks(ctx)),
     sovereignty: sovereigntyOf(ctx),
+    recommendations: recommendations(ctx, platform.sovereignty ?? {}),
   };
 }
 

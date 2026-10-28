@@ -86,6 +86,25 @@ migrations:
 # Angezeigte Version oben rechts in der Oberfläche; leer = appVersion aus Chart.yaml.
 appVersion: ""
 logLevel: info
+# Impressum, Support und Copyright auf der Info-Seite. Leere Angaben werden ausgeblendet.
+info:
+  copyright: ""              # Name im Copyright-Hinweis (Standard: ORCA)
+  imprint:
+    company: ""
+    address: ""
+    email: ""
+    phone: ""
+    register: ""
+    representedBy: ""
+  support:
+    email: ""
+    phone: ""
+    url: ""
+    hours: ""
+# Favicon und Firmenlogo austauschen: ConfigMap mit den Dateien favicon.png und company-logo.png
+# (kubectl create configmap branding --from-file=favicon.png --from-file=company-logo.png).
+branding:
+  existingConfigMap: ""
 extraEnv: []
 podSecurityContext:
   runAsNonRoot: true

@@ -43,6 +43,19 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
+          {{- if .Values.branding.existingConfigMap }}
+          volumeMounts:
+            - name: branding
+              mountPath: /branding
+              readOnly: true
+          {{- end }}
+      {{- if .Values.branding.existingConfigMap }}
+      volumes:
+        - name: branding
+          configMap:
+            name: {{ .Values.branding.existingConfigMap }}
+            optional: true
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

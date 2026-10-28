@@ -4,11 +4,15 @@ import { pool } from './db.js';
 import { migrate } from './migrate.js';
 import { stopBoss } from './queue.js';
 import { startWorker } from './worker.js';
+import { startMetricsCollector } from './metricsCollector.js';
 
 const app = await buildApp();
 
 if ((process.env.MIGRATE_ON_START ?? 'true') === 'true') await migrate(app.log);
-if (config.runWorker) await startWorker(app.log);
+if (config.runWorker) {
+  await startWorker(app.log);
+  startMetricsCollector(app.log);
+}
 
 await app.listen({ port: config.port, host: config.host });
 

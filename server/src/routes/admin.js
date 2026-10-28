@@ -10,6 +10,8 @@ import { canSeePublished } from '../visibility.js';
 
 import { KINDS, URL_KINDS } from '../inventory.js';
 import { cleanSpec } from '../inventorySpec.js';
+import { encrypt } from '../crypto.js';
+import { probeEndpoint } from '../snapshot.js';
 const CAPABILITIES = ['vision', 'tools', 'reasoning', 'mcp', 'json', 'embeddings'];
 const FLAVORS = ['openai', 'claude'];
 const ENVIRONMENTS = ['dev', 'prod'];
@@ -85,7 +87,7 @@ async function testConnection({ kind, llm_flavor, base_url, headers, secretEnc, 
 export async function catalog(user, { platformId = null } = {}) {
   const [endpoints, models, endpointTeams, modelTeams, users] = await Promise.all([
     many(
-      `select e.*, k.secret_enc as api_key_enc, k.name as api_key_name, p.name as platform_name, p.environment as platform_environment
+      `select e.*, coalesce(k.secret_enc, e.auth_token_enc) as api_key_enc, k.name as api_key_name, p.name as platform_name, p.environment as platform_environment
        from endpoints e left join api_keys k on k.id = e.api_key_id join platforms p on p.id = e.platform_id
        where e.tenant_id = $1 and ($2::uuid is null or e.platform_id = $2) order by p.name, e.kind, e.name`,
       [user.tenant_id, platformId],
@@ -174,7 +176,22 @@ export default async function adminRoutes(app) {
       }
     }
     const key = b.api_key_id ? await one('select secret_enc from api_keys where id = $1 and tenant_id = $2', [b.api_key_id, request.user.tenant_id]) : null;
-    return testConnection({ ...b, secretEnc: key?.secret_enc });
+    return testConnection({ ...b, secretEnc: key?.secret_enc ?? (b.bearer_token ? encrypt(b.bearer_token) : null) });
+  });
+
+  // Version eines (noch nicht gespeicherten) Servers abrufen, sobald die URL eingegeben ist.
+  app.post('/api/endpoints/probe', endpointAdmin, async (request) => {
+    const b = request.body ?? {};
+    if (!URL_KINDS.includes(b.kind)) throw badRequest('Diese Art hat keinen Endpunkt');
+    try {
+      new URL(b.base_url);
+    } catch {
+      throw badRequest('Basis-URL ist ungültig');
+    }
+    const key = b.api_key_id ? await one('select secret_enc from api_keys where id = $1 and tenant_id = $2', [b.api_key_id, request.user.tenant_id]) : null;
+    const secretEnc = key?.secret_enc ?? (b.bearer_token ? encrypt(b.bearer_token) : null);
+    const r = await probeEndpoint({ id: null, name: b.name ?? '', kind: b.kind, llm_flavor: flavorOf(b), base_url: b.base_url, headers: b.headers ?? {}, api_key_enc: secretEnc, health_path: b.health_path ?? null, metrics_url: null });
+    return { status: r.status, version: r.version, latency_ms: r.latency_ms, error: r.error };
   });
 
   async function save(request, id) {
@@ -186,12 +203,17 @@ export default async function adminRoutes(app) {
     const platform = await one('select id, environment from platforms where id = $1 and tenant_id = $2', [b.platform_id, tenantId]);
     if (!platform) throw badRequest('Plattform existiert nicht');
     if (b.api_key_id && !(await one('select 1 from api_keys where id = $1 and tenant_id = $2', [b.api_key_id, tenantId]))) throw badRequest('API-Key existiert nicht');
+    // Nur Gateways, Inferenzserver und MCP haben Zugangsdaten; MCP bekommt statt eines API-Keys einen eigenen Bearer-Token.
+    const keyed = ['ai_proxy', 'llm'].includes(b.kind);
+    const spec = cleanSpec(b.kind, b.spec);
+    const bearer = b.kind === 'mcp' && spec.auth?.type === 'bearer';
+    const tokenEnc = bearer && b.bearer_token ? encrypt(b.bearer_token) : null;
     const values = [
       b.name.trim(),
       b.kind,
       flavorOf(b),
       b.base_url?.trim() || null,
-      b.api_key_id || null,
+      keyed ? b.api_key_id || null : null,
       b.headers ?? {},
       b.auto_discover ?? true,
       b.default_model || null,
@@ -202,7 +224,7 @@ export default async function adminRoutes(app) {
       visibility,
       b.platform_id,
       b.health_path || null,
-      JSON.stringify(cleanSpec(b.kind, b.spec)),
+      JSON.stringify(spec),
       b.metrics_url || null,
     ];
     const row = await tx(async (c) => {
@@ -210,15 +232,16 @@ export default async function adminRoutes(app) {
         ? await c.query(
             `update endpoints set name = $2, kind = $3, llm_flavor = $4, base_url = $5, api_key_id = $6, headers = $7,
                auto_discover = $8, default_model = $9, enabled = $10, notes = $11, maintainer_id = $12,
-               environment = $13, visibility = $14, platform_id = $15, health_path = $16, spec = $17, metrics_url = $18, updated_at = now()
+               environment = $13, visibility = $14, platform_id = $15, health_path = $16, spec = $17, metrics_url = $18, updated_at = now(),
+               auth_token_enc = case when $20::boolean then $21::text when not $22::boolean then null else auth_token_enc end
              where id = $1 and tenant_id = $19 returning id`,
-            [id, ...values, tenantId],
+            [id, ...values, tenantId, Boolean(tokenEnc), tokenEnc, bearer],
           )
         : await c.query(
             `insert into endpoints (name, kind, llm_flavor, base_url, api_key_id, headers, auto_discover, default_model, enabled,
-               notes, maintainer_id, environment, visibility, platform_id, health_path, spec, metrics_url, created_by, tenant_id)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) returning id`,
-            [...values, request.user.id, tenantId],
+               notes, maintainer_id, environment, visibility, platform_id, health_path, spec, metrics_url, created_by, tenant_id, auth_token_enc)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) returning id`,
+            [...values, request.user.id, tenantId, tokenEnc],
           );
       if (!rows[0]) throw badRequest('Endpoint nicht gefunden', 404);
       await setEndpointTeams(c, rows[0].id, teamIds);

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Lock, LockOpen, Plus, RefreshCw, Trash2 } from 'lucide-react';
-import { api, can, Card, EnvBadge, Empty, ErrorBox, Field, fmt, KIND_META, Loading, STATUS_KINDS, Modal, PageHead, StatusBadge, Tabs, useAction, useApi, useUser } from '../lib.jsx';
+import { Lock, LockOpen, Plus, Trash2 } from 'lucide-react';
+import { api, can, EnvBadge, Empty, ErrorBox, Field, fmt, KIND_META, Loading, Modal, PageHead, StatusBadge, Tabs, useAction, useApi, useUser } from '../lib.jsx';
 import Components from './admin/Components.jsx';
 import TopologyEditor from '../components/TopologyEditor.jsx';
 import { AssessmentView } from '../components/Assessment.jsx';
@@ -128,7 +128,7 @@ export function PlatformDetail() {
   const platform = useApi(`/api/platforms/${id}`);
   const status = useApi(`/api/platforms/${id}/status`, { interval: 60000 });
   const [params] = useSearchParams();
-  const [tab, setTab] = useState(params.get('tab') ?? 'overview');
+  const [tab, setTab] = useState(params.get('tab') && params.get('tab') !== 'overview' ? params.get('tab') : 'components');
   const [editing, setEditing] = useState(false);
   const [run, error] = useAction();
   const manager = can(user, 'endpoints.manage');
@@ -200,67 +200,17 @@ export function PlatformDetail() {
             value={tab}
             onChange={setTab}
             tabs={[
-              ['overview', 'Status'],
               ['components', `Inventar (${p.endpoints.length})`],
               ['topology', 'Topologie'],
               ['assessment', 'Einstufung'],
             ]}
           />
-          {tab === 'overview' && <Overview platform={p} status={status} />}
-          {tab === 'components' && <Components platform={p} onChanged={platform.reload} />}
+          {tab === 'components' && <Components platform={p} status={status} onChanged={platform.reload} />}
           {tab === 'topology' && <TopologyEditor key={p.updated_at} platform={p} editable={manager} onSaved={platform.reload} />}
           {tab === 'assessment' && <AssessmentView platformId={p.id} editable={manager} />}
           {editing && <PlatformForm platform={p} onClose={() => setEditing(false)} onSaved={() => (setEditing(false), platform.reload())} />}
         </>
       )}
     </Loading>
-  );
-}
-
-function Overview({ platform, status }) {
-  return (
-    <Card
-      title="Komponenten"
-      sub={status.data ? `Stand ${fmt.date(status.data.at)}` : 'Prüfe…'}
-      action={
-        <button className="btn sm" onClick={() => api(`/api/platforms/${platform.id}/status?force=1`).then(status.reload)}>
-          <RefreshCw size={13} /> Neu prüfen
-        </button>
-      }
-      flush
-    >
-      <table>
-        <thead>
-          <tr>
-            <th>Komponente</th>
-            <th>Art</th>
-            <th>Status</th>
-            <th>Version</th>
-            <th>Antwortzeit</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(status.data?.components ?? []).filter((c) => STATUS_KINDS.includes(c.kind)).map((c) => (
-            <tr key={c.endpoint_id}>
-              <td>{c.name}</td>
-              <td>{KIND_META[c.kind]?.label ?? c.kind}</td>
-              <td>
-                {c.status === 'n/a' ? <span className="sub">nicht überwacht</span> : <span className={`badge ${c.status === 'up' ? 'passed' : 'failed'}`}>{c.status === 'up' ? 'erreichbar' : 'gestört'}</span>}
-                {c.error && <div className="sub">{c.error}</div>}
-              </td>
-              <td className="sub">{c.version ?? '–'}</td>
-              <td>{fmt.ms(c.latency_ms)}</td>
-            </tr>
-          ))}
-          {status.data && !status.data.components.some((c) => STATUS_KINDS.includes(c.kind)) && (
-            <tr>
-              <td colSpan={5} className="empty">
-                Noch keine Komponenten.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </Card>
   );
 }

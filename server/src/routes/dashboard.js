@@ -175,6 +175,7 @@ export default async function dashboardRoutes(app) {
       snapshot: lastSnapshot ? { run_id: lastSnapshot.id, at: lastSnapshot.finished_at, ...lastSnapshot.snapshot } : null,
       sovereignty: assessment ? { ...assessment.sovereignty, goals: assessment.sovereignty.goals.map(({ checks, ...g }) => g) } : null,
       assessment: assessment ? { security: { score: assessment.security.score, level: assessment.security.level }, production: { score: assessment.production.score, level: assessment.production.level } } : null,
+      recommendations: assessment?.recommendations ?? [],
       reports: reportCounts,
       findings: { open: Object.fromEntries(findingsRows.map((f) => [f.severity, f.n])), top: topFindings },
       slo: { ...sloOf(rows), failing: failing.slice(0, 10) },

@@ -39,33 +39,51 @@ export function Checks({ checks }) {
   );
 }
 
-function Block({ title, data, sub }) {
-  const [cls, text] = LEVEL[data.level];
+// Aufklappbarer Bereich; die Kopfzeile zeigt, wie viel erfüllt ist.
+function Collapsible({ title, summary, badge, sub, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <Card
-      title={
-        <>
-          {title} <span className={`badge ${cls}`}>{text}</span>
-        </>
-      }
-      sub={`${sub} ${data.score != null ? `Punktzahl ${data.score} von 100, ` : ''}Abdeckung ${Math.round(data.coverage * 100)} %.`}
-      flush
-    >
-      <Checks checks={data.checks} />
-    </Card>
+    <section className="card collapsible">
+      <button type="button" className="card-head collapsible-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <div>
+          <h2>
+            {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />} {title} {badge}
+          </h2>
+          {sub && <div className="sub">{sub}</div>}
+        </div>
+        <span className="collapsible-count">{summary}</span>
+      </button>
+      {open && <div className="card-body flush">{children}</div>}
+    </section>
   );
 }
 
-export function SovereigntyGoals({ data, editable, onChanged, platformId }) {
+function Block({ title, data, sub }) {
+  const [cls, text] = LEVEL[data.level];
+  const met = data.checks.filter((c) => c.status === 'pass').length;
+  return (
+    <Collapsible
+      title={title}
+      badge={<span className={`badge ${cls}`}>{text}</span>}
+      summary={`${met}/${data.checks.length} erfüllt`}
+      sub={`${sub} ${data.score != null ? `Punktzahl ${data.score} von 100, ` : ''}Abdeckung ${Math.round(data.coverage * 100)} %.`}
+    >
+      <Checks checks={data.checks} />
+    </Collapsible>
+  );
+}
+
+export function SovereigntyGoals({ data, editable, onChanged, platformId, defaultOpen = false }) {
   const [open, setOpen] = useState(null);
   const [override, setOverride] = useState(null);
   const s = data.sovereignty;
   return (
     <>
-      <Card
+      <Collapsible
         title="Souveränitätsziele"
+        defaultOpen={defaultOpen}
+        summary={`${s.goals.filter((g) => g.status === 'ok').length}/${s.goals.length} erfüllt`}
         sub={`Gesamt: ${s.overall != null ? `SEAL-${s.overall}` : 'nicht bewertet'} · geforderte Mindeststufe SEAL-${s.min_level}. Ein Klick auf ein Ziel zeigt die Begründung.`}
-        flush
       >
         <div className="table-wrap">
           <table>
@@ -133,7 +151,7 @@ export function SovereigntyGoals({ data, editable, onChanged, platformId }) {
             </tbody>
           </table>
         </div>
-      </Card>
+      </Collapsible>
       <div className="hint">
         Stufen aus der Punktzahl der Prüfpunkte: ab 95 % SEAL-4, ab 80 % SEAL-3, ab 60 % SEAL-2, ab 30 % SEAL-1, darunter SEAL-0. Ein nicht erfüllter Prüfpunkt mit hohem Gewicht begrenzt das Ziel auf SEAL-2.
       </div>

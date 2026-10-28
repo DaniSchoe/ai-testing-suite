@@ -4,7 +4,7 @@ import { many, query } from './db.js';
 import { LlmClient } from './runner/clients.js';
 
 // Endpoint samt Secret des zugeordneten API-Keys (api_key_enc) und Name des Keys.
-export const ENDPOINT_SELECT = `select e.*, k.secret_enc as api_key_enc, k.name as api_key_name
+export const ENDPOINT_SELECT = `select e.*, coalesce(k.secret_enc, e.auth_token_enc) as api_key_enc, k.name as api_key_name
   from endpoints e left join api_keys k on k.id = e.api_key_id`;
 
 // Erste Annahme zu den Fähigkeiten eines neu entdeckten Modells anhand des Namens. Administratoren korrigieren sie im Modellkatalog.

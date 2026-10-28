@@ -12,6 +12,26 @@ const authMode = env.AUTH_MODE ?? 'oidc'; // 'oidc' oder 'dev' (lokal ohne Keycl
 export const config = {
   // Angezeigte Version der Anwendung, gesetzt über APP_VERSION (Helm: appVersion).
   appVersion: env.APP_VERSION?.trim() || 'dev',
+  // Info-Seite: Impressum, Support und Copyright über Umgebungsvariablen (Helm: info.*). Leere Angaben werden ausgeblendet.
+  info: {
+    imprint: {
+      company: env.IMPRINT_COMPANY?.trim() || null,
+      address: env.IMPRINT_ADDRESS?.trim() || null,
+      email: env.IMPRINT_EMAIL?.trim() || null,
+      phone: env.IMPRINT_PHONE?.trim() || null,
+      register: env.IMPRINT_REGISTER?.trim() || null,
+      represented_by: env.IMPRINT_REPRESENTED_BY?.trim() || null,
+    },
+    support: {
+      email: env.SUPPORT_EMAIL?.trim() || null,
+      phone: env.SUPPORT_PHONE?.trim() || null,
+      url: env.SUPPORT_URL?.trim() || null,
+      hours: env.SUPPORT_HOURS?.trim() || null,
+    },
+    copyright: env.COPYRIGHT_HOLDER?.trim() || null,
+  },
+  // Verzeichnis mit austauschbaren Bildern (favicon.png, company-logo.png); ohne Datei gilt das mitgelieferte Bild.
+  brandingDir: env.BRANDING_DIR?.trim() || null,
   port: Number(env.PORT ?? 8080),
   host: env.HOST ?? '0.0.0.0',
   publicUrl: (env.PUBLIC_URL ?? 'http://localhost:8080').replace(/\/$/, ''),

@@ -71,6 +71,9 @@ export async function probeEndpoint(e) {
     out.error = err.message;
   }
   out.latency_ms = Math.round(performance.now() - t0);
+  // Eine eingetragene Version hat Vorrang vor der erkannten.
+  out.detected_version = out.version;
+  out.version = e.spec?.version_override || out.version || (e.kind === 'kubernetes' ? e.spec?.version : null) || null;
   return out;
 }
 

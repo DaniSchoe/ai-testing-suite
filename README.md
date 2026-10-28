@@ -118,6 +118,18 @@ abschließender `/` ist egal. Als Notlösung übernimmt `OIDC_TRUST_DISCOVERED_I
 | `MIGRATE_ON_START` | Migrationen beim Start ausführen (Standard `true`) |
 | `MODEL_SYNC_CRON` | wie oft der Worker die Modelle aller Endpoints abfragt (Standard `*/15 * * * *`) |
 | `RETENTION_CRON` | wann Nachweise nach Ablauf der Aufbewahrung bereinigt werden (Standard `17 3 * * *`; Fristen unter *Administration › Systemeinstellungen*) |
+| `IMPRINT_COMPANY`, `IMPRINT_ADDRESS`, `IMPRINT_EMAIL`, `IMPRINT_PHONE`, `IMPRINT_REGISTER`, `IMPRINT_REPRESENTED_BY` | Impressum auf der Info-Seite (Helm: `info.imprint.*`); ohne Angabe entfällt die Kachel |
+| `SUPPORT_EMAIL`, `SUPPORT_PHONE`, `SUPPORT_URL`, `SUPPORT_HOURS` | Support-Kachel auf der Info-Seite (Helm: `info.support.*`) |
+| `COPYRIGHT_HOLDER` | Name im Copyright-Hinweis am Seitenende (Helm: `info.copyright`, Standard `ORCA`) |
+| `BRANDING_DIR` | Ordner mit `favicon.png` und `company-logo.png`, die die mitgelieferten Bilder ersetzen (Helm: `branding.existingConfigMap`) |
+
+### Favicon und Firmenlogo
+
+Beide Bilder sind PNG-Dateien. Mitgeliefert sind Platzhalter in `web/public/favicon.png` (Browser-Tab und Logo links oben) und `web/public/company-logo.png` (Copyright-Hinweis unten). Zum Austauschen die Dateien dort ersetzen und das Frontend neu bauen, oder zur Laufzeit `BRANDING_DIR` auf einen Ordner mit gleich benannten Dateien setzen (in Kubernetes eine ConfigMap: `kubectl create configmap branding --from-file=favicon.png --from-file=company-logo.png`, dann `branding.existingConfigMap=branding`).
+
+### Metriken (Beta)
+
+Komponenten mit Metrics-Endpunkt (GPU/DCGM, Inferenzserver/vLLM, AI Gateway/LiteLLM) werden vom Worker im eingestellten Intervall abgefragt (Standard 30 s, Aufbewahrung 24 h). Die Dashboards stehen unter *Übersicht › Metriken*, Intervall, Aufbewahrung und Endpunktstatus unter *Systemeinstellungen › Metriken*.
 
 ## Prüfungen und Vorlagen
 

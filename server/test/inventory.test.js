@@ -141,3 +141,31 @@ test('Netzwerk-Test: erreichbare Seite verletzt die Erwartung, Sperrseite gilt a
   assert.equal(closed.status, 'passed');
   assert.equal(closed.metrics.air_gapped, 1);
 });
+
+test('Komponenten 0.8.0: MCP-Authentifizierung, Erreichbarkeit, CIS und gemeinsame Felder', () => {
+  assert.equal(cleanSpec('mcp', { auth: { type: 'bearer' } }).auth.type, 'bearer');
+  assert.equal(cleanSpec('mcp', {}).auth.type, 'none');
+  assert.throws(() => cleanSpec('mcp', { auth: { type: 'basic' } }), /Authentifizierung/);
+  assert.equal(cleanSpec('llm', { provider: 'vllm', reachability: 'gateway_only' }).reachability, 'gateway_only');
+  assert.equal(cleanSpec('kubernetes', { cis_hardened: true }).cis_hardened, true);
+  assert.equal(cleanSpec('iam', { version_override: ' 26.0 ', note: 'x' }).version_override, '26.0');
+});
+
+test('Metriken: Raten und Mittelwerte aus Zählern', async () => {
+  const { derive } = await import('../src/metricsCollector.js');
+  const prev = { generation_tokens_total: 100, ttft_sum_s: 1, ttft_count: 10, running: 1, kv_cache: 0.1 };
+  const cur = { generation_tokens_total: 400, ttft_sum_s: 2.2, ttft_count: 20, running: 3, kv_cache: 0.25 };
+  const v = derive('inference', prev, cur, 30);
+  assert.equal(v.generation_tokens_per_s, 10);
+  assert.ok(Math.abs(v.ttft_ms - 120) < 1e-6);
+  assert.equal(v.kv_cache_pct, 25);
+  assert.equal(derive('inference', null, cur, 0).generation_tokens_per_s, null);
+});
+
+test('Modell-Metadaten: Antwort der KI wird geprüft und bereinigt', async () => {
+  const { parseSuggestion } = await import('../src/modelMetadata.js');
+  const s = parseSuggestion('Hier: {"provider":"Alibaba Cloud","license":"Apache-2.0","origin":"cn","open_weights":true,"parameters_b":"7","capabilities":["tools","json","magie"]}');
+  assert.deepEqual(s, { provider: 'Alibaba Cloud', license: 'Apache-2.0', origin: 'CN', open_weights: true, parameters_b: 7, capabilities: ['tools', 'json'] });
+  assert.equal(parseSuggestion('kein JSON'), null);
+  assert.equal(parseSuggestion('{"origin":"Deutschland"}').origin, null);
+});

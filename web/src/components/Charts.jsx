@@ -110,7 +110,7 @@ export function ValueBars({ data, unit = '', height = 220, colors }) {
 }
 
 // Zeitreihe je Modell (z. B. TTFT p95). data: [{ day, [model]: value }]
-export function TrendLines({ data, keys, valueFormatter, height = 240 }) {
+export function TrendLines({ data, keys, valueFormatter, height = 240, xFormatter = fmt.day }) {
   const items = keys.map((k, i) => ({ label: k, color: SERIES[i % SERIES.length] }));
   return (
     <>
@@ -119,11 +119,11 @@ export function TrendLines({ data, keys, valueFormatter, height = 240 }) {
         <ResponsiveContainer>
           <LineChart data={data} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
             <CartesianGrid vertical={false} stroke="var(--grid)" />
-            <XAxis dataKey="day" tickFormatter={fmt.day} {...axis} />
+            <XAxis dataKey="day" tickFormatter={xFormatter} {...axis} />
             <YAxis tickFormatter={valueFormatter} {...axis} width={60} />
             <Tooltip
               cursor={{ stroke: 'var(--axis)', strokeDasharray: '3 3' }}
-              content={<ChartTooltip labelFormatter={(d) => fmt.day(d)} valueFormatter={valueFormatter} />}
+              content={<ChartTooltip labelFormatter={(d) => xFormatter(d)} valueFormatter={valueFormatter} />}
             />
             {keys.map((k, i) => (
               <Line

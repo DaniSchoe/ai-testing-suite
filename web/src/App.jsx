@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   Boxes,
+  Activity,
   AlertTriangle,
   Database,
   FileText,
@@ -45,6 +46,9 @@ import Roles from './pages/admin/Roles.jsx';
 import AuditLog from './pages/admin/AuditLog.jsx';
 import SystemSettings from './pages/admin/SystemSettings.jsx';
 import ModelDetail from './pages/ModelDetail.jsx';
+import Metrics from './pages/Metrics.jsx';
+import MetricsSettings from './pages/admin/MetricsSettings.jsx';
+import Footer from './components/Footer.jsx';
 
 // Navigation nach Aufgaben. Gruppen ohne sichtbare Einträge werden ausgeblendet.
 const any = (...p) => (user) => p.some((x) => can(user, x));
@@ -53,6 +57,7 @@ const NAV = [
     label: 'Übersicht',
     items: [
       ['/', LayoutGrid, 'Dashboard', any('suite.view'), { end: true }],
+      ['/metrics', Activity, 'Metriken', any('suite.view'), { tag: 'Beta' }],
       ['/runs', HistoryIcon, 'Historie', any('suite.view'), { badge: 'runs' }],
     ],
   },
@@ -166,8 +171,8 @@ export default function App() {
       <div className="shell">
         <aside className={`sidebar${navOpen ? ' open' : ''}`}>
           <div className="brand">
-            <div className="brand-logo">A</div>
-            AI Suite <span className="brand-tag">TEST</span>
+            <img className="brand-logo" src="/favicon.png" alt="" />
+            AI Confidence
           </div>
           {NAV.map((group) => {
             const items = group.items.filter(([, , , visible]) => visible(user));
@@ -259,6 +264,7 @@ export default function App() {
               <Route path="/models/:name" element={<ModelDetail />} />
               <Route path="/sizing" element={<Sizing />} />
               <Route path="/credentials" element={<Credentials />} />
+              <Route path="/metrics" element={<Metrics />} />
               <Route path="/info" element={<InfoPage />} />
               <Route path="/members" element={<Navigate to="/admin/users" replace />} />
               <Route path="/admin/tenants" element={<Navigate to="/admin/organization" replace />} />
@@ -266,12 +272,14 @@ export default function App() {
               <Route path="/admin/users" element={<Users />} />
               <Route path="/admin/analysis" element={<AnalysisSettings />} />
               <Route path="/admin/archive" element={<Archive />} />
+              <Route path="/admin/metrics" element={<MetricsSettings />} />
               <Route path="/admin/roles" element={<Roles />} />
               <Route path="/admin/audit-log" element={<AuditLog />} />
               <Route path="/admin/settings" element={<SystemSettings />} />
               <Route path="*" element={<div className="empty">Seite nicht gefunden</div>} />
             </Routes>
           </main>
+          <Footer />
         </div>
       </div>
     </UserContext.Provider>

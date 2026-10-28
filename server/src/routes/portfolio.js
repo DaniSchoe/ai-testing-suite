@@ -5,6 +5,7 @@ import { logAudit } from '../audit.js';
 import { many, one, tx } from '../db.js';
 import { hasPermission } from '../permissions.js';
 import { canSeePublished } from '../visibility.js';
+import { suggestModelMetadata } from '../modelMetadata.js';
 
 const CAPABILITIES = ['vision', 'tools', 'reasoning', 'mcp', 'json', 'embeddings'];
 const VISIBILITIES = ['admins', 'teams', 'global'];
@@ -68,6 +69,26 @@ export default async function portfolioRoutes(app) {
     }
     const name = b.name?.trim();
     if (!name) throw bad('Name fehlt');
+    // KI-Vorbefüllung: beim Anlegen (und auf Wunsch beim Bearbeiten) werden leere Metadaten aus dem Namen abgeleitet.
+    const same = (x, y) => JSON.stringify(Array.isArray(x) ? [...x].sort() : (x ?? null)) === JSON.stringify(Array.isArray(y) ? [...y].sort() : (y ?? null));
+    const aiFilled = new Set(existing?.ai_filled ?? []);
+    // Manuell geänderte Angaben gelten nicht mehr als von der KI befüllt.
+    for (const k of [...aiFilled]) if (b[k] !== undefined && !same(b[k] === '' ? null : b[k], existing?.[k])) aiFilled.delete(k);
+    if (!id || b.autofill) {
+      const ai = await suggestModelMetadata(tenantId, name, request.log);
+      if (ai) {
+        const empty = (k) => {
+          const v = b[k] === undefined ? existing?.[k] : b[k];
+          return v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length);
+        };
+        for (const k of ['provider', 'license', 'origin', 'open_weights', 'parameters_b', 'capabilities']) {
+          if (empty(k) && ai[k] !== null && ai[k] !== undefined && !(Array.isArray(ai[k]) && !ai[k].length)) {
+            b[k] = ai[k];
+            aiFilled.add(k);
+          }
+        }
+      }
+    }
     const visibility = b.visibility ?? existing?.visibility ?? 'global';
     if (!VISIBILITIES.includes(visibility)) throw bad('Ungültige Veröffentlichung');
     const teamIds = visibility === 'teams' ? [...new Set(b.teamIds ?? [])] : [];
@@ -76,6 +97,7 @@ export default async function portfolioRoutes(app) {
     if (!id && !wanted.length) throw bad('Mindestens ein gefundenes Modell auswählen');
     const pick = (k) => (b[k] === undefined ? (existing?.[k] ?? null) : text(b[k]));
     const capabilities = b.capabilities === undefined ? (existing?.capabilities ?? []) : [...new Set(b.capabilities)].filter((c) => CAPABILITIES.includes(c));
+    const parametersB = b.parameters_b === undefined ? (existing?.parameters_b ?? null) : Number(b.parameters_b) > 0 ? Number(b.parameters_b) : null;
     const row = await tx(async (c) => {
       const values = [
         name, pick('description'),
@@ -85,20 +107,22 @@ export default async function portfolioRoutes(app) {
         b.context_length === undefined ? (existing?.context_length ?? null) : Number(b.context_length) || null,
         b.maintainer_id === undefined ? (existing?.maintainer_id ?? request.user.id) : b.maintainer_id || null,
         visibility,
+        parametersB,
+        [...aiFilled],
       ];
       let rows;
       try {
         ({ rows } = id
           ? await c.query(
               `update portfolio_models set name = $2, description = $3, provider = $4, license = $5, origin = $6, open_weights = $7, revision = $8,
-                 quantization = $9, capabilities = $10, context_length = $11, maintainer_id = $12, visibility = $13, updated_at = now()
+                 quantization = $9, capabilities = $10, context_length = $11, maintainer_id = $12, visibility = $13, parameters_b = $14, ai_filled = $15, updated_at = now()
                where id = $1 returning *`,
               [id, ...values],
             )
           : await c.query(
               `insert into portfolio_models (tenant_id, name, description, provider, license, origin, open_weights, revision, quantization, capabilities,
-                 context_length, maintainer_id, visibility, created_by)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) returning *`,
+                 context_length, maintainer_id, visibility, parameters_b, ai_filled, created_by)
+               values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning *`,
               [tenantId, ...values, request.user.id],
             ));
       } catch (err) {

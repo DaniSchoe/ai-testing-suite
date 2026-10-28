@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { authPlugin } from './auth.js';
@@ -19,6 +19,7 @@ import datasetRoutes from './routes/datasets.js';
 import findingRoutes from './routes/findings.js';
 import dashboardRoutes from './routes/dashboard.js';
 import systemRoutes from './routes/system.js';
+import metricsRoutes from './routes/metrics.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -62,6 +63,24 @@ export async function buildApp() {
     };
   });
 
+  // Info: Impressum, Support und Copyright aus der Konfiguration.
+  app.get('/api/info', async (request, reply) => {
+    if (!request.user) return reply.code(401).send({ error: 'Nicht angemeldet' });
+    const { imprint, support, copyright } = config.info;
+    const has = (o) => Object.values(o).some(Boolean);
+    return { version: config.appVersion, authMode: config.auth.mode, imprint: has(imprint) ? imprint : null, support: has(support) ? support : null, copyright: copyright ?? 'ORCA' };
+  });
+
+  // Austauschbare Bilder: BRANDING_DIR vor den mitgelieferten Dateien.
+  for (const file of ['favicon.png', 'company-logo.png']) {
+    app.get(`/${file}`, async (request, reply) => {
+      const custom = config.brandingDir ? path.join(config.brandingDir, file) : null;
+      const target = custom && existsSync(custom) ? custom : path.join(publicDir, file);
+      if (!existsSync(target)) return reply.code(404).send({ error: 'Nicht gefunden' });
+      return reply.header('cache-control', 'public, max-age=300').type('image/png').send(createReadStream(target));
+    });
+  }
+
   await app.register(adminRoutes);
   await app.register(accessRoutes);
   await app.register(apiKeyRoutes);
@@ -75,6 +94,7 @@ export async function buildApp() {
   await app.register(platformRoutes);
   await app.register(portfolioRoutes);
   await app.register(sizingRoutes);
+  await app.register(metricsRoutes);
 
   // Gebautes Frontend ausliefern; unbekannte Pfade gehen an die SPA.
   if (existsSync(publicDir)) {

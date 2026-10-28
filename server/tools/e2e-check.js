@@ -539,4 +539,89 @@ r = await admin('/api/audit-log?action=run.delete');
 assert.ok(r.data.rows.length >= 1, 'Löschen steht im Audit-Log');
 step('Läufe löschen, Dashboard-Geschwindigkeit und VRAM, KI-Analyse nur für Admins');
 
-console.log('0.7.0 End-to-End-Prüfung erfolgreich');
+// ------------------------------------------------------------------ 0.8.0
+// Info, Branding
+r = await admin('/api/info');
+ok(r);
+assert.ok('version' in r.data && 'copyright' in r.data, 'Info mit Version und Copyright');
+for (const f of ['/favicon.png', '/company-logo.png']) {
+  const img = await fetch(base + f);
+  assert.equal(img.status, 200, `${f} ohne Anmeldung erreichbar`);
+  assert.equal(img.headers.get('content-type'), 'image/png');
+}
+step('Info-API, Favicon und Firmenlogo');
+
+// Komponenten: MCP mit Bearer Token, Version abfragen, Erreichbarkeit
+r = await admin(`/api/endpoints?platform_id=${dev.id}`);
+ok(r);
+const mcp = r.data.find((e) => e.kind === 'mcp');
+assert.ok(mcp, 'MCP im Seed');
+assert.equal(mcp.spec.auth.type, 'bearer', 'MCP-Authentifizierung Bearer');
+assert.equal(mcp.api_key_id ?? null, null, 'MCP hat keinen API-Key mehr');
+assert.ok(!JSON.stringify(mcp).includes('sk-admin'), 'Bearer Token wird nie ausgeliefert');
+assert.equal((await admin('/api/endpoints', { method: 'POST', body: { platform_id: dev.id, name: `mcp-x-${suffix}`, kind: 'mcp', base_url: mcp.base_url, spec: { auth: { type: 'basic' } } } })).status, 400, 'Ungültige MCP-Authentifizierung');
+r = await admin('/api/endpoints', { method: 'POST', body: { platform_id: dev.id, name: `mcp-none-${suffix}`, kind: 'mcp', base_url: mcp.base_url, spec: { auth: { type: 'none' } } } });
+ok(r);
+await admin(`/api/endpoints/${r.data.endpoint.id}`, { method: 'DELETE' });
+const gw = (await admin(`/api/endpoints?platform_id=${dev.id}`)).data.find((e) => e.kind === 'ai_proxy');
+r = await admin('/api/endpoints/probe', { method: 'POST', body: { kind: 'ai_proxy', base_url: gw.base_url, api_key_id: gw.api_key_id } });
+ok(r);
+assert.equal(r.data.status, 'up', 'Probe erreicht das Gateway');
+assert.equal((await admin('/api/endpoints/probe', { method: 'POST', body: { kind: 'gpu', base_url: 'http://x' } })).status, 400, 'Probe nur für Komponenten mit Endpunkt');
+assert.equal((await alice('/api/endpoints/probe', { method: 'POST', body: { kind: 'ai_proxy', base_url: gw.base_url } })).status, 403, 'Probe nur für Verwalter');
+r = await admin('/api/endpoints', { method: 'POST', body: { platform_id: dev.id, name: `vllm-v-${suffix}`, kind: 'llm', base_url: `${process.env.MOCK_URL ?? 'http://localhost:4000'}/vllm`, auto_discover: false, spec: { provider: 'vllm', reachability: 'gateway_only', version_override: '9.9.9' }, manual_models: [`qwen-neu-${suffix}`] } });
+ok(r);
+const vllmNew = r.data.endpoint;
+assert.equal(vllmNew.spec.reachability, 'gateway_only', 'Erreichbarkeit gespeichert');
+r = await admin(`/api/platforms/${dev.id}/status?force=1`);
+ok(r);
+assert.equal(r.data.components.find((c) => c.endpoint_id === vllmNew.id)?.version, '9.9.9', 'Eingetragene Version hat Vorrang');
+r = await admin(`/api/platforms/${dev.id}/assessment`);
+ok(r);
+const checks = [...r.data.security.checks, ...r.data.sovereignty.goals.flatMap((g) => g.checks)];
+assert.ok(checks.some((c) => c.id === 'mcp-auth'), 'MCP-Authentifizierung fließt in die Einstufung');
+assert.ok(checks.some((c) => c.id === 'exposure'), 'Erreichbarkeit fließt in die Einstufung');
+assert.ok(r.data.sovereignty.goals.find((g) => g.key === 'SOV-3').checks.some((c) => c.id === 'exposure'), 'Erreichbarkeit zählt für SOV-3');
+step('Komponenten: MCP-Token, Version, Erreichbarkeit, Einstufung');
+
+// Modellportfolio: KI-Vorbefüllung aus dem Namen
+r = await admin('/api/portfolio', { method: 'POST', body: { name: `qwen-neu-${suffix}`, members: [{ endpoint_id: vllmNew.id, model_name: `qwen-neu-${suffix}` }] } });
+ok(r);
+assert.equal(r.data.provider, 'Alibaba Cloud', 'Anbieter von der KI');
+assert.equal(r.data.origin, 'CN');
+assert.equal(r.data.open_weights, true);
+assert.equal(Number(r.data.parameters_b), 7);
+assert.ok(r.data.capabilities.includes('tools'));
+assert.ok(['provider', 'license', 'origin', 'open_weights', 'parameters_b', 'capabilities'].every((k) => r.data.ai_filled.includes(k)), 'KI-Markierung');
+const aiModel = r.data;
+r = await admin(`/api/portfolio/${aiModel.id}`, { method: 'PUT', body: { name: aiModel.name, provider: 'Eigener Anbieter', members: [{ endpoint_id: vllmNew.id, model_name: aiModel.name }] } });
+ok(r);
+assert.equal(r.data.provider, 'Eigener Anbieter');
+assert.ok(!r.data.ai_filled.includes('provider') && r.data.ai_filled.includes('license'), 'Manuell geänderte Angabe verliert die KI-Markierung');
+await admin(`/api/portfolio/${aiModel.id}`, { method: 'DELETE' });
+await admin(`/api/endpoints/${vllmNew.id}`, { method: 'DELETE' });
+step('Modellportfolio: KI-Vorbefüllung mit Markierung');
+
+// Metriken
+r = await admin('/api/settings/metrics');
+ok(r);
+assert.equal(r.data.settings.enabled, true);
+assert.equal((await alice('/api/settings/metrics')).status, 403, 'Metrik-Einstellungen nur mit settings.manage');
+assert.equal((await admin('/api/settings/metrics', { method: 'PUT', body: { enabled: true, interval_s: 5, retention_h: 24 } })).status, 400, 'Intervall wird geprüft');
+ok(await admin('/api/settings/metrics', { method: 'PUT', body: { enabled: true, interval_s: 15, retention_h: 24 } }));
+r = await admin('/api/settings/metrics/check', { method: 'POST' });
+ok(r);
+assert.ok(r.data.endpoints.length >= 1 && r.data.endpoints.every((e) => e.state?.ok), 'Alle Metrics-Endpunkte erreichbar');
+r = await admin(`/api/metrics?platform_id=${dev.id}&minutes=60`);
+ok(r);
+assert.ok(r.data.components.some((c) => c.group === 'inference') && r.data.components.some((c) => c.group === 'gateway'), 'Dashboards für vLLM und LiteLLM');
+step('Metriken: Einstellungen, Endpunktstatus, Dashboards');
+
+// Dashboard: Empfehlungen
+r = await admin(`/api/dashboard/platforms/${dev.id}`);
+ok(r);
+assert.ok(Array.isArray(r.data.recommendations) && r.data.recommendations.length <= 5, 'Top-5-Empfehlungen');
+if (r.data.recommendations.length) assert.ok(r.data.recommendations[0].effects.length >= 1, 'Empfehlung mit Wirkung auf Ziele');
+step('Dashboard: Top-5-Empfehlungen');
+
+console.log('0.8.0 End-to-End-Prüfung erfolgreich');

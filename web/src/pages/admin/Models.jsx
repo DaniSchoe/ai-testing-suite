@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import {
   api,
   can,
@@ -104,6 +104,7 @@ export default function Models() {
                     {m.members.length === 0 && <span className="sub">keine – wird nicht getestet</span>}
                   </td>
                   <td className="sub">
+                    {(m.ai_filled ?? []).length > 0 && <AiMark title="Metadaten teilweise von der KI befüllt" />}{' '}
                     {[m.provider, m.license, m.open_weights === true ? 'Open Weights' : m.open_weights === false ? 'proprietär' : null, m.quantization, m.revision ? `Rev. ${m.revision}` : null].filter(Boolean).join(' · ') || '–'}
                   </td>
                   <td className="sub">{m.maintainer_name ?? '–'}</td>
@@ -162,6 +163,8 @@ const CAPS = [
 
 const memberKey = (m) => `${m.endpoint_id}|${m.model_name}`;
 
+const AiMark = ({ title = 'Von der KI befüllt' }) => <Sparkles size={13} className="ai-mark" aria-label={title} title={title} />;
+
 function ModelEditor({ model, teams, onClose, onSaved }) {
   const users = useUserDirectory();
   const candidates = useApi('/api/portfolio/candidates');
@@ -177,7 +180,12 @@ function ModelEditor({ model, teams, onClose, onSaved }) {
     revision: model.revision ?? '',
     quantization: model.quantization ?? '',
     context_length: model.context_length ?? '',
+    parameters_b: model.parameters_b ?? '',
   });
+  // Angaben, die die KI aus dem Namen befüllt hat; ein manuelles Ändern nimmt das Symbol weg.
+  const [aiFields, setAiFields] = useState(new Set(model.ai_filled ?? []));
+  const [autofill, setAutofill] = useState(false);
+  const touched = (k) => setAiFields((a) => (a.has(k) ? new Set([...a].filter((x) => x !== k)) : a));
   const [capabilities, setCapabilities] = useState(model.capabilities ?? []);
   const [teamIds, setTeamIds] = useState(model.teamIds ?? []);
   const [selected, setSelected] = useState(() => new Set((model.members ?? []).map(memberKey)));
@@ -205,6 +213,8 @@ function ModelEditor({ model, teams, onClose, onSaved }) {
           open_weights: form.open_weights === '' ? null : form.open_weights === 'true',
           context_length: form.context_length === '' ? null : Number(form.context_length),
           capabilities,
+          parameters_b: form.parameters_b === '' ? null : Number(form.parameters_b),
+          autofill: !model.id || autofill,
           maintainer_id: form.maintainer_id || null,
           teamIds,
           members: all.filter((m) => selected.has(memberKey(m))).map((m) => ({ endpoint_id: m.endpoint_id, model_name: m.model_name })),
@@ -283,38 +293,55 @@ function ModelEditor({ model, teams, onClose, onSaved }) {
         </select>
       </label>
       {form.visibility === 'teams' && <TeamPicker teams={teams} value={teamIds} onChange={setTeamIds} />}
-      <h3 style={{ margin: '16px 0 4px', fontSize: 14 }}>Metadaten</h3>
+      <h3 style={{ margin: '16px 0 4px', fontSize: 14 }}>
+        Metadaten {aiFields.size > 0 && <AiMark title="Mit KI befüllte Angaben sind markiert." />}
+      </h3>
       <div className="hint" style={{ marginBottom: 8 }}>
         Grundlage für die Souveränitätseinstufung und die Eignung. Fähigkeiten bestimmen, welche Vorlagen für das Modell gelten (z. B. OCR nur mit Vision).
+        {!model.id && ' Leere Angaben ergänzt beim Speichern das Modell der KI-Analyse aus den Systemeinstellungen anhand des Namens.'}
       </div>
+      {model.id && (
+        <label className="checkbox" style={{ marginBottom: 8 }}>
+          <input type="checkbox" checked={autofill} onChange={(e) => setAutofill(e.target.checked)} /> Leere Angaben beim Speichern mit KI ergänzen
+        </label>
+      )}
       <div className="btn-row" style={{ marginBottom: 12 }}>
         {CAPS.map(([key, label]) => (
           <label key={key} className="checkbox">
-            <input type="checkbox" checked={capabilities.includes(key)} onChange={(e) => setCapabilities(e.target.checked ? [...capabilities, key] : capabilities.filter((c) => c !== key))} />
+            <input type="checkbox" checked={capabilities.includes(key)} onChange={(e) => (touched('capabilities'), setCapabilities(e.target.checked ? [...capabilities, key] : capabilities.filter((c) => c !== key)))} />
             {label}
           </label>
         ))}
+        {aiFields.has('capabilities') && <AiMark title="Fähigkeiten von der KI befüllt" />}
       </div>
       <div className="form-grid">
+        {[
+          ['license', 'Lizenz', 'Apache-2.0'],
+          ['provider', 'Anbieter', 'Alibaba'],
+          ['origin', 'Herkunft (Ländercode)', 'DE'],
+        ].map(([k, label, ph]) => (
+          <label key={k} className="field">
+            <span>
+              {label} {aiFields.has(k) && <AiMark title={`${label} von der KI befüllt`} />}
+            </span>
+            <input value={form[k]} placeholder={ph} onChange={(e) => (touched(k), set({ [k]: e.target.value }))} />
+          </label>
+        ))}
         <label className="field">
-          <span>Lizenz</span>
-          <input value={form.license} placeholder="Apache-2.0" onChange={(e) => set({ license: e.target.value })} />
-        </label>
-        <label className="field">
-          <span>Anbieter</span>
-          <input value={form.provider} placeholder="Alibaba" onChange={(e) => set({ provider: e.target.value })} />
-        </label>
-        <label className="field">
-          <span>Herkunft (Ländercode)</span>
-          <input value={form.origin} placeholder="DE" onChange={(e) => set({ origin: e.target.value })} />
-        </label>
-        <label className="field">
-          <span>Open Weights</span>
-          <select value={form.open_weights} onChange={(e) => set({ open_weights: e.target.value })}>
+          <span>
+            Open Weights {aiFields.has('open_weights') && <AiMark title="Open Weights von der KI befüllt" />}
+          </span>
+          <select value={form.open_weights} onChange={(e) => (touched('open_weights'), set({ open_weights: e.target.value }))}>
             <option value="">unbekannt</option>
             <option value="true">ja</option>
             <option value="false">nein</option>
           </select>
+        </label>
+        <label className="field">
+          <span>
+            Parameter (Milliarden) {aiFields.has('parameters_b') && <AiMark title="Parameteranzahl von der KI befüllt" />}
+          </span>
+          <input type="number" min={0} step="any" value={form.parameters_b} placeholder="z. B. 7" onChange={(e) => (touched('parameters_b'), set({ parameters_b: e.target.value }))} />
         </label>
         <label className="field">
           <span>Revision</span>

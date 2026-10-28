@@ -35,6 +35,7 @@ function kubernetes(s) {
     distribution_name: str(s.distribution_name),
     version: str(s.version, 40),
     certifications: list(s.certifications),
+    cis_hardened: tri(s.cis_hardened),
     // Knoten des Clusters: Server mit ihrer Rolle.
     nodes: (Array.isArray(s.nodes) ? s.nodes : [])
       .map((n) => ({ server_id: str(n?.server_id), role: n?.role }))
@@ -82,6 +83,8 @@ function inference(s) {
     provider,
     provider_name: str(s.provider_name),
     hosting: p.hosting,
+    // Direkt erreichbar oder nur intern über ein Gateway (fließt in die Souveränitätsziele ein).
+    reachability: s.reachability === 'gateway_only' ? 'gateway_only' : 'direct',
     served_models: list(s.served_models),
     // Optionale Angaben zur Inferenz (nur selbst betrieben).
     meta: { tensor_parallel: num(m.tensor_parallel), quantization: str(m.quantization, 40), max_model_len: num(m.max_model_len), version: str(m.version, 40), notes: str(m.notes, 500) },
@@ -128,21 +131,29 @@ function interconnect(s) {
 }
 
 function iam(s) {
-  return { services: list(s.services), enterprise_accounts: Boolean(s.enterprise_accounts), note: str(s.note, 500) };
+  return { services: list(s.services), enterprise_accounts: Boolean(s.enterprise_accounts) };
 }
 
-// Typspezifische Angaben prüfen; unbekannte Felder fallen weg.
+const MCP_AUTH = ['none', 'bearer', 'oidc'];
+
+// Typspezifische Angaben prüfen; unbekannte Felder fallen weg. Alle Arten kennen eine Notiz und (optional) eine überschriebene Version.
 export function cleanSpec(kind, raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
-  if (kind === 'datacenter') return datacenter(s);
-  if (kind === 'kubernetes') return kubernetes(s);
-  if (kind === 'gpu') return gpu(s);
-  if (kind === 'llm') return inference(s);
-  if (kind === 'ai_proxy') return gateway(s);
-  if (kind === 'server') return server(s);
-  if (kind === 'interconnect') return interconnect(s);
-  if (kind === 'iam') return iam(s);
-  return { note: str(s.note, 500) };
+  const common = { note: str(s.note, 500), version_override: str(s.version_override, 40) };
+  if (kind === 'datacenter') return { ...datacenter(s), ...common };
+  if (kind === 'kubernetes') return { ...kubernetes(s), ...common };
+  if (kind === 'gpu') return { ...gpu(s), ...common };
+  if (kind === 'llm') return { ...inference(s), ...common };
+  if (kind === 'ai_proxy') return { ...gateway(s), ...common };
+  if (kind === 'server') return { ...server(s), ...common };
+  if (kind === 'interconnect') return { ...interconnect(s), ...common };
+  if (kind === 'iam') return { ...iam(s), ...common };
+  if (kind === 'mcp') {
+    const type = s.auth?.type ?? 'none';
+    if (!MCP_AUTH.includes(type)) throw bad('Authentifizierung: Bearer Token, OIDC oder Keine');
+    return { ...common, auth: { type } };
+  }
+  return common;
 }
 
 // Zuordnungen prüfen: erlaubte Arten je Verbindung, vorhandene MIG-Instanzen und GPU-Bundles.

@@ -94,6 +94,11 @@ const QUALITY = [
 function answer(messages, model) {
   const text = messages.map((m) => textOf(m.content)).join('\n');
   const user = textOf(messages.filter((m) => m.role === 'user').at(-1)?.content);
+  if (/MODEL_METADATA/.test(text)) {
+    return JSON.stringify(/qwen/i.test(user)
+      ? { provider: 'Alibaba Cloud', license: 'Apache-2.0', origin: 'CN', open_weights: true, parameters_b: 7, capabilities: ['tools', 'json'] }
+      : { provider: 'Mock AG', license: 'proprietär', origin: 'DE', open_weights: false, parameters_b: null, capabilities: ['json'] });
+  }
   if (/Testanalyst/.test(text)) {
     return '## Bewertung\nDer Lauf ist insgesamt gut, mit kleinen Einschränkungen.\n## Ergebnisse im Kontext\n- Die meisten Tests wurden bestanden.\n- Die Qualitätsfragen bis Stufe 3 wurden gelöst.\n## Auffälligkeiten und Empfehlungen\n- Keine kritischen Auffälligkeiten (Mock-Analyse).';
   }
@@ -270,8 +275,14 @@ function metrics(res, kind) {
       `vllm:num_requests_waiting ${Math.max(0, inflight - 6)}`,
       `vllm:gpu_cache_usage_perc ${(0.05 + load * 0.6).toFixed(3)}`,
       `vllm:generation_tokens_total ${stats.tokens}`,
+      `vllm:prompt_tokens_total ${stats.requests * 40}`,
+      `vllm:request_success_total ${stats.requests}`,
+      `vllm:time_to_first_token_seconds_sum ${(stats.requests * 0.12).toFixed(3)}`,
+      `vllm:time_to_first_token_seconds_count ${stats.requests}`,
+      `vllm:e2e_request_latency_seconds_sum ${(stats.requests * 0.9).toFixed(3)}`,
+      `vllm:e2e_request_latency_seconds_count ${stats.requests}`,
     ],
-    gateway: [`litellm_in_flight_requests ${inflight}`, `litellm_proxy_total_requests_metric_total ${stats.requests}`, `litellm_proxy_failed_requests_metric_total 0`],
+    gateway: [`litellm_in_flight_requests ${inflight}`, `litellm_proxy_total_requests_metric_total ${stats.requests}`, `litellm_proxy_failed_requests_metric_total 0`, `litellm_total_tokens_metric_total ${stats.tokens + stats.requests * 40}`, `litellm_request_total_latency_metric_sum ${(stats.requests * 1.1).toFixed(3)}`, `litellm_request_total_latency_metric_count ${stats.requests}`],
   }[kind];
   if (!lines) return send(res, 404, { error: 'unknown' });
   res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4' });
