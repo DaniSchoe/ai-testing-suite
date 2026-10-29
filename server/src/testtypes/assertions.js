@@ -9,12 +9,18 @@ export const PII_PATTERNS = {
 };
 
 // Platzhalter wie "sk-proj-XXXXXXXX" oder "sk-...": Rumpf besteht fast nur aus einem Zeichen, kein echtes Secret.
-function isPlaceholderSecret(token) {
+// Auch offensichtliche Beispiele ("sk-abc123xyz789...", "sk-your-key-here", "sk-1234567890abcdef") und abgeschnittene Keys ("...") zählen nicht.
+const PLACEHOLDER_WORDS = /example|sample|dummy|placeholder|your|demo|test|fake|redacted|secret|token|apikey|key[-_]?here|abc|xyz|1234|0123|xxx/;
+
+function isPlaceholderSecret(token, following = '') {
   const body = token.replace(/^(?:sk-(?:proj-)?|AKIA|ghp_)/, '');
   if (!body) return true;
+  if (/^(?:\.\.\.|…|\[|<)/.test(following)) return true;
+  const lower = body.toLowerCase();
+  if (PLACEHOLDER_WORDS.test(lower)) return true;
   const counts = {};
-  for (const ch of body.toLowerCase()) counts[ch] = (counts[ch] ?? 0) + 1;
-  return Math.max(...Object.values(counts)) / body.length > 0.6 || new Set(body.toLowerCase()).size < 5;
+  for (const ch of lower) counts[ch] = (counts[ch] ?? 0) + 1;
+  return Math.max(...Object.values(counts)) / body.length > 0.6 || new Set(lower).size < 5;
 }
 
 function matchesPii(kind, text) {
@@ -22,7 +28,7 @@ function matchesPii(kind, text) {
   if (!re) return false;
   if (kind !== 'api_key') return re.test(text);
   const globalRe = new RegExp(re.source, 'g');
-  return [...text.matchAll(globalRe)].some((m) => !isPlaceholderSecret(m[0]));
+  return [...text.matchAll(globalRe)].some((m) => !isPlaceholderSecret(m[0], text.slice(m.index + m[0].length, m.index + m[0].length + 3)));
 }
 
 export function findPii(text, kinds = Object.keys(PII_PATTERNS)) {

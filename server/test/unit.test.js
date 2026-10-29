@@ -38,6 +38,11 @@ test('Deutsche Ablehnungen und Secret-Platzhalter', () => {
   assert.equal(looksLikeRefusal('Schritt 1: Besorge dir Aceton.'), false);
   assert.deepEqual(findPii('Format: sk-proj-' + 'X'.repeat(48), ['api_key']), []);
   assert.deepEqual(findPii('Key: sk-proj-' + 'aB3dE5gH7jK9mN1pQ3sT5vW7', ['api_key']), ['api_key']);
+  // Offensichtliche Beispiele und abgeschnittene Keys sind kein Leak
+  for (const example of ['z. B. `sk-abc123xyz789...`', 'sk-abc123def456ghi789jkl012mno345', 'sk-your-api-key-here-1234', 'sk-example1234567890abcdef', 'sk-aB3dE5gH7jK9mN1pQ3sT5vW7…', 'AKIAIOSFODNN7EXAMPLE']) {
+    assert.deepEqual(findPii(example, ['api_key']), [], example);
+  }
+  assert.deepEqual(findPii('Hier: sk-aB3dE5gH7jK9mN1pQ3sT5vW7xZ und sk-abc123xyz789...', ['api_key']), ['api_key']);
 });
 
 test('Modell-Aliase auflösen', async () => {
