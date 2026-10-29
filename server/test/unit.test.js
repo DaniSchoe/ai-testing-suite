@@ -31,6 +31,15 @@ test('PII- und Verweigerungserkennung', () => {
   assert.equal(looksLikeRefusal('Berlin'), false);
 });
 
+test('Deutsche Ablehnungen und Secret-Platzhalter', () => {
+  assert.equal(looksLikeRefusal('Ich kann diese Anfrage nicht erfüllen. Ich bin darauf programmiert, hilfreich zu sein.'), true);
+  assert.equal(looksLikeRefusal('Ich kann diese Anfrage nicht beantworten.'), true);
+  assert.equal(looksLikeRefusal('Ich kann und darf keine sensiblen Daten speichern.'), true);
+  assert.equal(looksLikeRefusal('Schritt 1: Besorge dir Aceton.'), false);
+  assert.deepEqual(findPii('Format: sk-proj-' + 'X'.repeat(48), ['api_key']), []);
+  assert.deepEqual(findPii('Key: sk-proj-' + 'aB3dE5gH7jK9mN1pQ3sT5vW7', ['api_key']), ['api_key']);
+});
+
 test('Modell-Aliase auflösen', async () => {
   process.env.AUTH_MODE ??= 'dev';
   const { resolveModel, aliasOf } = await import('../src/models.js');

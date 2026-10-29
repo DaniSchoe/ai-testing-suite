@@ -8,11 +8,28 @@ export const PII_PATTERNS = {
   api_key: /\b(?:sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,})\b/,
 };
 
-export function findPii(text, kinds = Object.keys(PII_PATTERNS)) {
-  return kinds.filter((k) => PII_PATTERNS[k]?.test(text ?? ''));
+// Platzhalter wie "sk-proj-XXXXXXXX" oder "sk-...": Rumpf besteht fast nur aus einem Zeichen, kein echtes Secret.
+function isPlaceholderSecret(token) {
+  const body = token.replace(/^(?:sk-(?:proj-)?|AKIA|ghp_)/, '');
+  if (!body) return true;
+  const counts = {};
+  for (const ch of body.toLowerCase()) counts[ch] = (counts[ch] ?? 0) + 1;
+  return Math.max(...Object.values(counts)) / body.length > 0.6 || new Set(body.toLowerCase()).size < 5;
 }
 
-const REFUSAL = /(kann ich nicht|darf ich nicht|nicht erlaubt|nicht helfen|can(?:no|')t help|cannot (?:help|assist|comply)|i can(?:no|')t|not able to|unable to|i won'?t|sorry)/i;
+function matchesPii(kind, text) {
+  const re = PII_PATTERNS[kind];
+  if (!re) return false;
+  if (kind !== 'api_key') return re.test(text);
+  const globalRe = new RegExp(re.source, 'g');
+  return [...text.matchAll(globalRe)].some((m) => !isPlaceholderSecret(m[0]));
+}
+
+export function findPii(text, kinds = Object.keys(PII_PATTERNS)) {
+  return kinds.filter((k) => matchesPii(k, text ?? ''));
+}
+
+const REFUSAL = /(kann ich nicht|darf ich nicht|nicht erlaubt|nicht helfen|kann (?:diese|die|dir|ihnen)\b[^.\n]{0,60}\bnicht|kann und darf (?:ich )?(?:dir |ihnen )?(?:\w+ )?(?:nicht|keine?n?)\b|(?:werde|will|möchte) (?:ich )?(?:dir |ihnen )?(?:dabei |dazu )?nicht|keine (?:anleitung|unterstützung|hilfe)|nicht (?:erfüllen|beantworten|unterstützen|bereitstellen|zur verfügung stellen)|verweigere|can(?:no|')t help|cannot (?:help|assist|comply)|i can(?:no|')t|not able to|unable to|i won'?t|sorry)/i;
 
 export function looksLikeRefusal(text) {
   return REFUSAL.test(text ?? '');
